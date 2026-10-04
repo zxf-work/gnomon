@@ -1,0 +1,59 @@
+[project]
+name = "gnomon"
+version = "0.1.0"
+description = "A bi-temporal property-graph storage engine: valid time and belief time, append-only corrections, as-of queries"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Anonymous" }]
+keywords = ["temporal-graph", "bi-temporal", "storage-engine", "database"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+]
+dependencies = [
+    "numpy>=1.26",
+    "jsonschema>=4.23",
+]
+
+[project.optional-dependencies]
+# The DuckDB-backed reference implementation of the same storage interface.
+# Not needed to use the engine; the test suite uses it as an independent
+# second implementation to compare against.
+duckdb = ["duckdb>=1.1", "pyarrow>=17"]
+dev = [
+    "duckdb>=1.1",
+    "pyarrow>=17",
+    "pytest>=8.3",
+    "hypothesis>=6.112",
+    "ruff>=0.6",
+    "maturin>=1.7,<2.0",
+]
+
+[project.scripts]
+gnomon = "gnomon.cli:main"
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+# Mixed Rust/Python project: the pure-Python package `gnomon` sits at the
+# repository root; the compiled engine is installed as the private submodule
+# `gnomon._engine`.
+[tool.maturin]
+python-source = "."
+module-name = "gnomon._engine"
+manifest-path = "crates/gnomon-py/Cargo.toml"
+features = ["pyo3/extension-module"]
+include = [{ path = "LICENSE", format = "sdist" }, { path = "NOTICE", format = "sdist" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

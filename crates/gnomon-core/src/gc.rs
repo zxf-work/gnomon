@@ -1,0 +1,1053 @@
+//! Generation collection: reclaim superseded manifests and the files only
+//! they reference (`gnomon store gc`).
+//!
+//! Every commit publishes `manifests/<G>.json` naming every live segment, so
+//! the directory grows O(generations × segments) and, at 1M rows after ~250
+//! commits, weighed 24 MB against 31 MB of compressed segments. Compaction has the same retention question from the other side:
+//! it supersedes segment files and deletes nothing, so peak usage is 2× the
+//! store. One pass handles both, because both reduce to the same rule: *a
+//! file may be removed exactly when no retained generation names it.*
+//!
+//! **Retention policy.** A generation is retained if it is (a) the one
+//! `CURRENT` names, (b) among the last `keep_last` generations (configurable,
+//! default `defaults::GC_KEEP_GENERATIONS`), or (c) pinned by a live reader
+//! in this process. The engine is single-writer with in-process readers:
+//! every open `NativeStore` registers its generation in a process-global pin
+//! table keyed by canonical store root, so a reader that opened at generation
+//! N keeps N's manifest and files on disk until it drops. There is no
+//! cross-process reader registry, deliberately — the single-writer contract
+//! already makes a second *writer* undefined.
+//!
+//! **Reader pinning.** This section used to claim a reader in
+//! another process "holds its segments via mmap, so on POSIX even a
+//! collected file stays readable through handles it already opened" — false:
+//! mapping was per-first-touch in `open_segment`, so the actually-protected
+//! set was whatever subset of the generation a reader's queries happened to
+//! reach, not the generation itself. Measured at soak scale that gap is the
+//! steady state, not an edge case (a reader was exposed ≈ 84% of every
+//! 300 s reopen window once the store outgrew what its queries had already
+//! touched). The fix (`store.rs::pin_generation_files`, called from `open`
+//! and every commit/compaction) maps every file the manifest names at open,
+//! which is what makes the claim above true rather than aspirational — for
+//! stores under `GNOMON_PIN_MAX_SEGMENTS` (default `defaults::PIN_MAX_SEGMENTS`).
+//! A store whose segment count compaction does not bound falls back to the
+//! lazy path this section used to describe as the whole story. Two residuals
+//! survive pinning and are accepted, not fixed: (i) a reader that resolves
+//! `CURRENT` microseconds before pass 3 below can still miss a file pinning
+//! would otherwise have covered — the reopen-on-ENOENT net at the Python
+//! adapter boundary is what covers *that*; (ii) the guarantee is local-POSIX
+//! only (unlink-while-open differs on Windows and NFS). A pinned map also
+//! means `bytes_reclaimed` below is an unlink count, not necessarily free
+//! space, until every reader holding a generation's map reopens or drops —
+//! bounded in practice by how often readers cycle, not by this pass.
+//! Whichever path serves a segment, a lazily-opened one that gc has already
+//! removed still fails with a *detected* IO error naming the file — never
+//! silently wrong data — which is the durability objective's bar. Run gc from the writer; that is where the CLI puts it.
+//!
+//! **Crash safety.** Deletion happens in dependency order: superseded
+//! manifests first, then the directory is fsynced, and only files that no
+//! manifest *still on disk* references are eligible afterwards. Every unlink
+//! is individually atomic, `CURRENT` and its generation are categorically
+//! untouched, so a crash at any point leaves a store that opens and verifies
+//! — at worst with some garbage still present, which the next pass collects.
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+use crate::error::{EngineError, Result};
+use crate::manifest_chain;
+use crate::store::NativeStore;
+
+/// In-process reader pins: canonical store root → generation → open handles.
+///
+/// A `HashMap` count rather than a set, because two readers may legitimately
+/// pin the same generation and the pin must outlive the first to drop.
+static PINS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, usize>>>> = OnceLock::new();
+
+fn pins() -> &'static Mutex<HashMap<PathBuf, HashMap<u64, usize>>> {
+    PINS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn pin(root: &Path, generation: u64) {
+    let mut table = pins().lock().expect("pin-table mutex poisoned");
+    *table
+        .entry(root.to_path_buf())
+        .or_default()
+        .entry(generation)
+        .or_default() += 1;
+}
+
+pub(crate) fn unpin(root: &Path, generation: u64) {
+    let mut table = pins().lock().expect("pin-table mutex poisoned");
+    if let Some(gens) = table.get_mut(root) {
+        if let Some(n) = gens.get_mut(&generation) {
+            *n -= 1;
+            if *n == 0 {
+                gens.remove(&generation);
+            }
+        }
+        if gens.is_empty() {
+            table.remove(root);
+        }
+    }
+}
+
+/// Move one handle's pin from `old` to `new` — a commit or compaction
+/// advancing the writer's generation.
+pub(crate) fn repin(root: &Path, old: u64, new: u64) {
+    if old != new {
+        pin(root, new);
+        unpin(root, old);
+    }
+}
+
+/// Force-drop one handle's pin without going through `Drop` — a test-only
+/// emulation of a reader that lives in a *different process*, whose pin (if
+/// it had one) this process's `PINS` table could never see in the first
+/// place. A second in-process reader handle cannot stand in for that case:
+/// `PINS` protects it for real, which is exactly why a same-process
+/// reproduction of this bug comes back null. See `gc.rs` tests using this.
+#[cfg(test)]
+pub(crate) fn test_unpin(root: &Path, generation: u64) {
+    unpin(root, generation);
+}
+
+fn pinned(root: &Path) -> HashSet<u64> {
+    pins()
+        .lock()
+        .expect("pin-table mutex poisoned")
+        .get(root)
+        .map(|gens| gens.keys().copied().collect())
+        .unwrap_or_default()
+}
+
+/// What one gc pass removed and what it kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GcReport {
+    pub manifests_removed: usize,
+    pub segments_removed: usize,
+    pub close_runs_removed: usize,
+    pub bytes_reclaimed: u64,
+    /// Generations whose manifests remain on disk after the pass.
+    pub generations_retained: usize,
+    /// Index files under `idx/<kind>/<seg_id:012>.*` unlinked because the
+    /// segment they index (`seg/<seg_id:012>.tgs`) is itself gone, for every
+    /// index kind. An index is never referenced by any manifest, so it cannot appear in `referenced` and
+    /// needs this pass rather than pass 3's manifest-reference check.
+    pub index_files_removed: usize,
+}
+
+impl NativeStore {
+    /// Collect superseded generations and the files only they reference.
+    ///
+    /// `keep_last` is clamped to at least 1 — the `CURRENT` generation is
+    /// never eligible, whatever the caller asks for.
+    pub fn gc(&mut self, keep_last: u64) -> Result<GcReport> {
+        let t = crate::ingest_phase::Timer::start();
+        let out = self.gc_inner(keep_last);
+        t.stop(crate::ingest_phase::G::GcTotalNs);
+        crate::ingest_phase::add(crate::ingest_phase::G::GcCalls, 1);
+        out
+    }
+
+    fn gc_inner(&mut self, keep_last: u64) -> Result<GcReport> {
+        if self.in_batch() {
+            return Err(EngineError::invariant(
+                "cannot collect generations while a batch is open",
+            ));
+        }
+        self.require_writable_format()?;
+        let current = self.generation();
+        let floor = current.saturating_sub(keep_last.max(1) - 1);
+        let protected = pinned(self.pin_key());
+        let mut report = GcReport::default();
+        let m_dir = self.root().join("manifests");
+
+        // Pass 0 — make every generation that survives this pass
+        // reconstructible before anything is unlinked.
+        //
+        // A retained generation may be a delta whose chain reaches back
+        // through generations pass 1 is about to remove. The remedy is to materialize a
+        // fresh checkpoint at the retention floor and only then delete below
+        // it; the same argument applies to a pinned generation stranded below
+        // the floor, so the rule here is one checkpoint per *anchor* — the
+        // lowest member of each contiguous run of retained generations. Every
+        // other retained generation chains back to its own run's anchor.
+        //
+        // Rewriting an anchor is safe even when it is `CURRENT`: `manifest_sha`
+        // is the digest of the logical manifest, so a delta and the checkpoint
+        // that reconstructs the same content carry the same sha and `CURRENT`
+        // needs no change. Everything here is durable before pass 1 unlinks
+        // anything, so a crash mid-materialization leaves every chain intact —
+        // the property `gc.rs`'s header already claims.
+        let on_disk = manifest_generations(&m_dir)?;
+        let retained = |g: u64| g >= floor || g == current || protected.contains(&g);
+        let deletable: Vec<u64> = on_disk.iter().copied().filter(|g| !retained(*g)).collect();
+        if !deletable.is_empty() {
+            self.materialize_anchor_checkpoints(current, &on_disk, &retained)?;
+            fsync_dir(&m_dir)?;
+        }
+
+        // Pass 1 — superseded manifests, plus temp files a crash between
+        // write and rename left behind. Names that parse as neither are left
+        // alone: gc removes only what it can prove is garbage.
+        for name in list_dir(&m_dir)? {
+            let path = m_dir.join(&name);
+            if name.ends_with(".tmp") {
+                report.bytes_reclaimed += remove(&path)?;
+                continue;
+            }
+            let Some(g) = name
+                .strip_suffix(".json")
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            if retained(g) {
+                continue;
+            }
+            report.bytes_reclaimed += remove(&path)?;
+            report.manifests_removed += 1;
+        }
+        fsync_dir(&m_dir)?;
+
+        // Pass 2 — the reference set, rebuilt from what actually remains on
+        // disk (not from the retention arithmetic), so a crash between the
+        // passes can only make the next pass conservative, never eager. A
+        // retained manifest that fails its checksum aborts the pass: deleting
+        // by an unreadable reference list would be guessing.
+        //
+        // With format 2 a record contributes the files it *introduces*: a
+        // checkpoint's whole segment set, or a delta's `add_*` entries. The
+        // union over every record still on disk is a superset of what any
+        // retained generation names — no reconstruction needed, and wrong
+        // only in the conservative direction, which is the direction gc
+        // already argues for.
+        let mut referenced: HashSet<String> = HashSet::new();
+        for name in list_dir(&m_dir)? {
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let path = m_dir.join(&name);
+            let raw = fs::read_to_string(&path)
+                .map_err(|e| EngineError::from(e).at_file(&path))?;
+            let rec = manifest_chain::parse_record(&raw).map_err(|e| e.at_file(&path))?;
+            report.generations_retained += 1;
+            for file in rec.referenced_files() {
+                referenced.insert(file.to_string());
+            }
+        }
+
+        // Pass 3 — unreferenced segment and close-run files. This collects
+        // both compaction's superseded segments and orphans from a batch that
+        // crashed before publishing.
+        for (dir, ext, count) in [
+            ("seg", ".tgs", &mut report.segments_removed),
+            ("close", ".tgc", &mut report.close_runs_removed),
+        ] {
+            let d = self.root().join(dir);
+            for name in list_dir(&d)? {
+                if !name.ends_with(ext) || referenced.contains(&format!("{dir}/{name}")) {
+                    continue;
+                }
+                report.bytes_reclaimed += remove(&d.join(&name))?;
+                *count += 1;
+            }
+            fsync_dir(&d)?;
+        }
+
+        // Pass 4 — orphaned index files, every kind, one coherent sweep
+        // (this first existed for `idx/tcsr/*.tci` as a dedicated
+        // `sweep_orphan_indexes` method; folded in here so `idx/name/*.tnx`
+        // is swept by the exact same logic rather than a second,
+        // parallel mechanism: two sweeps of the same directory tree is exactly
+        // the kind of "which one actually ran" question a reader should
+        // never have to answer).
+        //
+        // Deliberately *not* on a generation basis and deliberately not part
+        // of the reference set above: `idx/` is referenced by no manifest, by
+        // design (adding an `indexes` field would be a manifest format bump). The only proof an index is garbage is that the
+        // segment it indexes is gone — which pass 3 has just made true for
+        // compaction's superseded segments. Every subdirectory of `idx/` is
+        // swept the same way, generically over its extension, so a future
+        // index kind needs no further change here. Every failure is
+        // ignored: an index file that
+        // survives a pass it should not have is harmless (it is stamped
+        // with its segment's `body_sha`, so it can never be used against
+        // another one); an index deleted too eagerly would cost a rebuild.
+        // Both directions are safe, which is why this pass never fails gc
+        // — a derived-file unlink must not undo the real reclamation passes
+        // 1-3 already did.
+        let idx_root = self.root().join("idx");
+        if let Ok(kind_dirs) = list_dir(&idx_root) {
+            for kind_dir in kind_dirs {
+                let kd = idx_root.join(&kind_dir);
+                if !kd.is_dir() {
+                    continue;
+                }
+                let Ok(names) = list_dir(&kd) else {
+                    continue;
+                };
+                for name in names {
+                    let Some(stem) = name.rsplit_once('.').map(|(s, _)| s) else {
+                        continue;
+                    };
+                    let Ok(seg_id) = stem.parse::<u64>() else {
+                        continue; // not `<seg_id:012>.<ext>` — e.g. a tmp leftover
+                    };
+                    let seg_path = self.root().join("seg").join(format!("{seg_id:012}.tgs"));
+                    if seg_path.exists() {
+                        continue;
+                    }
+                    if let Ok(bytes) = remove(&kd.join(&name)) {
+                        report.bytes_reclaimed += bytes;
+                        report.index_files_removed += 1;
+                    }
+                }
+                let _ = fsync_dir(&kd);
+            }
+        }
+
+        self.evict_segments_not_in(&referenced);
+        Ok(report)
+    }
+
+    /// Write a full checkpoint at the lowest member of each contiguous run of
+    /// retained generations, so no surviving generation's chain can reach into
+    /// what pass 1 removes.
+    fn materialize_anchor_checkpoints(
+        &self,
+        current: u64,
+        on_disk: &[u64],
+        retained: &impl Fn(u64) -> bool,
+    ) -> Result<()> {
+        for (i, g) in on_disk.iter().copied().enumerate() {
+            if !retained(g) {
+                continue;
+            }
+            if g > current {
+                // An orphan a crash left above `CURRENT` (`after_manifest`):
+                // no reader can reach it, so it needs no chain, and trying to
+                // reconstruct one that has none would fail a gc that has
+                // nothing wrong with it.
+                continue;
+            }
+            let previous_is_retained =
+                i > 0 && on_disk[i - 1] == g.wrapping_sub(1) && retained(on_disk[i - 1]);
+            if previous_is_retained {
+                continue; // chains back within its own run
+            }
+            self.materialize_checkpoint(g)?;
+        }
+        Ok(())
+    }
+}
+
+/// Generations with a manifest file on disk, ascending.
+fn manifest_generations(m_dir: &Path) -> Result<Vec<u64>> {
+    let mut gens: Vec<u64> = list_dir(m_dir)?
+        .into_iter()
+        .filter_map(|n| {
+            n.strip_suffix(".json")
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .collect();
+    gens.sort_unstable();
+    Ok(gens)
+}
+
+fn list_dir(dir: &Path) -> Result<Vec<String>> {
+    let entries = fs::read_dir(dir).map_err(|e| EngineError::from(e).at_file(dir))?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| EngineError::from(e).at_file(dir))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Unlink one file, returning the bytes it held.
+fn remove(path: &Path) -> Result<u64> {
+    let bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    crate::store::crash_point("gc_mid_delete");
+    fs::remove_file(path).map_err(|e| EngineError::from(e).at_file(path))?;
+    Ok(bytes)
+}
+
+fn fsync_dir(dir: &Path) -> Result<()> {
+    fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| EngineError::from(e).at_file(dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::derive::{edge_eid, version_vid};
+    use crate::manifest::EventLogRef;
+    use crate::row::{EdgeRow, RowKind};
+    use crate::staging::PartitionMap;
+
+    fn tmp_root(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("gnomon-gc-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        p
+    }
+
+    fn edge(a: u32, b: u32, vt_s: i64, tt_s: i64, i: u32) -> EdgeRow {
+        let disc = format!("#{i}");
+        let eid = edge_eid("n1", "n2", "R", &disc);
+        EdgeRow {
+            vid: version_vid(&eid.to_hex(), tt_s, vt_s),
+            src_id: a,
+            dst_id: b,
+            rel_type: "R".into(),
+            disc,
+            vt_s,
+            vt_e: vt_s + 1,
+            tt_s,
+            props: "{}".into(),
+            source: "ingest".into(),
+            provenance_ref: None,
+        }
+    }
+
+    /// One committed generation holding `n` fresh edge rows.
+    fn commit_edges(s: &mut NativeStore, tt: i64, n: u32) -> Vec<EdgeRow> {
+        s.begin(tt).unwrap();
+        let a = s.ensure_entity("n1", "Node").unwrap();
+        let b = s.ensure_entity("n2", "Node").unwrap();
+        let rows: Vec<EdgeRow> = (0..n)
+            .map(|i| edge(a, b, tt * 100 + i as i64, tt, (tt as u32) * 100 + i))
+            .collect();
+        for r in &rows {
+            s.stage_edge(r.clone()).unwrap();
+        }
+        s.commit(EventLogRef::default()).unwrap();
+        rows
+    }
+
+    fn manifest_gens(root: &Path) -> Vec<u64> {
+        let mut gens: Vec<u64> = fs::read_dir(root.join("manifests"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter_map(|n| n.strip_suffix(".json").and_then(|s| s.parse().ok()))
+            .collect();
+        gens.sort();
+        gens
+    }
+
+    fn seg_files(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(root.join("seg"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tgs"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn gc_keeps_current_and_the_last_k() {
+        let root = tmp_root("keep-k");
+        let mut s = NativeStore::open(&root).unwrap();
+        for tt in 1..=5 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        assert_eq!(manifest_gens(&root), vec![0, 1, 2, 3, 4, 5]);
+
+        let report = s.gc(2).unwrap();
+        assert_eq!(manifest_gens(&root), vec![4, 5]);
+        assert_eq!(report.manifests_removed, 4);
+        assert_eq!(report.generations_retained, 2);
+        assert!(report.bytes_reclaimed > 0);
+        // every commit inherited its parent's segments, so all are referenced
+        assert_eq!(report.segments_removed, 0);
+        assert_eq!(seg_files(&root).len(), 5);
+
+        // the collected store must open and verify like nothing happened
+        drop(s);
+        let re = NativeStore::open(&root).unwrap();
+        assert_eq!(re.generation(), 5);
+        assert_eq!(re.all_edge_versions().unwrap().len(), 5);
+        assert!(re.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn keep_last_is_clamped_so_current_is_never_eligible() {
+        let root = tmp_root("clamp");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 1);
+        let report = s.gc(0).unwrap();
+        assert_eq!(manifest_gens(&root), vec![1], "gc(0) must behave as gc(1)");
+        assert_eq!(report.generations_retained, 1);
+        assert!(s.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn gc_is_refused_mid_batch_and_trivial_on_a_fresh_store() {
+        let root = tmp_root("guards");
+        let mut s = NativeStore::open(&root).unwrap();
+        assert_eq!(s.gc(2).unwrap(), GcReport {
+            generations_retained: 1,
+            ..GcReport::default()
+        });
+
+        s.begin(10).unwrap();
+        assert!(s.gc(2).is_err(), "must not collect with a batch open");
+        s.rollback().unwrap();
+    }
+
+    #[test]
+    fn a_large_keep_last_removes_nothing() {
+        let root = tmp_root("keep-all");
+        let mut s = NativeStore::open(&root).unwrap();
+        for tt in 1..=3 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        let report = s.gc(u64::MAX).unwrap();
+        assert_eq!(report.manifests_removed, 0);
+        assert_eq!(report.segments_removed, 0);
+        assert_eq!(manifest_gens(&root), vec![0, 1, 2, 3]);
+    }
+
+    // -- gc's orphan sweep covers every `idx/` kind --------------------- //
+    // No index format needs to
+    // be understood here — the sweep is deliberately generic over whatever
+    // lives under `idx/<kind>/`, keyed only by whether the segment id its
+    // filename names still has a `seg/<id>.tgs` file. A garbage byte string
+    // is exactly as good a fixture as a real name index for exercising that.
+
+    #[test]
+    fn index_files_are_removed_once_their_segment_is_gone() {
+        let root = tmp_root("idx-orphan");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2); // any live segment, so `seg/` is non-empty
+
+        let idx_dir = root.join("idx").join("name");
+        fs::create_dir_all(&idx_dir).unwrap();
+        // an orphan: no segment with this id has ever existed
+        fs::write(idx_dir.join("999999999999.tnx"), b"not a real index, doesn't matter here").unwrap();
+        // a stray temp file from a write that never got to rename — the
+        // sweep's job is completed files only; a `.tmp` must survive so a
+        // write in flight elsewhere is never treated as an orphan
+        fs::write(idx_dir.join("999999999999.tnx.tmp"), b"in flight").unwrap();
+
+        let report = s.gc(u64::MAX).unwrap();
+        assert_eq!(report.index_files_removed, 1, "the orphaned .tnx must be collected");
+        assert!(
+            !idx_dir.join("999999999999.tnx").exists(),
+            "orphaned index file survived gc"
+        );
+        assert!(
+            idx_dir.join("999999999999.tnx.tmp").exists(),
+            "a .tmp write-in-flight file is out of this sweep's scope and must survive"
+        );
+    }
+
+    #[test]
+    fn an_index_file_for_a_live_segment_survives_gc() {
+        let root = tmp_root("idx-live");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        let live_id = seg_files(&root)[0]
+            .strip_suffix(".tgs")
+            .unwrap()
+            .to_string();
+
+        let idx_dir = root.join("idx").join("name");
+        fs::create_dir_all(&idx_dir).unwrap();
+        let live_path = idx_dir.join(format!("{live_id}.tnx"));
+        fs::write(&live_path, b"stands in for a real index").unwrap();
+
+        let report = s.gc(u64::MAX).unwrap();
+        assert_eq!(report.index_files_removed, 0);
+        assert!(live_path.exists(), "an index for a segment gc kept must survive");
+    }
+
+    #[test]
+    fn gc_collects_segments_and_close_runs_a_compaction_superseded() {
+        let root = tmp_root("compaction");
+        let mut s = NativeStore::open(&root).unwrap();
+        let mut rows = Vec::new();
+        for tt in 1..=3 {
+            rows.extend(commit_edges(&mut s, tt * 10, 2));
+        }
+        // a correction against a committed row, so a close run exists
+        s.begin(100).unwrap();
+        s.close_version(RowKind::Edge, rows[0].vid, 100).unwrap();
+        s.commit(EventLogRef::default()).unwrap();
+        let old_segs = seg_files(&root);
+        assert_eq!(old_segs.len(), 3);
+        assert!(root.join("close").read_dir().unwrap().count() == 1);
+
+        let logical_before = {
+            let mut v = s.all_edge_versions().unwrap();
+            v.sort_by(|a, b| a.vid.cmp(&b.vid));
+            v
+        };
+        s.compact().unwrap();
+        let report = s.gc(1).unwrap();
+
+        assert_eq!(report.segments_removed, 3, "superseded segments collected");
+        assert_eq!(report.close_runs_removed, 1, "folded run collected");
+        for f in &old_segs {
+            assert!(!root.join("seg").join(f).exists(), "{f} survived gc");
+        }
+        let mut logical_after = s.all_edge_versions().unwrap();
+        logical_after.sort_by(|a, b| a.vid.cmp(&b.vid));
+        assert_eq!(logical_after, logical_before, "gc changed the logical store");
+
+        drop(s);
+        let re = NativeStore::open(&root).unwrap();
+        assert!(re.verify().unwrap().is_healthy());
+        assert_eq!(re.all_edge_versions().unwrap().len(), logical_before.len());
+    }
+
+    #[test]
+    fn files_referenced_by_a_retained_generation_survive() {
+        let root = tmp_root("retained-refs");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        s.compact().unwrap(); // generation 2 supersedes generation 1's segment
+
+        // keep both generations: the superseded segment is still referenced
+        let report = s.gc(3).unwrap();
+        assert_eq!(report.segments_removed, 0);
+        assert_eq!(seg_files(&root).len(), 2);
+        // shrink the window and it goes
+        let report = s.gc(1).unwrap();
+        assert_eq!(report.segments_removed, 1);
+        assert!(s.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn an_in_process_reader_pins_its_generation_until_dropped() {
+        let root = tmp_root("reader-pins");
+        let mut w = NativeStore::open(&root).unwrap();
+        let pinned_rows = commit_edges(&mut w, 10, 1); // generation 1
+        let reader = NativeStore::open(&root).unwrap(); // pins generation 1
+        commit_edges(&mut w, 20, 1);
+        commit_edges(&mut w, 30, 1); // generation 3
+
+        w.gc(1).unwrap();
+        assert_eq!(
+            manifest_gens(&root),
+            vec![1, 3],
+            "the pinned generation must survive alongside CURRENT"
+        );
+        // the reader's view still works end to end
+        let seen = reader.all_edge_versions().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].vid, pinned_rows[0].vid.to_hex());
+
+        drop(reader);
+        let report = w.gc(1).unwrap();
+        assert_eq!(report.manifests_removed, 1, "unpinned generation collected");
+        assert_eq!(manifest_gens(&root), vec![3]);
+    }
+
+    /// Reader-pinning regression gate.
+    ///
+    /// The bug: a cross-process `read_only=True` reader at generation *G*
+    /// failed every operator with a detected `OSError`/ENOENT once the
+    /// writer's `gc(keep_last=…)` unlinked a segment *G*'s manifest names
+    /// that the reader had never yet queried — because `open_segment` mapped
+    /// segments lazily, per first touch, so the actually-protected set was
+    /// whatever subset of *G* a reader's own queries had reached, not *G*
+    /// itself (soak measurement: a reader was exposed ≈84% of every 300 s
+    /// reopen window once the store outgrew what it had already touched).
+    ///
+    /// A second **in-process** handle cannot reproduce this: `PINS` (this
+    /// module, top) protects a live handle's generation for real, which is
+    /// exactly why the original 6 h diagnosis's same-process probe came back
+    /// null. `test_unpin` emulates the cross-process case directly — a
+    /// reader in another process was never in this process's `PINS` table
+    /// to begin with.
+    ///
+    /// The fix under test (`store.rs::pin_generation_files`, called from
+    /// `open` and every commit/compaction) maps every segment a generation's
+    /// manifest names *at open*, so the reader's own mapping keeps serving
+    /// bytes through the (POSIX) unlink even after gc removes the directory
+    /// entry — before the fix, this exact scenario raised a `Category::Io`
+    /// "No such file or directory" from `MmapSource::load`'s lazy call.
+    #[test]
+    fn a_cross_process_reader_survives_gc_because_pin_at_open_maps_its_whole_generation() {
+        let root = tmp_root("cross-process-pin");
+        let mut w = NativeStore::open(&root).unwrap();
+        // A tiny segment target so a modest batch actually splits across
+        // more than one file — the design memo's "small segment_target_bytes
+        // so >= 2 segments exist".
+        w.set_layout(PartitionMap::default(), 48);
+        let rows = commit_edges(&mut w, 10, 24); // generation 1
+        let gen1_segs = seg_files(&root);
+        assert!(
+            gen1_segs.len() >= 2,
+            "the layout must actually split generation 1 across segments, or \
+             this test does not exercise the multi-segment case the design \
+             memo requires (got {} segment(s))",
+            gen1_segs.len()
+        );
+
+        // `open` pins every one of generation 1's segment files here,
+        // before this test does anything to any of them.
+        let reader = NativeStore::open(&root).unwrap();
+        let g = reader.generation();
+        assert_eq!(g, 1);
+
+        // Emulate the cross-process case (see the doc comment above).
+        test_unpin(reader.pin_key(), g);
+
+        // Enough further commits and compactions that generation 1 falls
+        // below the retention floor and gc actually has something to do.
+        commit_edges(&mut w, 20, 24); // generation 2
+        w.compact().unwrap(); // generation 3, supersedes 1 and 2's segments
+        commit_edges(&mut w, 30, 24); // generation 4
+        w.compact().unwrap(); // generation 5, supersedes 3 and 4's segments
+        w.gc(1).unwrap(); // keep_last=1: only 5 (+ CURRENT, which is 5) retained
+
+        // Assert first: gc actually removed a file generation 1's manifest
+        // named, on disk — otherwise everything below passes vacuously.
+        let removed: Vec<&String> = gen1_segs
+            .iter()
+            .filter(|f| !root.join("seg").join(f).exists())
+            .collect();
+        assert!(
+            !removed.is_empty(),
+            "gc must have collected at least one of generation 1's segments \
+             for this test to prove anything; none were removed"
+        );
+
+        // The reader still answers correctly, reading through a file gc
+        // considers gone. This is the fix: pin-at-open mapped every one of
+        // these segments when `reader` was opened, above, so the bytes stay
+        // reachable through that mapping regardless of what gc did to the
+        // directory entry afterward.
+        let seen = reader.all_edge_versions().unwrap();
+        let mut got: Vec<String> = seen.iter().map(|v| v.vid.clone()).collect();
+        got.sort();
+        let mut want: Vec<String> = rows.iter().map(|r| r.vid.to_hex()).collect();
+        want.sort();
+        assert_eq!(got, want, "the reader's own generation must read intact");
+    }
+
+    #[test]
+    fn a_crash_mid_gc_leaves_the_store_openable_and_the_next_pass_finishes() {
+        let root = tmp_root("crash-mid");
+        let mut s = NativeStore::open(&root).unwrap();
+        for tt in 1..=2 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        s.compact().unwrap(); // generation 3; generations 0-2 now superseded
+        let logical = s.all_edge_versions().unwrap().len();
+        drop(s);
+
+        // simulate dying between pass 1 and pass 3: some superseded manifests
+        // are gone, the segments only they referenced are still on disk, and
+        // a manifest temp file survived a crash during an earlier publish
+        fs::remove_file(root.join("manifests").join(format!("{:020}.json", 0))).unwrap();
+        fs::remove_file(root.join("manifests").join(format!("{:020}.json", 1))).unwrap();
+        fs::write(root.join("manifests").join("junk.tmp"), b"partial").unwrap();
+
+        let mut re = NativeStore::open(&root).unwrap();
+        assert_eq!(re.generation(), 3, "a half-collected store must open");
+        assert!(re.verify().unwrap().is_healthy());
+        assert_eq!(re.all_edge_versions().unwrap().len(), logical);
+
+        let report = re.gc(1).unwrap();
+        assert_eq!(manifest_gens(&root), vec![3]);
+        assert!(!root.join("manifests").join("junk.tmp").exists());
+        assert_eq!(report.segments_removed, 2, "orphaned segments collected");
+        assert!(re.verify().unwrap().is_healthy());
+    }
+
+    // --- gc against a delta chain --------------------------------------- //
+
+    fn is_checkpoint(root: &Path, g: u64) -> bool {
+        crate::manifest_chain::read_record(root, g)
+            .unwrap()
+            .is_checkpoint()
+    }
+
+    #[test]
+    fn gc_materializes_a_floor_checkpoint_before_cutting_the_chain() {
+        // keep_last must keep meaning "the last N generations are readable",
+        // which with deltas means the floor cannot be left pointing at a
+        // checkpoint gc is about to delete
+        let root = tmp_root("delta-floor");
+        let mut s = NativeStore::open(&root).unwrap();
+        s.set_checkpoint_every(Some(1_000_000)); // only genesis checkpoints
+        for tt in 1..=6 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        assert_eq!(s.checkpoint_generation(), 0);
+        for g in 1..=6 {
+            assert!(!is_checkpoint(&root, g), "generation {g} should be a delta");
+        }
+
+        let report = s.gc(3).unwrap();
+        assert_eq!(manifest_gens(&root), vec![4, 5, 6]);
+        assert_eq!(report.manifests_removed, 4);
+        assert_eq!(report.generations_retained, 3);
+        assert!(
+            is_checkpoint(&root, 4),
+            "the floor must be materialized as a checkpoint before the chain \
+             below it is cut"
+        );
+        assert!(!is_checkpoint(&root, 5), "the rest stay deltas");
+        assert!(!is_checkpoint(&root, 6));
+        assert_eq!(report.segments_removed, 0, "all six are still referenced");
+
+        // both the live generation and the floor reconstruct from disk alone
+        for g in [4u64, 5, 6] {
+            let m = crate::manifest_chain::reconstruct(&root, g).unwrap();
+            assert_eq!(m.manifest.generation, g);
+            assert_eq!(m.checkpoint, 4);
+        }
+        drop(s);
+        let re = NativeStore::open(&root).unwrap();
+        assert_eq!(re.generation(), 6);
+        assert_eq!(re.all_edge_versions().unwrap().len(), 6);
+        assert!(re.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn gc_leaves_every_pinned_generation_reconstructible() {
+        // a pinned generation stranded below the floor gets its own anchor
+        // checkpoint; the generations between it and the floor still go
+        let root = tmp_root("delta-pins");
+        let mut w = NativeStore::open(&root).unwrap();
+        w.set_checkpoint_every(Some(1_000_000));
+        let pinned_rows = commit_edges(&mut w, 10, 1); // generation 1
+        let reader = NativeStore::open(&root).unwrap(); // pins generation 1
+        for tt in 2..=5 {
+            commit_edges(&mut w, tt * 10, 1);
+        }
+
+        let report = w.gc(2).unwrap();
+        assert_eq!(
+            manifest_gens(&root),
+            vec![1, 4, 5],
+            "the pinned generation survives alongside the keep_last window"
+        );
+        assert_eq!(report.manifests_removed, 3);
+        assert!(is_checkpoint(&root, 1), "the pinned generation is an anchor");
+        assert!(is_checkpoint(&root, 4), "so is the floor");
+        assert!(!is_checkpoint(&root, 5));
+
+        // the reader's own view still resolves, and its rows still read
+        let seen = reader.all_edge_versions().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].vid, pinned_rows[0].vid.to_hex());
+        assert!(reader.verify().unwrap().is_healthy());
+        let m = crate::manifest_chain::reconstruct(&root, 1).unwrap();
+        assert_eq!(m.manifest.manifest_sha, reader.manifest().manifest_sha);
+        assert_eq!(report.segments_removed, 0, "nothing a chain member names");
+
+        drop(reader);
+        let report = w.gc(2).unwrap();
+        assert_eq!(manifest_gens(&root), vec![4, 5]);
+        assert_eq!(report.manifests_removed, 1);
+        assert!(w.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn an_orphan_delta_above_current_is_ignored() {
+        // the `after_manifest` crash shape: a delta for the next generation
+        // reached disk, CURRENT did not. Reconstruction from CURRENT stops at
+        // 3 and never reads 4. gc's retention rule is unchanged from format 1
+        // — a generation at or above the floor is kept, and an orphan above
+        // `current` is above every floor — so it survives, harmlessly: it is
+        // never read, and the only thing it protects is the segment it names,
+        // which the live generation names too.
+        let root = tmp_root("delta-orphan");
+        let mut s = NativeStore::open(&root).unwrap();
+        s.set_checkpoint_every(Some(1_000_000));
+        for tt in 1..=3 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        let live = s.manifest().clone();
+        let mut ghost = live.successor(999);
+        ghost.stats.n_edge_versions += 100;
+        ghost.seal();
+        let d = crate::manifest_chain::ManifestDelta::between(&live, &ghost, 0).unwrap();
+        fs::write(
+            root.join("manifests").join(format!("{:020}.json", 4)),
+            d.to_json(),
+        )
+        .unwrap();
+
+        // open ignores it: CURRENT still names 3
+        drop(s);
+        let mut re = NativeStore::open(&root).unwrap();
+        assert_eq!(re.generation(), 3);
+        assert_eq!(re.manifest().stats.n_edge_versions, 3);
+        assert!(re.verify().unwrap().is_healthy());
+
+        // gc keeps it (same rule as format 1) and collects nothing it names
+        let report = re.gc(1).unwrap();
+        assert_eq!(manifest_gens(&root), vec![3, 4]);
+        assert_eq!(report.segments_removed, 0);
+        assert!(is_checkpoint(&root, 3), "the floor is anchored");
+        assert!(re.verify().unwrap().is_healthy());
+
+        // and the next commit overwrites the orphan with the real generation 4
+        commit_edges(&mut re, 40, 1);
+        assert_eq!(re.generation(), 4);
+        assert_eq!(re.manifest().stats.n_edge_versions, 4);
+        drop(re);
+        let again = NativeStore::open(&root).unwrap();
+        assert_eq!(again.all_edge_versions().unwrap().len(), 4);
+        assert!(again.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn a_crash_mid_delete_leaves_every_retained_generation_reconstructible() {
+        // `gc_mid_delete`: the anchor checkpoints are durable before
+        // any unlink, so whatever subset of the deletions landed, the store
+        // still opens and verifies
+        let root = tmp_root("delta-crash-mid");
+        let mut s = NativeStore::open(&root).unwrap();
+        s.set_checkpoint_every(Some(1_000_000));
+        for tt in 1..=5 {
+            commit_edges(&mut s, tt * 10, 1);
+        }
+        let rows = s.all_edge_versions().unwrap().len();
+        drop(s);
+
+        // pass 0 ran (the floor is a checkpoint), then the process died after
+        // deleting only some of the doomed manifests
+        let s = NativeStore::open(&root).unwrap();
+        s.materialize_checkpoint(4).unwrap();
+        drop(s);
+        fs::remove_file(root.join("manifests").join(format!("{:020}.json", 1))).unwrap();
+        fs::remove_file(root.join("manifests").join(format!("{:020}.json", 3))).unwrap();
+
+        let mut re = NativeStore::open(&root).unwrap();
+        assert_eq!(re.generation(), 5);
+        assert_eq!(re.all_edge_versions().unwrap().len(), rows);
+        assert!(re.verify().unwrap().is_healthy());
+
+        let report = re.gc(2).unwrap();
+        assert_eq!(manifest_gens(&root), vec![4, 5]);
+        assert_eq!(report.manifests_removed, 2, "0 and 2 finish the job");
+        assert!(re.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn segments_a_crashed_batch_orphaned_are_collected() {
+        let root = tmp_root("orphans");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 1);
+        // a batch that wrote its segment and died before publishing
+        let real = seg_files(&root);
+        let orphan = root.join("seg").join("999999999999.tgs");
+        fs::copy(root.join("seg").join(&real[0]), &orphan).unwrap();
+
+        let report = s.gc(u64::MAX).unwrap();
+        assert_eq!(report.segments_removed, 1);
+        assert!(!orphan.exists());
+        assert!(root.join("seg").join(&real[0]).exists());
+        assert!(s.verify().unwrap().is_healthy());
+    }
+
+    // --- the TCSR orphan sweep ------------------------------------------ //
+
+    fn tci_files(root: &Path) -> Vec<String> {
+        let dir = crate::tcsr::index_dir(root);
+        let Ok(rd) = fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = rd
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tci"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn gc_collects_the_indexes_of_segments_it_collected() {
+        let root = tmp_root("tcsr-orphans");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        commit_edges(&mut s, 20, 2);
+        s.build_tcsr_indexes().unwrap();
+        let before = tci_files(&root);
+        assert_eq!(before.len(), 2, "one index per edge segment");
+        assert_eq!(seg_files(&root).len(), 2);
+
+        s.compact().unwrap(); // writes a fresh segment, supersedes both
+        // compaction alone must not touch idx/: the superseded segments are
+        // still on disk and still referenced by a retained generation
+        assert_eq!(tci_files(&root), before, "compact() is not a sweep");
+
+        let report = s.gc(1).unwrap();
+        assert_eq!(report.segments_removed, 2);
+        assert!(
+            tci_files(&root).is_empty(),
+            "the indexes of collected segments must go with them: {:?}",
+            tci_files(&root)
+        );
+        assert!(s.verify().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn gc_keeps_the_index_of_a_segment_it_kept() {
+        let root = tmp_root("tcsr-kept");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        s.build_tcsr_indexes().unwrap(); // the pre-compaction segment
+        s.compact().unwrap();
+        s.build_tcsr_indexes().unwrap(); // the compacted one
+        assert_eq!(tci_files(&root).len(), 2, "pre-compaction and compacted");
+
+        // retain both generations: pass 3 removes no segment, so pass 4 must
+        // remove no index either
+        let report = s.gc(3).unwrap();
+        assert_eq!(report.segments_removed, 0);
+        assert_eq!(tci_files(&root).len(), 2);
+
+        let report = s.gc(1).unwrap();
+        assert_eq!(report.segments_removed, 1);
+        assert_eq!(tci_files(&root).len(), 1, "only the orphan went");
+        // and the survivor is still the live segment's
+        let live = crate::store::segment_id_of(&s.manifest().edge_lanes.event[0].file);
+        assert_eq!(tci_files(&root), vec![format!("{live:012}.tci")]);
+    }
+
+    #[test]
+    fn the_sweep_ignores_files_it_cannot_prove_are_garbage() {
+        let root = tmp_root("tcsr-sweep-noise");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        s.build_tcsr_indexes().unwrap();
+        let dir = crate::tcsr::index_dir(&root);
+        fs::write(dir.join("notes.txt"), b"not an index").unwrap();
+        fs::write(dir.join("000000000007.tci.tmp999"), b"a crashed write").unwrap();
+        fs::write(dir.join("nonsense.tci"), b"no id in the name").unwrap();
+
+        s.gc(1).unwrap();
+        assert!(dir.join("notes.txt").exists(), "gc removes only what it can prove is garbage");
+        assert!(dir.join("000000000007.tci.tmp999").exists());
+        assert!(dir.join("nonsense.tci").exists());
+        assert_eq!(tci_files(&root).len(), 2, "the live indexes survived");
+    }
+
+    #[test]
+    fn a_store_with_no_index_directory_gcs_normally() {
+        let root = tmp_root("tcsr-no-idx");
+        let mut s = NativeStore::open(&root).unwrap();
+        commit_edges(&mut s, 10, 2);
+        commit_edges(&mut s, 20, 2);
+        let _ = fs::remove_dir_all(crate::tcsr::index_dir(&root));
+        s.compact().unwrap();
+        let report = s.gc(1).unwrap();
+        assert_eq!(report.segments_removed, 2);
+        assert!(s.verify().unwrap().is_healthy());
+    }
+}

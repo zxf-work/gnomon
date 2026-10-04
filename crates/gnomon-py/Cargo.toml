@@ -1,0 +1,22 @@
+[package]
+name = "gnomon-py"
+description = "PyO3 bindings for the Gnomon native storage engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# must match the last component of tool.maturin module-name (gnomon._engine)
+name = "_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+numpy = "0.29.0"
+pyo3 = { version = "0.29.0", features = ["extension-module"] }
+gnomon-core = { path = "../gnomon-core", default-features = false }
+
+[features]
+# Forwards the core's ingest-phase timers; `cargo build -p gnomon-py
+# --no-default-features` builds the extension with them compiled out.
+default = ["ingest-timers"]
+ingest-timers = ["gnomon-core/ingest-timers"]

@@ -1,0 +1,402 @@
+"""DuckDB storage adapter (the reference backend — same ABC as the native one).
+
+Plain relational tables; version rows are append-mostly (the only UPDATE is
+closing tt_e). Columnar reads go engine → Arrow → NumPy with no Python-level
+row loops.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+import duckdb
+import numpy as np
+
+from gnomon.core.errors import NotFoundError
+from gnomon.core.model import OPEN_END, EdgeVersion, NodeVersion, canonical_json, clamp_tt
+from gnomon.storage.base import StorageAdapter
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS entities(
+  dense_id BIGINT NOT NULL,
+  uid VARCHAR PRIMARY KEY,
+  label VARCHAR);
+CREATE TABLE IF NOT EXISTS node_versions(
+  vid VARCHAR PRIMARY KEY,
+  uid VARCHAR NOT NULL, uid_id BIGINT NOT NULL, label VARCHAR,
+  vt_s BIGINT, vt_e BIGINT, tt_s BIGINT, tt_e BIGINT,
+  props VARCHAR,
+  source VARCHAR DEFAULT 'ingest',
+  provenance_ref VARCHAR);
+CREATE TABLE IF NOT EXISTS edge_versions(
+  vid VARCHAR PRIMARY KEY,
+  eid VARCHAR NOT NULL,
+  src VARCHAR NOT NULL, dst VARCHAR NOT NULL,
+  src_id BIGINT NOT NULL, dst_id BIGINT NOT NULL,
+  rel_type VARCHAR NOT NULL, disc VARCHAR,
+  vt_s BIGINT, vt_e BIGINT, tt_s BIGINT, tt_e BIGINT,
+  props VARCHAR,
+  source VARCHAR DEFAULT 'ingest',
+  provenance_ref VARCHAR);
+CREATE INDEX IF NOT EXISTS idx_node_versions_uid ON node_versions(uid);
+CREATE INDEX IF NOT EXISTS idx_edge_versions_eid ON edge_versions(eid);
+"""
+# These two indexes fix a STORE-SIZE cost, not a batch-size one, and the
+# distinction is the whole reason they are here rather than somewhere else.
+#
+# `apply_ops` calls `believed_node_versions(uid)` / `believed_edge_versions(eid)`
+# once per assert/retract/correct op. The only index these tables carried was
+# the vid PRIMARY KEY, which neither predicate can use, so every one of those
+# calls scanned the whole table. That does NOT make a batch quadratic here the
+# way it does on the native engine: DuckDB's scan of the few thousand rows the
+# open transaction has staged is vectorized and costs ~1-2 ns/row, so per-op
+# cost measured flat (±10%) from 500 to 8000 ops. What it does is make every
+# op pay for every row already committed. Per call, against a ~0.2 ms fixed
+# Python↔DuckDB round-trip floor:
+#
+#   edge_versions rows     200k     800k     3.2M
+#   unindexed             0.72 ms  1.21 ms  2.62 ms
+#   indexed                  —        —     0.44 ms   (flat; 0.38-0.58 ms at 50k-800k)
+#
+# with node lookups on a node_versions table deliberately held at 50k rows
+# through that same run as the control: 0.60 / 0.57 / 0.58 ms, i.e. unmoved.
+# Extrapolating the unindexed curve to SF1 scale (~20M rows) puts one lookup
+# near 8 ms, which is seconds per 1000-op batch — that is the number that
+# justifies the index.
+#
+# Measure this with a probe key INSIDE the column's value range. A key above
+# every stored value reads ~0.2 ms at every store size because DuckDB's zone
+# maps skip every row group without touching it; a real sha256-derived eid
+# never gets that discount, so an out-of-range probe reports a fixed cost that
+# the actual workload does not enjoy.
+#
+# Cost of keeping them: bulk `ingest_events` of 500k events, three interleaved
+# A/B pairs, came out +1.7% — well inside the budget. An existing store file
+# builds both indexes once on its first open after this change (3.4 s at 3.2M
+# edge rows); `IF NOT EXISTS` makes every later open a no-op, and a read-only
+# open never reaches the DDL at all.
+#
+# What the index does NOT cover is rows the open transaction has written and
+# not yet committed — but that is a step, not a slope. Once a transaction has
+# any local writes each lookup costs ~0.3-0.45 ms more, and then holds flat:
+# measured at 0.49 ms with nothing uncommitted and 0.89 / 0.80 / 0.87 / 0.76 /
+# 0.93 ms at 1k / 2k / 4k / 8k / 16k uncommitted rows (400k committed, two
+# independent runs agreeing). So there is no in-batch quadratic term to remove
+# here, and a write-behind identity cache in this adapter would buy a constant
+# at the price of its own rollback semantics.
+
+
+class DuckDBAdapter(StorageAdapter):
+    def __init__(self, path: str | Path = ":memory:", threads: int | None = None,
+                 read_only: bool = False) -> None:
+        self.conn = duckdb.connect(str(path), read_only=read_only)
+        if threads:
+            self.conn.execute(f"SET threads = {int(threads)}")
+        # A read-only connection rejects CREATE, even IF NOT EXISTS on a table
+        # that already exists. A read-only store is guaranteed to exist (see
+        # Store.__init__), so the DDL has nothing to do here.
+        if not read_only:
+            for stmt in _DDL.strip().split(";"):
+                if stmt.strip():
+                    self.conn.execute(stmt)
+        # dense-id dictionary cache (uid <-> int64), loaded once at open
+        rows = self.conn.execute("SELECT uid, dense_id FROM entities ORDER BY dense_id").fetchall()
+        self._ids: dict[str, int] = {u: i for u, i in rows}
+        self._uid_list: list[str] = [u for u, _ in rows]
+
+    def close(self) -> None:
+        self.conn.close()
+
+    # --- batch transactions ---------------------------------------------- #
+
+    def begin(self) -> None:
+        self.conn.execute("BEGIN TRANSACTION")
+
+    def commit(self) -> None:
+        self.conn.execute("COMMIT")
+
+    def rollback(self) -> None:
+        self.conn.execute("ROLLBACK")
+        # resync the dense-id cache with the (rolled-back) entities table
+        rows = self.conn.execute("SELECT uid, dense_id FROM entities ORDER BY dense_id").fetchall()
+        self._ids = {u: i for u, i in rows}
+        self._uid_list = [u for u, _ in rows]
+
+    # --- entities ------------------------------------------------------- #
+
+    def ensure_entities(self, uid_labels: Iterable[tuple[str, str]]) -> None:
+        new = [(u, label) for u, label in uid_labels if u not in self._ids]
+        if not new:
+            return
+        seen: dict[str, str] = {}
+        for u, label in new:  # dedupe, keep first label
+            if u not in seen:
+                seen[u] = label
+        rows = []
+        for u, label in seen.items():
+            did = len(self._uid_list)
+            self._ids[u] = did
+            self._uid_list.append(u)
+            rows.append((did, u, label))
+        self.conn.executemany("INSERT INTO entities VALUES (?, ?, ?)", rows)
+
+    def dense_ids(self, uids: Sequence[str]) -> np.ndarray:
+        try:
+            return np.fromiter((self._ids[u] for u in uids), dtype=np.int64, count=len(uids))
+        except KeyError as e:
+            raise NotFoundError(f"unknown uid: {e.args[0]}", uid=e.args[0]) from None
+
+    def uids_for(self, ids: Sequence[int]) -> list[str]:
+        return [self._uid_list[i] for i in ids]
+
+    def num_entities(self) -> int:
+        return len(self._uid_list)
+
+    # --- version writes -------------------------------------------------- #
+
+    def insert_node_versions(self, rows: Sequence[NodeVersion]) -> None:
+        if not rows:
+            return
+        self.conn.executemany(
+            "INSERT INTO node_versions VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [(v.vid, v.uid, self._ids[v.uid], v.label, v.vt_s, v.vt_e, v.tt_s, v.tt_e,
+              canonical_json(v.props), v.source, v.provenance_ref) for v in rows])
+
+    def insert_edge_versions(self, rows: Sequence[EdgeVersion]) -> None:
+        if not rows:
+            return
+        if len(rows) >= 5_000:  # bulk path: Arrow scan, no per-row binds
+            import pyarrow as pa
+            tbl = pa.table({
+                "vid": [v.vid for v in rows], "eid": [v.eid for v in rows],
+                "src": [v.src for v in rows], "dst": [v.dst for v in rows],
+                "src_id": pa.array((self._ids[v.src] for v in rows), pa.int64()),
+                "dst_id": pa.array((self._ids[v.dst] for v in rows), pa.int64()),
+                "rel_type": [v.rel_type for v in rows],
+                "disc": [v.disc for v in rows],
+                "vt_s": pa.array((v.vt_s for v in rows), pa.int64()),
+                "vt_e": pa.array((v.vt_e for v in rows), pa.int64()),
+                "tt_s": pa.array((v.tt_s for v in rows), pa.int64()),
+                "tt_e": pa.array((v.tt_e for v in rows), pa.int64()),
+                "props": [canonical_json(v.props) for v in rows],
+                "source": [v.source for v in rows],
+                "provenance_ref": [v.provenance_ref for v in rows],
+            })
+            self.conn.register("_bulk_edges", tbl)
+            self.conn.execute("INSERT INTO edge_versions SELECT * FROM _bulk_edges")
+            self.conn.unregister("_bulk_edges")
+            return
+        self.conn.executemany(
+            "INSERT INTO edge_versions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(v.vid, v.eid, v.src, v.dst, self._ids[v.src], self._ids[v.dst], v.rel_type,
+              v.disc, v.vt_s, v.vt_e, v.tt_s, v.tt_e, canonical_json(v.props),
+              v.source, v.provenance_ref) for v in rows])
+
+    def close_node_versions(self, vids: Sequence[str], tt_e: int,
+                           vt_s: Sequence[int] | None = None) -> None:
+        # `vt_s` is the native engine's segment-pruning hint; a vid is a
+        # primary key here, so there is nothing to prune.
+        del vt_s
+        self.conn.executemany(
+            "UPDATE node_versions SET tt_e = ? WHERE vid = ?", [(tt_e, v) for v in vids])
+
+    def close_edge_versions(self, vids: Sequence[str], tt_e: int,
+                           vt_s: Sequence[int] | None = None) -> None:
+        del vt_s
+        self.conn.executemany(
+            "UPDATE edge_versions SET tt_e = ? WHERE vid = ?", [(tt_e, v) for v in vids])
+
+    def retire_node_versions(self, vids: Sequence[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM node_versions WHERE vid = ?", [(v,) for v in vids])
+
+    def retire_edge_versions(self, vids: Sequence[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM edge_versions WHERE vid = ?", [(v,) for v in vids])
+
+    # --- version reads ---------------------------------------------------- #
+
+    _NODE_COLS = ("vid, uid, label, vt_s, vt_e, tt_s, tt_e, props, "
+                  "source, provenance_ref")
+    _EDGE_COLS = ("eid, vid, src, dst, rel_type, disc, vt_s, vt_e, tt_s, tt_e, "
+                  "props, source, provenance_ref")
+
+    def believed_node_versions(self, uid: str, as_of_tt: int = OPEN_END) -> list[NodeVersion]:
+        as_of_tt = clamp_tt(as_of_tt)
+        rows = self.conn.execute(
+            f"SELECT {self._NODE_COLS} FROM node_versions "
+            "WHERE uid = ? AND tt_s <= ? AND ? < tt_e ORDER BY vt_s",
+            (uid, as_of_tt, as_of_tt)).fetchall()
+        return [_node_from_row(r) for r in rows]
+
+    def believed_edge_versions(self, eid: str, as_of_tt: int = OPEN_END, *,
+                               src: str | None = None, dst: str | None = None) -> list[EdgeVersion]:
+        # src/dst are performance hints for backends that can anchor on them;
+        # this table already has an ART index on eid (idx_edge_versions_eid
+        # above), so the hints add nothing here and are ignored.
+        as_of_tt = clamp_tt(as_of_tt)
+        rows = self.conn.execute(
+            f"SELECT {self._EDGE_COLS} FROM edge_versions "
+            "WHERE eid = ? AND tt_s <= ? AND ? < tt_e ORDER BY vt_s",
+            (eid, as_of_tt, as_of_tt)).fetchall()
+        return [_edge_from_row(r) for r in rows]
+
+    def nodes_with_believed_versions(self, uids: Sequence[str],
+                                     as_of_tt: int = OPEN_END) -> set[str]:
+        a = clamp_tt(as_of_tt)
+        out: set[str] = set()
+        uids = list(uids)
+        for i in range(0, len(uids), 10_000):  # chunked IN lists
+            chunk = uids[i:i + 10_000]
+            rows = self.conn.execute(
+                "SELECT DISTINCT uid FROM node_versions "
+                f"WHERE tt_s <= ? AND ? < tt_e AND uid IN ({','.join('?' * len(chunk))})",
+                [a, a, *chunk]).fetchall()
+            out.update(r[0] for r in rows)
+        return out
+
+    def all_node_versions(self) -> Iterable[NodeVersion]:
+        rows = self.conn.execute(
+            f"SELECT {self._NODE_COLS} FROM node_versions").fetchall()
+        return (_node_from_row(r) for r in rows)
+
+    def all_edge_versions(self) -> Iterable[EdgeVersion]:
+        rows = self.conn.execute(
+            f"SELECT {self._EDGE_COLS} FROM edge_versions").fetchall()
+        return (_edge_from_row(r) for r in rows)
+
+    # --- columnar read path ------------------------------------------------ #
+
+    def versions_columnar(self, kind: str) -> dict[str, np.ndarray]:
+        """One SELECT of the columns a version scan emits.
+
+        The ABC default builds an object per row and reads attributes off it;
+        this reads the columns. `props`, `source` and `provenance_ref` are
+        never in the projection — the operator drops all three — which is the
+        same pushdown `edges_columnar` has, for the same reason.
+        """
+        names = self.VERSION_COLS[kind]
+        table = "node_versions" if kind == "node" else "edge_versions"
+        str_cols = tuple(c for c in names if c not in self.VERSION_INT_COLS)
+        tbl = self.conn.execute(
+            f"SELECT {', '.join(names)} FROM {table}").to_arrow_table()
+        return _arrow_to_soa(tbl, int_cols=self.VERSION_INT_COLS,
+                             str_cols=str_cols)
+
+    def edges_columnar(
+        self,
+        as_of_tt: int = OPEN_END,
+        vt_min: int | None = None,
+        vt_max: int | None = None,
+        rel_types: Sequence[str] | None = None,
+        columns: Sequence[str] | None = None,
+        touching_ids: Sequence[int] | None = None,
+        touching_both: bool = False,
+    ) -> dict[str, np.ndarray]:
+        as_of_tt = clamp_tt(as_of_tt)
+        int_cols = tuple(c for c in self.EDGE_INT_COLS
+                         if columns is None or c in columns)
+        str_cols = tuple(c for c in self.EDGE_STR_COLS
+                         if columns is None or c in columns)
+        # opt-in only: a bare scan must never pay for the props blob
+        str_cols += tuple(c for c in self.EDGE_OPT_COLS
+                          if columns is not None and c in columns)
+        where = ["tt_s <= ? AND ? < tt_e"]
+        params: list[Any] = [as_of_tt, as_of_tt]
+        if vt_min is not None:
+            where.append("vt_e > ?")
+            params.append(vt_min)
+        if vt_max is not None:
+            where.append("vt_s < ?")
+            params.append(vt_max)
+        if rel_types is not None:
+            where.append(f"rel_type IN ({','.join('?' * len(rel_types))})")
+            params.extend(rel_types)
+        if touching_ids is not None:
+            marks = ",".join("?" * len(touching_ids))
+            op = "AND" if touching_both else "OR"
+            where.append(f"(src_id IN ({marks}) {op} dst_id IN ({marks}))")
+            params.extend(touching_ids)
+            params.extend(touching_ids)
+        tbl = self.conn.execute(
+            f"SELECT {', '.join(int_cols + str_cols)} FROM edge_versions "
+            f"WHERE {' AND '.join(where)} ORDER BY vt_s, vid", params).to_arrow_table()
+        return _arrow_to_soa(tbl, int_cols=int_cols, str_cols=str_cols)
+
+    def nodes_columnar(
+        self,
+        as_of_tt: int = OPEN_END,
+        vt_min: int | None = None,
+        vt_max: int | None = None,
+    ) -> dict[str, np.ndarray]:
+        as_of_tt = clamp_tt(as_of_tt)
+        where = ["tt_s <= ? AND ? < tt_e"]
+        params: list[Any] = [as_of_tt, as_of_tt]
+        if vt_min is not None:
+            where.append("vt_e > ?")
+            params.append(vt_min)
+        if vt_max is not None:
+            where.append("vt_s < ?")
+            params.append(vt_max)
+        tbl = self.conn.execute(
+            "SELECT uid_id, vt_s, vt_e, uid, vid, label FROM node_versions "
+            f"WHERE {' AND '.join(where)} ORDER BY vt_s, vid", params).to_arrow_table()
+        return _arrow_to_soa(tbl, int_cols=("uid_id", "vt_s", "vt_e"),
+                             str_cols=("uid", "vid", "label"))
+
+    def props_for_vids(self, kind: str, vids: Sequence[str]) -> dict[str, dict]:
+        table = "node_versions" if kind == "node" else "edge_versions"
+        if not vids:
+            return {}
+        rows = self.conn.execute(
+            f"SELECT vid, props FROM {table} WHERE vid IN ({','.join('?' * len(vids))})",
+            list(vids)).fetchall()
+        return {vid: json.loads(props) for vid, props in rows}
+
+    # --- stats -------------------------------------------------------------- #
+
+    def stats(self) -> dict[str, Any]:
+        n_nodes, n_edges = (
+            self.conn.execute("SELECT count(*) FROM node_versions").fetchone()[0],
+            self.conn.execute("SELECT count(*) FROM edge_versions").fetchone()[0])
+        extent = self.conn.execute(
+            "SELECT min(vt_s), max(CASE WHEN vt_e >= ? THEN vt_s + 1 ELSE vt_e END) "
+            "FROM edge_versions", (OPEN_END,)).fetchone()
+        rel_counts = dict(self.conn.execute(
+            "SELECT rel_type, count(*) FROM edge_versions GROUP BY rel_type").fetchall())
+        max_deg = self.conn.execute(
+            "SELECT coalesce(max(c), 0) FROM (SELECT count(*) AS c FROM edge_versions "
+            "GROUP BY src_id)").fetchone()[0]
+        return {
+            "n_entities": self.num_entities(),
+            "n_node_versions": n_nodes,
+            "n_edge_versions": n_edges,
+            "vt_min": extent[0], "vt_max": extent[1],
+            "rel_type_counts": rel_counts,
+            "max_out_degree": max_deg,
+        }
+
+
+def _node_from_row(r: tuple) -> NodeVersion:
+    vid, uid, label, vt_s, vt_e, tt_s, tt_e, props, source, prov = r
+    return NodeVersion(vid=vid, uid=uid, label=label, vt_s=vt_s, vt_e=vt_e,
+                       tt_s=tt_s, tt_e=tt_e, props=json.loads(props),
+                       source=source or "ingest", provenance_ref=prov)
+
+
+def _edge_from_row(r: tuple) -> EdgeVersion:
+    eid, vid, src, dst, rel_type, disc, vt_s, vt_e, tt_s, tt_e, props, source, prov = r
+    return EdgeVersion(eid=eid, vid=vid, src=src, dst=dst, rel_type=rel_type, disc=disc or "",
+                       vt_s=vt_s, vt_e=vt_e, tt_s=tt_s, tt_e=tt_e, props=json.loads(props),
+                       source=source or "ingest", provenance_ref=prov)
+
+
+def _arrow_to_soa(tbl, int_cols: tuple[str, ...], str_cols: tuple[str, ...]) -> dict[str, np.ndarray]:
+    out: dict[str, np.ndarray] = {}
+    for c in int_cols:
+        out[c] = tbl.column(c).to_numpy(zero_copy_only=False).astype(np.int64, copy=False)
+    for c in str_cols:
+        out[c] = np.asarray(tbl.column(c).to_pylist(), dtype=object)
+    return out

@@ -1,0 +1,23 @@
+[package]
+name = "gnomon-core"
+description = "Gnomon native bi-temporal storage engine core (no Python dependency)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crc32c = "0.6.8"
+# DEFLATE for the string heap. Pure Rust, zero transitive deps,
+# MIT OR Zlib OR Apache-2.0.
+miniz_oxide = "0.8"
+memmap2 = "0.9.11"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+
+[features]
+# Per-phase ingest timers (`ingest_phase.rs`). On by default; the build with
+# `--no-default-features` compiles every timer to nothing and is the control
+# arm the timers' overhead is measured against.
+default = ["ingest-timers"]
+ingest-timers = []

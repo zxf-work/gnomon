@@ -1,0 +1,822 @@
+"""Brute-force reference implementations.
+
+Correct-by-inspection Python over full version lists; O(n!)-ish acceptable —
+used only on graphs <= 5k edge events. Every function takes the same filled
+args dict as the engine operator and returns the same payload structure, so
+property tests compare canonical JSON directly.
+
+Python loops are explicitly allowed here (spec 7.1).
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from gnomon.core.model import OPEN_END, EdgeVersion, NodeVersion, clamp_tt
+from gnomon.temporal.algebra import paginate
+from gnomon.temporal.ops_compute import _mean as blessed_mean
+from gnomon.temporal.props import SKIP, matches, numeric_value, prop_keys
+
+#: The sequence aggregates. Spelled out here rather than imported from
+#: `ops_aggregate` on purpose — the blessed `mean` is shared because the
+#: float sequence has to be bit-identical, but a *set of names* is exactly
+#: the kind of thing ground truth should restate independently.
+SEQ_AGGS = ("max_gap", "max_in_window", "max_session_span")
+
+#: The calendar units, computed here with `datetime` while the engine
+#: computes them with integer civil arithmetic. That the two agree is the
+#: evidence; sharing an implementation would make the test vacuous.
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November",
+               "December")
+
+
+def calendar_unit(t: int, unit: str, offset_minutes: int) -> Any:
+    """The calendar unit of one epoch-microsecond instant, at a fixed offset.
+
+    A fixed offset and not a timezone. `datetime` here, and only
+    UTC plus explicit arithmetic, so nothing consults a tz database.
+    """
+    local = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=int(t) + offset_minutes * 60_000_000)
+    if unit == "hour_of_day":
+        return local.hour
+    if unit == "day_of_week":
+        return DAY_NAMES[local.weekday()]
+    if unit == "month_of_year":
+        return MONTH_NAMES[local.month - 1]
+    raise ValueError(f"unknown calendar unit {unit!r}")
+
+
+class Oracle:
+    def __init__(self, node_versions: list[NodeVersion],
+                 edge_versions: list[EdgeVersion]) -> None:
+        self.nv = list(node_versions)
+        self.ev = list(edge_versions)
+
+    # ------------------------------------------------------------------ #
+    # primitive filters                                                   #
+    # ------------------------------------------------------------------ #
+
+    def believed_nodes(self, as_of: int) -> list[NodeVersion]:
+        return [v for v in self.nv if v.believed_at(as_of)]
+
+    def believed_edges(self, as_of: int) -> list[EdgeVersion]:
+        return [v for v in self.ev if v.believed_at(as_of)]
+
+    def nodes_at(self, t: int, as_of: int) -> dict[str, NodeVersion]:
+        return {v.uid: v for v in self.believed_nodes(as_of) if v.valid_at(t)}
+
+    def edges_at(self, t: int, as_of: int,
+                 rel_types: list[str] | None = None) -> dict[str, EdgeVersion]:
+        return {v.eid: v for v in self.believed_edges(as_of)
+                if v.valid_at(t) and (rel_types is None or v.rel_type in rel_types)}
+
+    def events_in(self, t_a: int, t_b: int, as_of: int) -> list[EdgeVersion]:
+        """Edge versions as events at vt_s, ordered by the (t, eid) total order."""
+        evs = [v for v in self.believed_edges(as_of) if t_a <= v.vt_s < t_b]
+        return sorted(evs, key=lambda v: (v.vt_s, v.eid))
+
+    @staticmethod
+    def _edge_row(v: EdgeVersion) -> dict[str, Any]:
+        return {"eid": v.eid, "vid": v.vid, "src": v.src, "dst": v.dst,
+                "rel_type": v.rel_type, "vt_s": v.vt_s, "vt_e": v.vt_e}
+
+    def _bfs(self, edges: dict[str, EdgeVersion], seeds: list[str],
+             valid_uids: set[str], hops: int) -> dict[str, int]:
+        dist = {u: 0 for u in seeds if u in valid_uids}
+        frontier = sorted(dist)
+        for h in range(1, hops + 1):
+            nxt = set()
+            for v in edges.values():
+                if v.src in frontier and v.dst not in dist and v.dst in valid_uids:
+                    nxt.add(v.dst)
+                if v.dst in frontier and v.src not in dist and v.src in valid_uids:
+                    nxt.add(v.src)
+            for u in nxt:
+                dist[u] = h
+            frontier = sorted(nxt)
+        return dist
+
+    # ------------------------------------------------------------------ #
+    # version_history                                                  #
+    # ------------------------------------------------------------------ #
+
+    def version_history(self, args: dict[str, Any]) -> dict[str, Any]:
+        as_of = clamp_tt(args["as_of_tt"])
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        belief, kind = args["belief"], args["kind"]
+        versions = self.nv if kind == "node" else self.ev
+
+        rows = []
+        for v in versions:
+            # nothing written after `as_of` exists yet, in any belief mode:
+            # that is what makes a pinned result immutable under later writes
+            if v.tt_s > as_of:
+                continue
+            superseded = v.tt_e <= as_of
+            if belief == "current" and superseded:
+                continue
+            if belief == "superseded" and not superseded:
+                continue
+            if not (v.vt_s < t_b and t_a < v.vt_e):   # interval overlap
+                continue
+            if kind == "edge" and args["rel_types"] is not None and \
+                    v.rel_type not in args["rel_types"]:
+                continue
+            r = v.to_json()
+            del r["props"], r["source"], r["provenance_ref"]
+            # a belief that ends after `as_of` has not ended yet, as far as
+            # `as_of` can know — the same censoring entity_history applies
+            if not superseded:
+                r["tt_e"] = OPEN_END
+            rows.append(r)
+
+        rows.sort(key=lambda r: (r["tt_s"], r["vid"]))
+        return paginate(rows, args["limit"], args["cursor"])
+
+    # ------------------------------------------------------------------ #
+    # entity_history                                                    #
+    # ------------------------------------------------------------------ #
+
+    def entity_history(self, args: dict[str, Any]) -> dict[str, Any]:
+        as_of = args["as_of_tt"]
+        versions = sorted((v for v in self.believed_nodes(as_of) if v.uid == args["uid"]),
+                          key=lambda v: (v.vt_s, v.vid))
+        rows = [v.to_json() for v in versions]
+        for r in rows:  # censor post-as_of belief closure, like the engine
+            if r["tt_e"] > as_of:
+                r["tt_e"] = OPEN_END
+        out = paginate(rows, args["limit"], args["cursor"])
+        if args["include_edges"]:
+            inc = sorted((v for v in self.believed_edges(as_of)
+                          if args["uid"] in (v.src, v.dst)),
+                         key=lambda v: (v.vt_s, v.vid))
+            out["edges"] = [self._edge_row(v) for v in inc[: args["limit"]]]
+            out["edges_truncated"] = len(inc) > args["limit"]
+        return out
+
+    # ------------------------------------------------------------------ #
+    # snapshot_subgraph                                                 #
+    # ------------------------------------------------------------------ #
+
+    def snapshot_subgraph(self, args: dict[str, Any]) -> dict[str, Any]:
+        t, as_of = args["t_valid"], args["as_of_tt"]
+        edges = self.edges_at(t, as_of, args["rel_types"])
+        nodes = self.nodes_at(t, as_of)
+        dist = self._bfs(edges, args["seeds"], set(nodes), args["hops"])
+        induced = sorted((v for v in edges.values()
+                          if v.src in dist and v.dst in dist),
+                         key=lambda v: (v.vt_s, v.vid))
+        node_rows = sorted(({"uid": u, "label": nodes[u].label, "hop": h}
+                            for u, h in dist.items()),
+                           key=lambda r: (r["hop"], r["uid"]))
+        out = paginate([self._edge_row(v) for v in induced],
+                       args["limit"], args["cursor"])
+        out["nodes"] = node_rows[: args["limit"]]
+        out["nodes_total"] = len(node_rows)
+        out["nodes_truncated"] = len(node_rows) > args["limit"]
+        out["truncated"] = out["truncated"] or out["nodes_truncated"]
+        return out
+
+    # ------------------------------------------------------------------ #
+    # diff_snapshots                                                    #
+    # ------------------------------------------------------------------ #
+
+    def diff_snapshots(self, args: dict[str, Any]) -> dict[str, Any]:
+        t1, t2, as_of, limit = args["t1"], args["t2"], args["as_of_tt"], args["limit"]
+        n1, n2 = self.nodes_at(t1, as_of), self.nodes_at(t2, as_of)
+        e1, e2 = self.edges_at(t1, as_of), self.edges_at(t2, as_of)
+
+        allowed: set[str] | None = None
+        if args["scope"] is not None:
+            seeds, hops = args["scope"]["seeds"], args["scope"]["hops"]
+            d1 = self._bfs(e1, seeds, set(n1), hops)
+            d2 = self._bfs(e2, seeds, set(n2), hops)
+            allowed = set(d1) | set(d2)
+
+        def nok(u: str) -> bool:
+            return allowed is None or u in allowed
+
+        def eok(v: EdgeVersion) -> bool:
+            return allowed is None or (v.src in allowed and v.dst in allowed)
+
+        nodes_added = sorted(u for u in n2 if u not in n1 and nok(u))
+        nodes_removed = sorted(u for u in n1 if u not in n2 and nok(u))
+        edges_added = sorted(e for e in e2 if e not in e1 and eok(e2[e]))
+        edges_removed = sorted(e for e in e1 if e not in e2 and eok(e1[e]))
+
+        changed = []
+        for u in sorted(u for u in n1 if u in n2 and nok(u)):
+            a, b = n1[u], n2[u]
+            if a.vid != b.vid and (a.props != b.props or a.label != b.label):
+                changed.append({"kind": "node", "id": u,
+                                "from": {"label": a.label, "props": a.props},
+                                "to": {"label": b.label, "props": b.props}})
+        for e in sorted(e for e in e1 if e in e2 and eok(e1[e])):
+            a, b = e1[e], e2[e]
+            if a.vid != b.vid and a.props != b.props:
+                changed.append({"kind": "edge", "id": e,
+                                "from": {"props": a.props},
+                                "to": {"props": b.props}})
+
+        def desc(v: EdgeVersion) -> dict[str, Any]:
+            return {"eid": v.eid, "src": v.src, "dst": v.dst, "rel_type": v.rel_type}
+
+        out = {
+            "nodes_added": nodes_added[:limit], "nodes_added_total": len(nodes_added),
+            "nodes_removed": nodes_removed[:limit],
+            "nodes_removed_total": len(nodes_removed),
+            "edges_added": [desc(e2[e]) for e in edges_added[:limit]],
+            "edges_added_total": len(edges_added),
+            "edges_removed": [desc(e1[e]) for e in edges_removed[:limit]],
+            "edges_removed_total": len(edges_removed),
+            "props_changed": changed[:limit], "props_changed_total": len(changed),
+        }
+        out["truncated"] = any(
+            out[f"{k}_total"] > limit
+            for k in ("nodes_added", "nodes_removed", "edges_added",
+                      "edges_removed", "props_changed"))
+        return out
+
+    # ------------------------------------------------------------------ #
+    # temporal_reachability                                             #
+    # ------------------------------------------------------------------ #
+
+    def temporal_reachability(self, args: dict[str, Any]) -> dict[str, Any]:
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        delta = args["delta_max_wait"]
+        src_uid = args["src"]
+        edges = [v for v in self.believed_edges(args["as_of_tt"])
+                 if v.vt_e > t_a and v.vt_s < t_b]
+        hops: list[tuple[str, str, int, int]] = []
+        for v in edges:
+            hops.append((v.src, v.dst, v.vt_s, v.vt_e))
+            if args["direction"] == "both":
+                hops.append((v.dst, v.src, v.vt_s, v.vt_e))
+        if args["direction"] == "in":
+            hops = [(d, s, a, b) for s, d, a, b in hops]
+
+        # exhaustive state search over (node, arrival)
+        labels: dict[str, set[int]] = {src_uid: {t_a}}
+        queue = deque([(src_uid, t_a)])
+        while queue:
+            u, a = queue.popleft()
+            for s, d, vs, ve in hops:
+                if s != u:
+                    continue
+                tau = max(a, vs)
+                if tau >= ve or tau >= t_b:
+                    continue
+                if delta is not None and not (u == src_uid and a == t_a) \
+                        and tau - a > delta:
+                    continue
+                if tau not in labels.setdefault(d, set()):
+                    labels[d].add(tau)
+                    queue.append((d, tau))
+        rows = [{"uid": u, "earliest_arrival": min(ls)}
+                for u, ls in labels.items() if u != src_uid]
+        rows.sort(key=lambda r: (r["earliest_arrival"], r["uid"]))
+        return paginate(rows, args["limit"], args["cursor"])
+
+    # ------------------------------------------------------------------ #
+    # temporal_paths                                                    #
+    # ------------------------------------------------------------------ #
+
+    def temporal_paths(self, args: dict[str, Any]) -> dict[str, Any]:
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        edges = sorted((v for v in self.believed_edges(args["as_of_tt"])
+                        if v.vt_e > t_a and v.vt_s < t_b),
+                       key=lambda v: (v.vt_s, v.eid))
+        found: list[tuple[int, int, tuple, list[EdgeVersion]]] = []
+
+        def dfs(node: str, arrival: int, visited: set[str],
+                trail: list[EdgeVersion]) -> None:
+            if node == args["dst"] and trail:
+                key = tuple((v.vt_s, v.eid) for v in trail)
+                found.append((arrival, len(trail), key, list(trail)))
+                return
+            if len(trail) == args["max_hops"]:
+                return
+            for v in edges:
+                if v.src != node or v.dst in visited:
+                    continue
+                tau = max(arrival, v.vt_s)
+                if tau >= v.vt_e or tau >= t_b:
+                    continue
+                visited.add(v.dst)
+                trail.append(v)
+                dfs(v.dst, tau, visited, trail)
+                trail.pop()
+                visited.remove(v.dst)
+
+        dfs(args["src"], t_a, {args["src"]}, [])
+        found.sort(key=lambda p: (p[0], p[1], p[2]))
+        rows = [{"arrival": a, "hops": h,
+                 "edges": [{"src": v.src, "dst": v.dst, "rel_type": v.rel_type,
+                            "eid": v.eid, "t": v.vt_s} for v in trail]}
+                for a, h, _, trail in found[: args["k"]]]
+        return {"rows": rows, "rows_total": len(found),
+                "truncated": len(found) > args["k"], "cursor": None}
+
+    # ------------------------------------------------------------------ #
+    # motifs                                                       #
+    # ------------------------------------------------------------------ #
+
+    _MOTIF_CHECK = {
+        "M_triangle_cyclic": lambda a, b, c: (
+            b.src == a.dst and c.src == b.dst and c.dst == a.src
+            and len({a.src, a.dst, b.dst}) == 3),
+        "M_triangle_acyclic_1": lambda a, b, c: (
+            b.src == a.src and c.src == a.dst and c.dst == b.dst
+            and len({a.src, a.dst, b.dst}) == 3),
+        "M_2node_pingpong": lambda a, b, c: (
+            b.src == a.dst and b.dst == a.src and c.src == a.src
+            and c.dst == a.dst and a.src != a.dst),
+        "M_star_out_3": lambda a, b, c: (
+            b.src == a.src and c.src == a.src
+            and len({a.src, a.dst, b.dst, c.dst}) == 4),
+        "M_path_3": lambda a, b, c: (
+            b.src == a.dst and c.src == b.dst
+            and len({a.src, a.dst, b.dst, c.dst}) == 4),
+    }
+
+    def _motif_instances(self, args: dict[str, Any]) -> list[tuple]:
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        events = self.events_in(t_a, t_b, args["as_of_tt"])
+        if args["node_filter"] is not None:
+            f = set(args["node_filter"])
+            events = [v for v in events if v.src in f and v.dst in f]
+        check = self._MOTIF_CHECK[args["motif"]]
+        delta = args["delta"]
+        out = []
+        n = len(events)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if events[j].vt_s - events[i].vt_s > delta:
+                    break
+                for k in range(j + 1, n):
+                    if events[k].vt_s - events[i].vt_s > delta:
+                        break
+                    a, b, c = events[i], events[j], events[k]
+                    if check(a, b, c):
+                        out.append((a, b, c))
+        out.sort(key=lambda t: tuple((v.vt_s, v.eid) for v in t))
+        return out
+
+    def count_temporal_motifs(self, args: dict[str, Any]) -> dict[str, Any]:
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        events = self.events_in(t_a, t_b, args["as_of_tt"])
+        if args["node_filter"] is not None:
+            f = set(args["node_filter"])
+            events = [v for v in events if v.src in f and v.dst in f]
+        return {"count": len(self._motif_instances(args)),
+                "n_events_in_window": len(events), "truncated": False}
+
+    def find_temporal_motif_instances(self, args: dict[str, Any]) -> dict[str, Any]:
+        rows = [{"edges": [{"src": v.src, "dst": v.dst, "t": v.vt_s,
+                            "eid": v.eid, "rel_type": v.rel_type}
+                           for v in inst]}
+                for inst in self._motif_instances(args)]
+        return paginate(rows, args["limit"], args["cursor"])
+
+    # ------------------------------------------------------------------ #
+    # graph_metric_timeseries                                           #
+    # ------------------------------------------------------------------ #
+
+    def _bucket_bounds(self, args: dict[str, Any]) -> list[tuple[int, int]]:
+        t_a, t_b, stride = args["window"]["t_a"], args["window"]["t_b"], args["stride"]
+        return [(bs, min(bs + stride, t_b)) for bs in range(t_a, t_b, stride)]
+
+    def graph_metric_timeseries(self, args: dict[str, Any]) -> dict[str, Any]:
+        as_of = args["as_of_tt"]
+        metric = args["metric"]
+        nodes = self.believed_nodes(as_of)
+        edges = self.believed_edges(as_of)
+        rows = []
+        for bs, be in self._bucket_bounds(args):
+            if metric == "node_count":
+                val = sum(1 for v in nodes if v.valid_at(bs))
+            elif metric == "edge_event_count":
+                val = sum(1 for v in edges if bs <= v.vt_s < be)
+            elif metric == "active_edge_count":
+                val = sum(1 for v in edges if v.valid_at(bs))
+            elif metric == "mean_out_degree":
+                act = sum(1 for v in edges if v.valid_at(bs))
+                nod = sum(1 for v in nodes if v.valid_at(bs))
+                val = act / nod if nod > 0 else 0.0
+            elif metric == "new_node_rate":
+                births: dict[str, int] = {}
+                for v in nodes:
+                    births[v.uid] = min(births.get(v.uid, OPEN_END), v.vt_s)
+                val = sum(1 for t in births.values() if bs <= t < be)
+            else:  # reciprocity
+                pairs = {(v.src, v.dst) for v in edges if bs <= v.vt_s < be}
+                val = (sum(1 for (s, d) in pairs if (d, s) in pairs) / len(pairs)
+                       if pairs else 0.0)
+            rows.append({"t_a": bs, "t_b": be,
+                         "value": float(val) if isinstance(val, float) else int(val)})
+        out = paginate(rows, args["limit"], args["cursor"])
+        out["n_buckets"] = len(rows)
+        return out
+
+    # ------------------------------------------------------------------ #
+    # burst_detection                                                   #
+    # ------------------------------------------------------------------ #
+
+    def burst_detection(self, args: dict[str, Any]) -> dict[str, Any]:
+        tgt = args["target"]
+        edges = self.believed_edges(args["as_of_tt"])
+        if tgt.get("rel_type"):
+            edges = [v for v in edges if v.rel_type == tgt["rel_type"]]
+        if tgt["kind"] == "node_activity":
+            edges = [v for v in edges if tgt["uid"] in (v.src, v.dst)]
+        bounds = self._bucket_bounds(args)
+        series = [float(sum(1 for v in edges if bs <= v.vt_s < be))
+                  for bs, be in bounds]
+        w = args["params"].get("w", 10)
+        flagged = []
+        for i, ((bs, be), x) in enumerate(zip(bounds, series)):
+            hist = series[max(0, i - w): i]
+            if not hist:
+                continue
+            if args["method"] == "zscore":
+                mean = sum(hist) / len(hist)
+                var = sum((h - mean) ** 2 for h in hist) / len(hist)
+                std = var ** 0.5
+                score = abs(x - mean) / std if std > 0 else (0.0 if x == mean else 1e9)
+                score = round(score, 9)  # quantized threshold, same as engine
+                flag = score >= args["params"].get("z", 3.0)
+            else:
+                srt = sorted(hist)
+                m = len(srt)
+                med = srt[m // 2] if m % 2 else (srt[m // 2 - 1] + srt[m // 2]) / 2
+                score = x / med if med > 0 else (1e9 if x > 0 else 0.0)
+                score = round(score, 9)
+                flag = score >= args["params"].get("r", 3.0)
+            if flag:
+                flagged.append({"t_a": bs, "t_b": be, "value": x,
+                                "score": float(score)})
+        out = paginate(flagged, args["limit"], args["cursor"])
+        out["n_buckets"] = len(series)
+        return out
+
+    # ------------------------------------------------------------------ #
+    # diff_belief                                                          #
+    # ------------------------------------------------------------------ #
+
+    def diff_belief(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Ground truth for the belief diff, one predicate per version.
+
+        Deliberately *not* the engine's shape. `beliefdiff.rs` never looks at
+        a version: it works in the range domain, deriving the `added` set from
+        the difference of two `tt_s`-run verdict lists and the `retracted` set
+        from a segment's folded close slice, and it is precisely that
+        derivation this has to be able to contradict. So this restates the
+        definition instead — for every version in the population, is its
+        `tt_s` in `(t1, t2]`, and is its `tt_e` — and sorts the result by the
+        operator's own `(kind, key, tt, change, vid)` order.
+
+        A version written *and* superseded inside the same belief window
+        satisfies both predicates and is reported twice, which is the case a
+        set difference of `believed(t1)` and `believed(t2)` cannot express
+        (it is in neither population). Getting that wrong in one place and
+        right in the other is the disagreement this reference exists to find.
+        """
+        t1, t2 = clamp_tt(args["t1"]), clamp_tt(args["t2"])
+        t_a, t_b, limit = args["t_a"], args["t_b"], args["limit"]
+        rows: list[dict[str, Any]] = []
+        if t1 < t2 and t_a < t_b:
+            for kind, versions, key_of in (
+                ("node", self.nv, lambda v: v.uid),
+                ("edge", self.ev, lambda v: v.eid),
+            ):
+                for v in versions:
+                    if not (v.vt_s < t_b and v.vt_e > t_a):
+                        continue
+                    for tt, change in ((v.tt_s, "added"), (v.tt_e, "retracted")):
+                        if change == "retracted" and v.tt_e == OPEN_END:
+                            continue
+                        if t1 < tt <= t2:
+                            rows.append({"kind": kind, "key": key_of(v),
+                                         "vid": v.vid, "tt": tt,
+                                         "change": change,
+                                         "vt_s": v.vt_s, "vt_e": v.vt_e})
+        added_total = sum(1 for r in rows if r["change"] == "added")
+        rows.sort(key=lambda r: (0 if r["kind"] == "node" else 1, r["key"],
+                                 r["tt"], r["change"], r["vid"]))
+        return {
+            "rows": rows[:limit],
+            "added_total": added_total,
+            "retracted_total": len(rows) - added_total,
+            "truncated": len(rows) > limit,
+        }
+
+    # ------------------------------------------------------------------ #
+    # neighborhood_evolution                                           #
+    # ------------------------------------------------------------------ #
+
+    def neighborhood_evolution(self, args: dict[str, Any]) -> dict[str, Any]:
+        uid, t1, t2, as_of = args["uid"], args["t1"], args["t2"], args["as_of_tt"]
+        stride = args["stride"] or max(1, (t2 - t1) // 20)
+
+        def neighbors(t: int) -> set[str]:
+            out = set()
+            for v in self.edges_at(t, as_of).values():
+                if v.src == uid and v.dst != uid:
+                    out.add(v.dst)
+                if v.dst == uid and v.src != uid:
+                    out.add(v.src)
+            return out
+
+        n1, n2 = neighbors(t1), neighbors(t2)
+        gained, lost = sorted(n2 - n1), sorted(n1 - n2)
+        incident = [v for v in self.believed_edges(as_of) if uid in (v.src, v.dst)]
+        series = [{"t": bs,
+                   "degree": sum(1 for v in incident if v.valid_at(bs))}
+                  for bs in range(t1, t2, stride)]
+        limit = args["limit"]
+        return {
+            "neighbors_gained": gained[:limit], "neighbors_gained_total": len(gained),
+            "neighbors_lost": lost[:limit], "neighbors_lost_total": len(lost),
+            "degree_series": series, "stride": stride,
+            "truncated": len(gained) > limit or len(lost) > limit,
+        }
+
+    # ------------------------------------------------------------------ #
+    # co_active                                                        #
+    # ------------------------------------------------------------------ #
+
+    def co_active(self, args: dict[str, Any]) -> dict[str, Any]:
+        as_of = args["as_of_tt"]
+
+        def select(spec: dict[str, Any]) -> list[EdgeVersion]:
+            return [v for v in self.believed_edges(as_of)
+                    if (not spec.get("src") or v.src == spec["src"])
+                    and (not spec.get("dst") or v.dst == spec["dst"])
+                    and (not spec.get("rel_type") or v.rel_type == spec["rel_type"])]
+
+        rel = args["allen_relation"]["relation"]
+        gap = args["allen_relation"].get("gap")
+
+        def ok(a: EdgeVersion, b: EdgeVersion) -> bool:
+            if rel == "overlaps":
+                return a.vt_s < b.vt_s < a.vt_e < b.vt_e
+            if rel == "during":
+                return b.vt_s < a.vt_s and a.vt_e < b.vt_e
+            if rel == "meets":
+                return a.vt_e == b.vt_s
+            return 0 < b.vt_s - a.vt_e <= gap  # before
+
+        def desc(v: EdgeVersion) -> dict[str, Any]:
+            return {"eid": v.eid, "vid": v.vid, "src": v.src, "dst": v.dst,
+                    "rel_type": v.rel_type, "vt_s": v.vt_s, "vt_e": v.vt_e}
+
+        rows = [{"a": desc(a), "b": desc(b)}
+                for a in select(args["a_spec"]) for b in select(args["b_spec"])
+                if a.vid != b.vid and ok(a, b)]
+        rows.sort(key=lambda r: (r["a"]["vt_s"], r["a"]["vid"],
+                                 r["b"]["vt_s"], r["b"]["vid"]))
+        return paginate(rows, args["limit"], args["cursor"])
+
+    # ------------------------------------------------------------------ #
+    # aggregate_events                                                 #
+    # ------------------------------------------------------------------ #
+
+    def aggregate_events(self, args: dict[str, Any]) -> dict[str, Any]:
+        t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+        as_of, stride = args["as_of_tt"], args.get("stride")
+        dims, aggs = args["group_by"], args["aggregates"]
+        events = [v for v in self.believed_edges(as_of)
+                  if t_a <= v.vt_s < t_b
+                  and (args["rel_types"] is None
+                       or v.rel_type in args["rel_types"])]
+
+        # property typing, by the same rule and its own loop: a row
+        # whose value is absent or of the wrong JSON type leaves the
+        # population and is counted, per property.
+        pkeys = prop_keys(args)
+        skipped: dict[str, int] = {k: 0 for k in pkeys}
+        pf = args.get("prop_filter")
+        if pf is not None:
+            kept = []
+            for v in events:
+                verdict = matches(v.props, pf["prop"], pf["cmp"], pf["value"])
+                if verdict is SKIP:
+                    skipped[pf["prop"]] += 1
+                elif verdict:
+                    kept.append(v)
+            events = kept
+
+        # cohort pre-filter and pair modes, each in its own loop
+        ef = args.get("endpoint_filter")
+        if ef is not None:
+            cohort = set(ef["uids"])
+            events = [v for v in events
+                      if (v.src in cohort if ef["role"] == "src" else
+                          v.dst in cohort if ef["role"] == "dst" else
+                          v.src in cohort or v.dst in cohort)]
+        pair_mode = args.get("pair_mode")
+        if pair_mode == "reciprocal":
+            directed = {(v.src, v.dst) for v in events}
+            events = [v for v in events
+                      if (v.src, v.dst) in directed
+                      and (v.dst, v.src) in directed]
+
+        def canon(v: EdgeVersion) -> tuple[str, str]:
+            """Endpoints as the grouping sees them: folded onto the canonical
+            pair under either pair mode, untouched otherwise."""
+            if pair_mode is None:
+                return v.src, v.dst
+            return (v.src, v.dst) if v.src <= v.dst else (v.dst, v.src)
+
+        def label_at(uid: str, t: int) -> str | None:
+            # believed valid intervals of one identity are disjoint, so at
+            # most one version matches
+            for v in self.believed_nodes(as_of):
+                if v.uid == uid and v.valid_at(t):
+                    return v.label
+            return None
+
+        def dim_value(d: dict[str, Any], v: EdgeVersion) -> Any:
+            if d["dim"] == "time_bucket":
+                return (v.vt_s - t_a) // stride
+            if d["dim"] == "calendar_unit":
+                return calendar_unit(v.vt_s, d["unit"],
+                                     d.get("tz_offset_minutes") or 0)
+            if d["dim"] == "rel_type":
+                return v.rel_type
+            cs, cd = canon(v)
+            ep = cs if d["role"] == "src" else cd
+            if d["dim"] == "endpoint":
+                return ep
+            return label_at(ep, v.vt_s)
+
+        groups: dict[tuple, list[EdgeVersion]] = {}
+        if dims:
+            for v in events:
+                groups.setdefault(tuple(dim_value(d, v) for d in dims),
+                                  []).append(v)
+        else:
+            groups[()] = list(events)  # exactly one row, even with 0 events
+
+        def sort_key(key: tuple) -> tuple:
+            # numeric dims in numeric order, strings in code-point order,
+            # null labels first — except a named calendar unit, which sorts
+            # in CALENDAR order. Code-point order would put Friday first and
+            # April before January, which is not an ordering of anything.
+            out = []
+            for d, kv in zip(dims, key):
+                if kv is None:
+                    out.append((0, ""))
+                elif d["dim"] == "calendar_unit" and \
+                        d["unit"] in ("day_of_week", "month_of_year"):
+                    names = DAY_NAMES if d["unit"] == "day_of_week" \
+                        else MONTH_NAMES
+                    out.append((1, names.index(kv)))
+                else:
+                    out.append((1, kv))
+            return tuple(out)
+
+        def mean(vals: list[int]) -> float:
+            q, r = divmod(sum(vals), len(vals))
+            return float(q) + r / len(vals)
+
+        def agg_field(a: dict[str, Any]) -> str:
+            if a["agg"] == "count":
+                return "count"
+            if a["agg"] in SEQ_AGGS:
+                return a["agg"]
+            if a["agg"] == "count_distinct":
+                return f"distinct_{a['of']}"
+            if a.get("of") == "prop":
+                return f"{a['agg']}_prop_{a['prop']}"
+            return f"{a['agg']}_{a['of']}"
+
+        # The three sequence aggregates, each written as the
+        # definition reads rather than as it would be computed: sort the
+        # group's event times, then walk them.
+        def max_gap(ts: list[int]) -> int | None:
+            # fewer than two events is no gap at all, which is null and not
+            # zero — zero is what "two simultaneous events" means
+            return None if len(ts) < 2 else max(b - a for a, b in
+                                                zip(ts, ts[1:]))
+
+        def max_in_window(ts: list[int], span: int) -> int:
+            # a window that maximizes the count can always be slid until it
+            # starts on an event, so the event times are the only starts
+            # worth testing. Half-open [t, t + span), as every window in this
+            # system is.
+            return max((sum(1 for u in ts if t <= u < t + span) for t in ts),
+                       default=0)
+
+        def max_session_span(ts: list[int], gap: int) -> int | None:
+            if not ts:
+                return None          # no run exists, so it has no span
+            best, start = 0, ts[0]
+            for prev, cur in zip(ts, ts[1:]):
+                if cur - prev > gap:
+                    best, start = max(best, prev - start), cur
+            return max(best, ts[-1] - start)
+
+        rows = []
+        for key in sorted(groups, key=sort_key):
+            evs = groups[key]
+            row: dict[str, Any] = {}
+            for d, kv in zip(dims, key):
+                if d["dim"] == "time_bucket":
+                    row["t_a"] = t_a + kv * stride
+                    row["t_b"] = min(t_a + (kv + 1) * stride, t_b)
+                elif d["dim"] == "calendar_unit":
+                    row[d["unit"]] = kv
+                elif d["dim"] == "rel_type":
+                    row["rel_type"] = kv
+                elif d["dim"] == "endpoint":
+                    row[d["role"]] = kv
+                else:
+                    row[f"{d['role']}_label"] = kv
+            for a in aggs:
+                if a["agg"] == "count":
+                    val: Any = len(evs)
+                elif a["agg"] in SEQ_AGGS:
+                    ts = sorted(v.vt_s for v in evs)
+                    if a["agg"] == "max_gap":
+                        val = max_gap(ts)
+                    elif a["agg"] == "max_in_window":
+                        val = max_in_window(ts, a["span"])
+                    else:
+                        val = max_session_span(ts, a["gap"])
+                elif a["agg"] == "count_distinct":
+                    val = len({v.src if a["of"] == "src" else v.dst
+                               for v in evs})
+                elif a.get("of") == "prop":
+                    vals = []
+                    for v in evs:
+                        pv = numeric_value(v.props, a["prop"])
+                        if pv is SKIP:
+                            skipped[a["prop"]] += 1
+                        else:
+                            vals.append(pv)
+                    # exact property arithmetic, not the typed-column `mean` above
+                    val = None if not vals else \
+                        {"min": min, "max": max,
+                         "mean": blessed_mean}[a["agg"]](vals)
+                else:
+                    if a["of"] == "vt_s":
+                        vals = [v.vt_s for v in evs]
+                    else:  # duration: open-ended rows contribute nothing
+                        vals = [v.vt_e - v.vt_s for v in evs
+                                if v.vt_e < OPEN_END]
+                    if not vals:
+                        val = None
+                    elif a["agg"] == "min":
+                        val = min(vals)
+                    elif a["agg"] == "max":
+                        val = max(vals)
+                    else:
+                        val = mean(vals)
+                row[agg_field(a)] = val
+            rows.append(row)
+        out = paginate(rows, args["limit"], args["cursor"])
+        if pkeys:
+            out["prop_coercion"] = {k: skipped[k] for k in pkeys}
+        return out
+
+    # ------------------------------------------------------------------ #
+    # resolve_entities                                                 #
+    # ------------------------------------------------------------------ #
+
+    def resolve_entities(self, args: dict[str, Any]) -> dict[str, Any]:
+        q, ql, as_of = args["query"], args["query"].lower(), args["as_of_tt"]
+        latest: dict[str, NodeVersion] = {}
+        matched: dict[str, int] = {}
+        for v in self.believed_nodes(as_of):
+            cur = latest.get(v.uid)
+            if cur is None or v.vt_s > cur.vt_s:
+                latest[v.uid] = v
+            # Only JSON *string* names participate in matching. The
+            # former str() coercion matched text the store never held —
+            # "None" for a JSON null, "42" for a number.
+            name = v.props.get("name")
+            if v.uid == q:
+                score = 0
+            elif ql in v.uid.lower():
+                score = 1
+            elif isinstance(name, str) and name and ql in name.lower():
+                score = 2
+            else:
+                continue
+            matched[v.uid] = min(matched.get(v.uid, 9), score)
+        rows = []
+        for uid, score in matched.items():
+            v = latest[uid]
+            if args["label"] is not None and v.label != args["label"]:
+                continue
+            rows.append({"uid": uid, "label": v.label,
+                         "name": v.props.get("name"), "match": score})
+        rows.sort(key=lambda r: (r["match"], r["uid"]))
+        return paginate(rows, args["limit"], args["cursor"])

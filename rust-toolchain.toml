@@ -1,0 +1,6 @@
+# The toolchain the engine is built and linted with. Pinned so that a new
+# clippy release cannot turn `cargo clippy -- -D warnings` red on unchanged
+# code; bump it deliberately, together with any lint fallout.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy"]
