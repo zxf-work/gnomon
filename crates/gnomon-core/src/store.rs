@@ -109,6 +109,12 @@ pub struct NativeStore {
     /// use, then each commit folds in its own batch, so a write-then-read
     /// loop never rescans.
     stats: std::sync::Mutex<Option<StatsAccum>>,
+    /// What `stats()` reports, derived from `stats` once per manifest
+    /// generation: the scalar summary, `max_out_degree` included, so
+    /// a per-call statistics read neither clones the per-source out-degree
+    /// map nor rescans it. Keyed by the generation it was derived at and
+    /// cleared wherever `stats` itself changes; never persisted.
+    stats_summary: std::sync::Mutex<Option<(u64, std::sync::Arc<StatsSummary>)>>,
     /// Believed node versions per dense id, for the current-belief
     /// endpoint-existence probe (`node_belief.rs`). Derived, never persisted,
     /// built by this handle's first such probe and reconciled against the
@@ -245,6 +251,16 @@ pub struct NativeStore {
     /// identity filter, the per-segment adjacency index and the sorted name
     /// index — are built in memory and never persisted.
     read_only: bool,
+    /// Which engine designs this handle runs with, read from the
+    /// environment once, at open. [`crate::designs::Designs::ALL`] unless an
+    /// ablation switch was set.
+    designs: crate::designs::Designs,
+    /// `GNOMON_TCSR=python` at open. In that configuration traversal runs
+    /// on the adapter's whole-store NumPy index and `idx/tcsr/` must stay
+    /// untouched, so a filtered scan takes no adjacency postings
+    /// and scans as before. Not a design switch: the per-segment index is
+    /// simply not this configuration's adjacency source.
+    tcsr_python: bool,
     /// Where the last commit spent its time (instrumentation, not contract).
     last_commit: Option<CommitPhases>,
     /// `(publish_ns, adopt_ns)` of the last `install` — read by the two
@@ -671,6 +687,7 @@ impl NativeStore {
             partitions: PartitionMap::default(),
             segment_target_bytes: crate::defaults::SEGMENT_TARGET_BYTES,
             stats: std::sync::Mutex::new(None),
+            stats_summary: std::sync::Mutex::new(None),
             node_belief: std::sync::Mutex::new(None),
             edge_postings: std::sync::Mutex::new(Postings::new(postings_budget(
                 std::env::var("GNOMON_POSTINGS_BYTES").ok().as_deref(),
@@ -705,6 +722,9 @@ impl NativeStore {
             batch_tt: None,
             current_only,
             read_only,
+            designs: crate::designs::Designs::from_env(),
+            tcsr_python: std::env::var("GNOMON_TCSR")
+                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("python")),
             last_commit: None,
             install_ns: (0, 0, 0),
             open_phases,
@@ -742,6 +762,20 @@ impl NativeStore {
     /// Whether this handle came from [`Self::open_read_only`].
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// The engine designs this handle runs with: read from the
+    /// environment when the handle was opened, so a receipt can record the
+    /// configuration that actually answered.
+    pub fn designs(&self) -> crate::designs::Designs {
+        self.designs
+    }
+
+    /// Replace this handle's designs, for a test or a harness that wants
+    /// two configurations in one process without touching the environment.
+    /// Every design is a cost choice only, so this never changes an answer.
+    pub fn set_designs(&mut self, designs: crate::designs::Designs) {
+        self.designs = designs;
     }
 
     /// Refuse a write on a read-only handle. Called at the top of every
@@ -1688,6 +1722,12 @@ impl NativeStore {
         &self.stats
     }
 
+    pub(crate) fn stats_summary_cell(
+        &self,
+    ) -> &std::sync::Mutex<Option<(u64, std::sync::Arc<StatsSummary>)>> {
+        &self.stats_summary
+    }
+
     pub(crate) fn node_belief_cell(
         &self,
     ) -> &std::sync::Mutex<Option<crate::node_belief::NodeBelief>> {
@@ -1923,11 +1963,22 @@ impl NativeStore {
         // when it wanted one row. `segment_source` serves the generation's
         // pinned map when one exists rather than mapping fresh.
         let open_t = ingest_phase::Timer::start();
-        let seg = std::sync::Arc::new(crate::segment::Segment::open(
-            &path,
-            self.segment_source(file, &path)?,
-            first_time,
-        )?);
+        let mut seg = crate::segment::Segment::open(&path, self.segment_source(file, &path)?, first_time)?;
+        // An event-lane segment that stores `vt_e` gets the
+        // planner's `vt_e` staircase derived here, once per cached open, and
+        // kept with the segment in the cache. Nothing is written.
+        if self.designs.staircase && seg.wants_derived_vt_e_staircase() {
+            let t = std::time::Instant::now();
+            if seg.derive_vt_e_staircase(crate::defaults::DERIVED_VT_E_BLOCK_ROWS)? {
+                crate::phase::since(crate::phase::Phase::StairDeriveNs, t);
+                crate::phase::add(crate::phase::Phase::StairDerived, 1);
+                crate::phase::add(
+                    crate::phase::Phase::StairDerivedBytes,
+                    seg.derived_vt_e_staircase().map_or(0, |d| d.heap_bytes()),
+                );
+            }
+        }
+        let seg = std::sync::Arc::new(seg);
         open_t.stop_ctx(ingest_phase::S::OpenCached);
         ingest_phase::add_ctx(ingest_phase::S::Opens, 1);
         OpenPathCounters::bump(&self.open_counters.decoded_bytes, seg.resident_bytes());
@@ -2799,6 +2850,7 @@ impl NativeStore {
         // invalidating them; staging is still intact here
         let phase = std::time::Instant::now();
         {
+            *self.stats_summary.lock().expect("stats summary mutex poisoned") = None;
             let mut cell = self.stats.lock().expect("stats mutex poisoned");
             if let Some(acc) = cell.as_mut() {
                 for r in self.staging.edges() {
@@ -2889,7 +2941,7 @@ impl NativeStore {
         Ok(())
     }
 
-    fn require_batch(&self) -> Result<i64> {
+    pub(crate) fn require_batch(&self) -> Result<i64> {
         self.batch_tt
             .ok_or_else(|| EngineError::invariant("no batch is open; call begin() first"))
     }
@@ -2929,6 +2981,32 @@ pub struct StatsAccum {
     pub rel_type_counts: std::collections::HashMap<String, u64>,
     /// Out-degree per source, so the max is available without a group-by.
     pub out_degree: std::collections::HashMap<u32, u64>,
+}
+
+/// The statistics `stats()` reports, without the per-source map they are
+/// folded from. `max_out_degree` is the map's maximum, taken once
+/// when the summary is derived rather than on every read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatsSummary {
+    pub n_node_versions: u64,
+    pub n_edge_versions: u64,
+    pub vt_min: Option<i64>,
+    pub vt_max: Option<i64>,
+    pub rel_type_counts: std::collections::HashMap<String, u64>,
+    pub max_out_degree: u64,
+}
+
+impl StatsSummary {
+    pub fn of(acc: &StatsAccum) -> Self {
+        StatsSummary {
+            n_node_versions: acc.n_node_versions,
+            n_edge_versions: acc.n_edge_versions,
+            vt_min: acc.vt_min,
+            vt_max: acc.vt_max,
+            rel_type_counts: acc.rel_type_counts.clone(),
+            max_out_degree: acc.max_out_degree(),
+        }
+    }
 }
 
 /// One reading of [`NativeStore::memory_accounting`]: `(component, bytes)`
@@ -3856,10 +3934,76 @@ struct Cand {
 
 /// One segment a traversal will visit, held open for the call, with the
 /// believed row ranges already decided for it.
+/// Where one target segment's adjacency rows come from.
+enum TargetAdj {
+    /// The segment's per-segment temporal adjacency index.
+    Index(std::sync::Arc<crate::tcsr::SegmentTcsr>),
+    /// `GNOMON_TCSR=scan`: no index; see [`ScanAdjacency`].
+    Scan(ScanAdjacency),
+}
+
+impl TargetAdj {
+    /// The rows of this segment whose `d` endpoint is `u`, ascending.
+    #[inline]
+    fn slice(&self, d: crate::tcsr::Direction, u: u32) -> &[u32] {
+        match self {
+            TargetAdj::Index(i) => i.dir(d).slice(u),
+            TargetAdj::Scan(s) => s.slice(d, u),
+        }
+    }
+}
+
+/// Adjacency found by scanning a segment's endpoint columns
+/// (`GNOMON_TCSR=scan`): one pass per direction the call needs, keeping the
+/// rows whose endpoint is in the call's frontier, bucketed per vertex in
+/// ascending row order. That is exactly the index's slice: the index's
+/// placement pass also walks rows in ascending order
+/// (`ablation_tests::a_scanned_adjacency_bucket_is_the_index_slice`). A
+/// frontier costs one scan per segment per call, which is how an engine
+/// without an adjacency index expands a hop.
+pub(crate) struct ScanAdjacency {
+    out: HashMap<u32, Vec<u32>>,
+    inn: HashMap<u32, Vec<u32>>,
+}
+
+impl ScanAdjacency {
+    pub(crate) fn build(
+        seg: &crate::segment::Segment<MmapSource>,
+        us: &[u32],
+        dirs: &[crate::tcsr::Direction],
+    ) -> Result<Self> {
+        let want: std::collections::HashSet<u32> = us.iter().copied().collect();
+        let (mut out, mut inn) = (HashMap::new(), HashMap::new());
+        let mut scanned = 0usize;
+        for &d in dirs {
+            let (col, map) = match d {
+                crate::tcsr::Direction::Out => (seg.u32_column("src_id")?, &mut out),
+                crate::tcsr::Direction::In => (seg.u32_column("dst_id")?, &mut inn),
+            };
+            scanned += col.len();
+            for (r, v) in col.iter().enumerate() {
+                if want.contains(v) {
+                    map.entry(*v).or_insert_with(Vec::new).push(r as u32);
+                }
+            }
+        }
+        crate::vistouch::adj(scanned);
+        Ok(Self { out, inn })
+    }
+
+    pub(crate) fn slice(&self, d: crate::tcsr::Direction, u: u32) -> &[u32] {
+        let map = match d {
+            crate::tcsr::Direction::Out => &self.out,
+            crate::tcsr::Direction::In => &self.inn,
+        };
+        map.get(&u).map_or(&[], |v| v.as_slice())
+    }
+}
+
 struct TcsrTarget {
     id: u64,
     seg: std::sync::Arc<crate::segment::Segment<MmapSource>>,
-    idx: std::sync::Arc<crate::tcsr::SegmentTcsr>,
+    adj: TargetAdj,
     /// Both halves of the belief predicate at this call's `as_of`, in the
     /// range domain. Ascending, disjoint and minimal, so
     /// membership is one binary search. Never empty — a segment whose ranges
@@ -3869,6 +4013,10 @@ struct TcsrTarget {
     /// Decide belief per adjacency row instead of building `ranges`
     /// for the whole segment (see [`traversal_tests_rows`]).
     per_row: bool,
+    /// With `per_row`, test each adjacency row's own `tt_s` and
+    /// effective `tt_e` (`GNOMON_RANGE_VISIBILITY=0`) rather than the
+    /// window-first one-row range.
+    row_test: bool,
 }
 
 /// Should this traversal call test belief per adjacency row rather
@@ -3927,7 +4075,7 @@ fn believed_row(
 /// same mistake one level up if it does that work per frontier vertex.
 struct TargetView<'a> {
     id: u64,
-    idx: &'a crate::tcsr::SegmentTcsr,
+    adj: &'a TargetAdj,
     vt_s: &'a [i64],
     vt_e: Option<&'a [i64]>,
     src: &'a [u32],
@@ -3949,6 +4097,8 @@ struct PerRow<'a> {
     bounds: (i64, i64),
     sidecar: crate::visibility::Sidecar<'a>,
     rows: usize,
+    /// The plain per-row test rather than [`believed_row`].
+    exact: bool,
 }
 
 /// Is row `r` believed? A binary search over a list whose length is "one entry
@@ -4213,6 +4363,11 @@ impl NativeStore {
         key: u64,
     ) -> FilterVerdict {
         use std::sync::atomic::Ordering::Relaxed;
+        // `GNOMON_VIDFILTER=ignore` consults no filter: every segment is
+        // asked, exactly as on a store that has none
+        if !self.designs.identity_filter {
+            return FilterVerdict::Absent;
+        }
         let Some(f) = self.vid_filter(kind, seg_id, file) else {
             return FilterVerdict::Absent;
         };
@@ -4534,6 +4689,23 @@ impl NativeStore {
         self.neighbors_batch(&[u], direction, as_of_tt, vt_min, vt_max, rel_types)
     }
 
+    /// The adjacency source for one traversal target: the segment's
+    /// index, or under `GNOMON_TCSR=scan` a scan of its endpoint columns for
+    /// the call's frontier.
+    fn target_adjacency(
+        &self,
+        file: &str,
+        seg: &crate::segment::Segment<MmapSource>,
+        us: &[u32],
+        dirs: &[crate::tcsr::Direction],
+    ) -> Result<TargetAdj> {
+        if self.designs.adjacency_index {
+            Ok(TargetAdj::Index(self.tcsr_index(file)?))
+        } else {
+            Ok(TargetAdj::Scan(ScanAdjacency::build(seg, us, dirs)?))
+        }
+    }
+
     /// Neighbour rows of a whole frontier, CSR-shaped.
     ///
     /// The per-segment work — opening columns, resolving the rel-code
@@ -4573,17 +4745,36 @@ impl NativeStore {
             // segment-level prune, the cheap half of `ScanSet::prunes`: a
             // segment nothing believed yet at `as_of`, or one entirely
             // outside the valid-time window, cannot contribute a row.
+            //
+            // `GNOMON_SEGMENT_PRUNE=0` keeps every segment; the belief,
+            // valid-time and relation tests below then reject its rows.
             let h = seg.header();
-            if seg.tt_s_bounds().0 > as_of {
-                continue;
-            }
-            if vt_min.is_some_and(|t| h.vt_e_max <= t) || vt_max.is_some_and(|t| h.vt_min >= t) {
-                continue;
-            }
-            if let Some(rels) = rel_types {
-                if !h.rel_types.is_empty() && !h.rel_types.iter().any(|r| rels.contains(r)) {
+            if self.designs.segment_prune {
+                let rel_miss = rel_types.is_some_and(|rels| {
+                    !h.rel_types.is_empty() && !h.rel_types.iter().any(|r| rels.contains(r))
+                });
+                if seg.tt_s_bounds().0 > as_of
+                    || vt_min.is_some_and(|t| h.vt_e_max <= t)
+                    || vt_max.is_some_and(|t| h.vt_min >= t)
+                    || rel_miss
+                {
+                    crate::vistouch::pruned(1);
                     continue;
                 }
+            }
+            // `GNOMON_RANGE_VISIBILITY=0` builds no ranges at all; each
+            // adjacency row is tested on its own in the loop below.
+            if !self.designs.range_visibility {
+                let adj = self.target_adjacency(&file, &seg, us, dirs)?;
+                targets.push(TcsrTarget {
+                    id,
+                    seg,
+                    adj,
+                    ranges: Vec::new(),
+                    per_row: true,
+                    row_test: true,
+                });
+                continue;
             }
             // Belief, once per segment per call — not once per
             // vertex and not once per row. `close_view` resolves the sidecar
@@ -4614,19 +4805,23 @@ impl NativeStore {
             } else {
                 tt.runs().len()
             };
-            if k + tt_items > 0 {
-                let idx = self.tcsr_index(&file)?;
+            // `GNOMON_WINDOW_FIRST=0` skips the per-row alternative and
+            // runs the whole-segment path below (ranges first, index only when
+            // something is believed).
+            if self.designs.window_first && k + tt_items > 0 {
+                let adj = self.target_adjacency(&file, &seg, us, dirs)?;
                 let m: usize = us
                     .iter()
-                    .map(|&u| dirs.iter().map(|&d| idx.dir(d).slice(u).len()).sum::<usize>())
+                    .map(|&u| dirs.iter().map(|&d| adj.slice(d, u).len()).sum::<usize>())
                     .sum();
                 if traversal_tests_rows(m, k, tt_items) {
                     targets.push(TcsrTarget {
                         id,
                         seg,
-                        idx,
+                        adj,
                         ranges: Vec::new(),
                         per_row: true,
+                        row_test: false,
                     });
                     continue;
                 }
@@ -4638,9 +4833,10 @@ impl NativeStore {
                 targets.push(TcsrTarget {
                     id,
                     seg,
-                    idx,
+                    adj,
                     ranges,
                     per_row: false,
+                    row_test: false,
                 });
                 continue;
             }
@@ -4649,13 +4845,14 @@ impl NativeStore {
             if ranges.is_empty() {
                 continue;
             }
-            let idx = self.tcsr_index(&file)?;
+            let adj = self.target_adjacency(&file, &seg, us, dirs)?;
             targets.push(TcsrTarget {
                 id,
                 seg,
-                idx,
+                adj,
                 ranges,
                 per_row: false,
+                row_test: false,
             });
         }
 
@@ -4666,7 +4863,7 @@ impl NativeStore {
             let vt_s = seg.i64_column("vt_s")?;
             views.push(TargetView {
                 id: t.id,
-                idx: t.idx.as_ref(),
+                adj: &t.adj,
                 vt_s,
                 vt_e: if h.vt_e_elided {
                     None
@@ -4687,6 +4884,7 @@ impl NativeStore {
                         bounds: seg.tt_s_bounds(),
                         sidecar: seg.sidecar(),
                         rows: seg.rows() as usize,
+                        exact: t.row_test,
                     })
                 } else {
                     None
@@ -4700,6 +4898,7 @@ impl NativeStore {
         };
         out.offsets.push(0);
         let mut cands: Vec<Cand> = Vec::new();
+        let mut row_tests = 0usize;
         for &u in us {
             cands.clear();
             for t in &views {
@@ -4710,7 +4909,7 @@ impl NativeStore {
                 let ranges = t.ranges;
 
                 for &d in dirs {
-                    for &r in t.idx.dir(d).slice(u) {
+                    for &r in t.adj.slice(d, u) {
                         let i = r as usize;
                         // ---- belief -------------------------------------
                         //
@@ -4726,6 +4925,12 @@ impl NativeStore {
                         // cheaper than building the segment's ranges.
                         let believed = match &t.per_row {
                             None => in_ranges(r, ranges),
+                            Some(p) if p.exact => {
+                                row_tests += 1;
+                                p.tt.at(r)? <= as_of
+                                    && as_of
+                                        < crate::read::effective_tt_e(&closes, &p.sidecar, t.id, r)
+                            }
                             Some(p) => believed_row(
                                 &p.tt, p.bounds, p.sidecar, &closes, t.id, p.rows, as_of, r,
                             ),
@@ -4783,7 +4988,175 @@ impl NativeStore {
             }
             out.offsets.push(out.nbr.len() as u32);
         }
+        crate::vistouch::rows(row_tests);
         Ok(out)
+    }
+}
+
+/// An edge scan's selection, `(segment id, selected rows)` per segment
+/// with a selected row, and the scan's counters.
+pub type EdgeSelection = (Vec<(u64, Vec<u32>)>, crate::scan::ScanStats);
+
+/// One edge scan as the binding's `scan_edges` answers it: the
+/// materialized columns, the scan's counters and stage times, and the time
+/// spent opening the segments.
+#[derive(Debug)]
+pub struct EdgeScan {
+    pub cols: crate::scan::EdgeColumns,
+    pub stats: crate::scan::ScanStats,
+    pub timings: crate::scan::ScanTimings,
+    pub open_ns: u64,
+}
+
+/// A filtered scan's adjacency postings, from the store's
+/// per-segment adjacency index, or under `GNOMON_TCSR=scan` from one scan of
+/// the segment's endpoint columns for the filter's ids -- the same two
+/// sources a traversal call uses ([`NativeStore::target_adjacency`]).
+struct StorePostings<'s> {
+    store: &'s NativeStore,
+    files: &'s [String],
+    segs: &'s [std::sync::Arc<crate::segment::Segment<MmapSource>>],
+}
+
+impl crate::scan::PostingsSource for StorePostings<'_> {
+    fn postings(
+        &self,
+        idx: usize,
+        ids: &[u32],
+        src_only: bool,
+        budget: usize,
+    ) -> Result<Option<crate::scan::Postings>> {
+        use crate::tcsr::Direction;
+        // the and-form needs both endpoints in the set, so the rows whose
+        // source is in it already hold every match
+        let dirs: &[Direction] = if src_only {
+            &[Direction::Out]
+        } else {
+            &[Direction::Out, Direction::In]
+        };
+        let adj = self
+            .store
+            .target_adjacency(&self.files[idx], &self.segs[idx], ids, dirs)?;
+        let mut walked = 0usize;
+        for &u in ids {
+            for &d in dirs {
+                walked += adj.slice(d, u).len();
+            }
+        }
+        if walked >= budget {
+            return Ok(None);
+        }
+        let mut rows: Vec<u32> = Vec::with_capacity(walked);
+        for &u in ids {
+            for &d in dirs {
+                rows.extend_from_slice(adj.slice(d, u));
+            }
+        }
+        // each slice is ascending; a row with both endpoints in the set
+        // appears twice
+        rows.sort_unstable();
+        rows.dedup();
+        Ok(Some(crate::scan::Postings {
+            rows,
+            walked: walked as u64,
+        }))
+    }
+}
+
+impl NativeStore {
+    /// Open the live edge segments (event lane, then interval lane,
+    /// as the manifest lists them), build the scan the binding's
+    /// `scan_edges` runs over them, and hand it to `f` with each target's
+    /// segment id.
+    ///
+    /// When the request carries an incidence filter of at most
+    /// [`crate::defaults::ADJ_FILTER_MAX_IDS`] ids, the scan gets the
+    /// store's adjacency postings; each segment then takes them where they
+    /// name fewer rows than the scan would examine. `GNOMON_ADJ_FILTERED_SCAN=0`
+    /// never attaches them, nor does `GNOMON_TCSR=python` (whose traversal
+    /// index is the adapter's, and which must leave `idx/tcsr/` untouched).
+    pub(crate) fn with_edge_scan<R>(
+        &self,
+        req: &crate::scan::ScanRequest,
+        f: impl FnOnce(&crate::scan::ScanSet<'_, MmapSource>, &[u64]) -> Result<R>,
+    ) -> Result<R> {
+        // a current-only store must refuse a past-belief scan rather than
+        // silently answer it from the surviving rows
+        self.assert_full_belief(req.as_of_tt)?;
+        let m = self.manifest();
+        let mut files: Vec<String> = Vec::new();
+        let mut lanes: Vec<Lane> = Vec::new();
+        for (lane, entries) in [
+            (Lane::Event, &m.edge_lanes.event),
+            (Lane::Interval, &m.edge_lanes.interval),
+        ] {
+            for e in entries {
+                files.push(e.file.clone());
+                lanes.push(lane);
+            }
+        }
+        let mut segs = Vec::with_capacity(files.len());
+        for file in &files {
+            // via the store so checksums are walked on first touch
+            segs.push(self.open_segment(file)?);
+        }
+        let ids: Vec<u64> = files.iter().map(|f| segment_id_of(f)).collect();
+        let targets: Vec<crate::scan::ScanTarget<'_, MmapSource>> = segs
+            .iter()
+            .zip(&lanes)
+            .zip(&ids)
+            .map(|((segment, lane), id)| crate::scan::ScanTarget {
+                segment,
+                lane: *lane,
+                id: *id,
+            })
+            .collect();
+        let postings = StorePostings {
+            store: self,
+            files: &files,
+            segs: &segs,
+        };
+        let mut set = crate::scan::ScanSet::new(targets)
+            .with_closes(self.close_index()?)
+            .with_designs(self.designs);
+        if self.designs.adjacency_filtered_scan
+            && !self.tcsr_python
+            && req
+                .touching_ids
+                .as_ref()
+                .is_some_and(|t| t.len() <= crate::defaults::ADJ_FILTER_MAX_IDS)
+        {
+            set = set.with_postings(&postings);
+        }
+        f(&set, &ids)
+    }
+
+    /// The windowed columnar edge scan `scan_edges` serves (here rather than
+    /// in the binding, so the engine's tests run the same path).
+    pub fn scan_edges(&self, req: &crate::scan::ScanRequest) -> Result<EdgeScan> {
+        let t_open = std::time::Instant::now();
+        self.with_edge_scan(req, |set, _| {
+            let open_ns = t_open.elapsed().as_nanos() as u64;
+            let (cols, stats, timings) = set.materialize_edges_timed(req)?;
+            Ok(EdgeScan {
+                cols,
+                stats,
+                timings,
+                open_ns,
+            })
+        })
+    }
+
+    /// The same scan's selection only: `(segment id, selected rows)` per
+    /// segment with a selected row, in scan order, and its counters.
+    pub fn select_edges(&self, req: &crate::scan::ScanRequest) -> Result<EdgeSelection> {
+        self.with_edge_scan(req, |set, ids| {
+            let (sel, stats) = set.select(req)?;
+            Ok((
+                sel.into_iter().map(|s| (ids[s.segment], s.rows)).collect(),
+                stats,
+            ))
+        })
     }
 }
 

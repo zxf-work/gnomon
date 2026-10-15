@@ -12,7 +12,9 @@ The engine tests are unit tests next to the code (`crates/gnomon-core/src`)
 and integration tests in `crates/gnomon-core/tests`: round trips through the
 file formats, byte-for-byte golden segments and identity filters of a
 deterministic store, read-only opens, compaction and settle equivalence,
-aggregation caching and pruning, and the segment-size model. Some tests in
+aggregation caching and pruning, the segment-size model, every design
+switch (same answer, and a work counter that moves), and concurrent callers
+sharing the worker pool. Some tests in
 `src/` are marked `#[ignore]` because they measure rather than check; run
 them with `cargo test --release -- --ignored` when wanted.
 
@@ -39,6 +41,11 @@ The suite runs against the native engine. It includes:
 * the content digest, its streaming form, settle, compaction and gc;
 * scaling guards that compare small and large inputs of the same shape on
   one machine (ratios, not absolute times), so they hold on any host;
+* the design switches ([configuration](configuration.md#design-switches)):
+  every query of the benchmark registry, plus extra probes, hashes the same
+  with each switch set, and the engine kernels (reachability, snapshot diff,
+  paged entity resolution, bulk ingest from the log record) answer exactly
+  as the general path they stand in for;
 * the benchmark scripts' own logic (`scripts/`), at tiny sizes.
 
 To run the same suite against the DuckDB reference implementation of the

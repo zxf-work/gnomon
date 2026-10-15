@@ -102,7 +102,7 @@
 
 use std::collections::HashMap;
 
-use crate::derive::{edge_eid, Id96};
+use crate::derive::{edge_eid_buf, Id96};
 use crate::error::{EngineError, Result};
 use crate::row::RowKind;
 use crate::store::NativeStore;
@@ -155,7 +155,9 @@ pub struct BeliefDiffRow {
 impl BeliefDiffRow {
     /// The total order the operator's answer is defined in: `(kind, key, tt,
     /// change, vid)`. Purely logical — see the module note on layout
-    /// independence. `kind` sorts nodes before edges.
+    /// independence. `kind` sorts nodes before edges. The engine
+    /// orders on [`DiffKey`]; this string form is the tests' reference.
+    #[cfg(test)]
     fn order_key(&self) -> (u8, &str, i64, BeliefChange, &str) {
         let k = match self.kind {
             RowKind::Node => 0u8,
@@ -280,7 +282,8 @@ pub(crate) fn added_ranges(
     // per-block code bounds and only descends into a block straddling the
     // cut — so this is not a fallback to a slow path, it is the fast path
     // for that shape.
-    if tt.is_dictionary() {
+    // a raw column has no runs either, and takes the same route
+    if tt.is_dictionary() || tt.is_raw() {
         return range_subtract(
             &crate::scan::believed_ranges(tt, tt_bounds, t2, rows),
             &crate::scan::believed_ranges(tt, tt_bounds, t1, rows),
@@ -354,7 +357,8 @@ pub(crate) fn added_ranges_in(
     if lo >= hi {
         return Vec::new();
     }
-    if tt.is_dictionary() {
+    // a raw column has no runs either, and takes the same route
+    if tt.is_dictionary() || tt.is_raw() {
         return range_subtract(
             &crate::scan::believed_ranges_in(tt, tt_bounds, t2, rows, lo, hi),
             &crate::scan::believed_ranges_in(tt, tt_bounds, t1, rows, lo, hi),
@@ -448,6 +452,184 @@ struct Candidate {
     change: BeliefChange,
 }
 
+/// A surviving row as a **binary sort key**.
+///
+/// The answer's order is `(kind, key, tt, change, vid)` over strings. An
+/// earlier version materialised every surviving row into a [`BeliefDiffRow`] — a uid
+/// lookup copied into a `String`, the edge `eid` formatted to hex, the `vid`
+/// formatted to hex — and the whole population sorted by those strings, to
+/// keep the first `limit`. At a 10 % correction density on 10M rows that was
+/// 199k rows built, sorted and dropped for a 1000-row page: 61 % of the call.
+///
+/// The key carries the same order in binary form:
+///
+/// * `kind` as `0` (node) / `1` (edge), as `order_key` spells it;
+/// * a node's `key` is its uid, compared as the borrowed `&str` straight from
+///   the dictionary arena (no copy), and `eid` is zero for every node;
+/// * an edge's `key` is its eid's hex, which orders exactly as the [`Id96`]
+///   it is the spelling of (`derive::tests::id96_ordering_equals_hex_string_ordering`),
+///   and `node` is `""` for every edge;
+/// * `vid` likewise, as an [`Id96`].
+///
+/// Within one kind the unused component is constant, so the tuple order is
+/// the string order; `tests::binary_keys_order_like_the_string_rows` checks
+/// it row for row against the materialised order.
+#[derive(Clone, Copy)]
+struct DiffKey<'a> {
+    kind: u8,
+    node: &'a str,
+    eid: Id96,
+    tt: i64,
+    change: BeliefChange,
+    vid: Id96,
+    vt_s: i64,
+    vt_e: i64,
+}
+
+impl<'a> DiffKey<'a> {
+    #[inline]
+    fn order(&self) -> (u8, &'a str, Id96, i64, BeliefChange, Id96) {
+        (self.kind, self.node, self.eid, self.tt, self.change, self.vid)
+    }
+
+    /// The page row: the only place a key's strings are built.
+    fn row(&self) -> BeliefDiffRow {
+        let (kind, key) = if self.kind == 0 {
+            (RowKind::Node, self.node.to_string())
+        } else {
+            (RowKind::Edge, self.eid.to_hex())
+        };
+        BeliefDiffRow {
+            kind,
+            key,
+            vid: self.vid.to_hex(),
+            tt: self.tt,
+            change: self.change,
+            vt_s: self.vt_s,
+            vt_e: self.vt_e,
+        }
+    }
+}
+
+/// How a segment's rows resolve to their identity key.
+enum Ident<'s> {
+    Node {
+        uid_id: &'s [u32],
+    },
+    Edge {
+        src: &'s [u32],
+        dst: &'s [u32],
+        rel: &'s [u16],
+        disc: &'s [u32],
+        strings: crate::segment::StringView<'s>,
+        rel_types: &'s [String],
+    },
+}
+
+/// One segment's candidates and the columns that turn them into keys.
+struct SegWork<'s> {
+    vt_s: &'s [i64],
+    vt_e: Option<&'s [i64]>,
+    vid_hi: &'s [u64],
+    vid_lo: &'s [u32],
+    ident: Ident<'s>,
+    cands: Vec<Candidate>,
+}
+
+/// Candidates per key-building task. Large enough that a claim is noise next
+/// to its sha256s, small enough that a 200k-row diff spreads over every core.
+const KEY_CHUNK: usize = 4096;
+/// Below this many candidates in total the keys are built on the calling
+/// thread: a wake-up of the pool is not free, and a short diff is all
+/// O(1)-per-row work.
+const KEY_PARALLEL_MIN: usize = 16_384;
+
+impl SegWork<'_> {
+    /// Keys for `cands[lo..hi]`, window-filtered, appended to `out`.
+    #[allow(clippy::too_many_arguments)]
+    fn keys_into<'a>(
+        &self,
+        dict: &'a crate::dict::Dictionary,
+        lo: usize,
+        hi: usize,
+        t_a: i64,
+        t_b: i64,
+        buf: &mut String,
+        out: &mut Vec<DiffKey<'a>>,
+    ) -> Result<()> {
+        for c in &self.cands[lo..hi] {
+            let i = c.row as usize;
+            // `vt_e` elided means every row is instantaneous, exactly as
+            // `version_keys` reads it
+            let ve = self.vt_e.map(|col| col[i]).unwrap_or(self.vt_s[i] + 1);
+            if !in_window(self.vt_s[i], ve, t_a, t_b) {
+                continue;
+            }
+            let vid = Id96 {
+                hi: self.vid_hi[i],
+                lo: self.vid_lo[i],
+            };
+            let (kind, node, eid) = match &self.ident {
+                Ident::Node { uid_id } => (0u8, uid_str(dict, uid_id[i])?, Id96::default()),
+                Ident::Edge {
+                    src,
+                    dst,
+                    rel,
+                    disc,
+                    strings,
+                    rel_types,
+                } => {
+                    let rel_type = rel_types.get(rel[i] as usize).ok_or_else(|| {
+                        EngineError::corrupt(format!("rel_code {} has no entry", rel[i]))
+                            .at_row(i as u32)
+                    })?;
+                    let eid = edge_eid_buf(
+                        buf,
+                        uid_str(dict, src[i])?,
+                        uid_str(dict, dst[i])?,
+                        rel_type,
+                        strings.get(disc[i])?,
+                    );
+                    (1u8, "", eid)
+                }
+            };
+            out.push(DiffKey {
+                kind,
+                node,
+                eid,
+                tt: c.tt,
+                change: c.change,
+                vid,
+                vt_s: self.vt_s[i],
+                vt_e: ve,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn uid_str(dict: &crate::dict::Dictionary, id: u32) -> Result<&str> {
+    dict.uid(id)
+        .ok_or_else(|| EngineError::invariant(format!("dense id {id} is not in the dictionary")))
+}
+
+/// Keep the `limit` smallest keys, in order: a selection to the page
+/// boundary, then a sort of the page alone. `O(n + limit log limit)` rather
+/// than the full sort's `O(n log n)`; the order is total (it ends in `vid`,
+/// unique per version per tag), so which equal-key element a selection keeps
+/// is never a question.
+fn top_k(keys: &mut Vec<DiffKey<'_>>, limit: usize) {
+    if keys.len() > limit {
+        if limit == 0 {
+            keys.clear();
+            return;
+        }
+        keys.select_nth_unstable_by(limit - 1, |a, b| a.order().cmp(&b.order()));
+        keys.truncate(limit);
+    }
+    keys.sort_unstable_by(|a, b| a.order().cmp(&b.order()));
+}
+
 impl NativeStore {
     /// Every version whose belief state changed between `t1` and `t2`, inside
     /// the valid-time window `[t_a, t_b)`.
@@ -461,6 +643,11 @@ impl NativeStore {
     /// belief instants should not have to special-case its own first step.
     /// `t1 > t2` is refused — it is an argument the caller got backwards, not
     /// a question with an empty answer.
+    ///
+    /// The surviving population is kept as binary sort keys
+    /// ([`DiffKey`]), built in parallel; the totals are counted from the
+    /// keys, the page is selected and sorted on them, and strings are built
+    /// for the page's rows only.
     pub fn diff_belief(
         &self,
         t1: i64,
@@ -479,26 +666,37 @@ impl NativeStore {
                 "diff_belief needs t_a <= t_b, got t_a={t_a} t_b={t_b}"
             )));
         }
-        let mut rows: Vec<BeliefDiffRow> = Vec::new();
+        self.diff_belief_at(t1, t2, t_a, t_b, limit, None)
+    }
+
+    /// [`NativeStore::diff_belief`] with the key-building fan-out forced to
+    /// `(width, candidates per task)` — the hook the exactness tests use to
+    /// pin the serial path and to force many tiny tasks, without touching the
+    /// process environment (same reason `select_units_at` exists).
+    pub(crate) fn diff_belief_at(
+        &self,
+        t1: i64,
+        t2: i64,
+        t_a: i64,
+        t_b: i64,
+        limit: usize,
+        force: Option<(usize, usize)>,
+    ) -> Result<BeliefDiffOut> {
+        let mut keys: Vec<DiffKey<'_>> = Vec::new();
         if t1 < t2 && t_a < t_b {
-            self.diff_belief_kind(RowKind::Node, t1, t2, t_a, t_b, &mut rows)?;
-            self.diff_belief_kind(RowKind::Edge, t1, t2, t_a, t_b, &mut rows)?;
+            self.diff_belief_kind(RowKind::Node, t1, t2, t_a, t_b, force, &mut keys)?;
+            self.diff_belief_kind(RowKind::Edge, t1, t2, t_a, t_b, force, &mut keys)?;
         }
 
-        let added_total = rows
+        let added_total = keys
             .iter()
-            .filter(|r| r.change == BeliefChange::Added)
+            .filter(|k| k.change == BeliefChange::Added)
             .count();
-        let retracted_total = rows.len() - added_total;
-        // Sorted by the logical key alone, so the physical order segments were
-        // visited in is not observable. `sort_unstable_by` is safe here
-        // because `order_key` ends in `vid`, which is unique per version per
-        // tag: no two rows compare equal.
-        rows.sort_unstable_by(|a, b| a.order_key().cmp(&b.order_key()));
-        let truncated = rows.len() > limit;
-        rows.truncate(limit);
+        let retracted_total = keys.len() - added_total;
+        let truncated = keys.len() > limit;
+        top_k(&mut keys, limit);
         Ok(BeliefDiffOut {
-            rows,
+            rows: keys.iter().map(DiffKey::row).collect(),
             added_total,
             retracted_total,
             truncated,
@@ -510,57 +708,166 @@ impl NativeStore {
     /// Kept as its own function rather than inlined twice because the node and
     /// edge branches differ only in which columns resolve the key, and the
     /// belief arithmetic above that must provably be the same for both.
-    fn diff_belief_kind(
-        &self,
+    #[allow(clippy::too_many_arguments)]
+    fn diff_belief_kind<'a>(
+        &'a self,
         kind: RowKind,
         t1: i64,
         t2: i64,
         t_a: i64,
         t_b: i64,
-        out: &mut Vec<BeliefDiffRow>,
+        force: Option<(usize, usize)>,
+        out: &mut Vec<DiffKey<'a>>,
     ) -> Result<()> {
         let closes = self.close_index()?;
         let files = match kind {
             RowKind::Edge => self.edge_files(),
             RowKind::Node => self.node_files(),
         };
-        // Reused across segments so a large candidate set costs one allocation
-        // for the whole operator rather than one per segment.
-        let mut cands: Vec<Candidate> = Vec::new();
-
+        // Phase 1, per segment: the belief tests, as before. Cheap — O(runs +
+        // closes) inside the window — and it yields row numbers only.
+        let mut found: Vec<(std::sync::Arc<crate::segment::Segment<crate::segment::MmapSource>>, Vec<Candidate>)> =
+            Vec::new();
         for (file, seg_id) in files {
             let seg = self.open_segment(&file)?;
-            let h = seg.header();
-            // Segment-level window prune, from the header alone: no column is
-            // read, and for a narrow window this is every segment but one.
-            if h.vt_min >= t_b || h.vt_e_max <= t_a {
-                continue;
+            let cands = self.belief_candidates(&seg, seg_id, &closes, t1, t2, t_a, t_b)?;
+            if !cands.is_empty() {
+                found.push((seg, cands));
             }
-            let vt_s = seg.i64_column("vt_s")?;
-            let n_rows = vt_s.len();
-            if n_rows == 0 {
-                continue;
-            }
-            let (w_lo, w_hi) = window_rows(vt_s, h.vt_e_elided, t_a, t_b);
-            if w_lo >= w_hi {
-                continue;
-            }
-            // The belief state is computed for the window's rows only.
-            // Rows are stored in `vt_s` order, so `[w_lo, w_hi)` is the only
-            // part of the segment the window can use, and every belief test
-            // below is a per-row predicate: restricting first gives the same
-            // rows as clipping afterwards. A window covering the whole
-            // segment takes the whole-segment code unchanged.
-            let view = crate::visibility::close_view_range(
-                seg.sidecar(),
-                &closes,
-                seg_id,
-                w_lo,
-                w_hi,
-                n_rows,
-            );
+        }
 
-            cands.clear();
+        // Phase 2: the columns that turn a row into a key, once per segment.
+        let mut work: Vec<SegWork<'_>> = Vec::with_capacity(found.len());
+        for (seg, cands) in &mut found {
+            let h = seg.header();
+            let ident = match kind {
+                RowKind::Node => Ident::Node {
+                    uid_id: seg.u32_column("uid_id")?,
+                },
+                RowKind::Edge => Ident::Edge {
+                    src: seg.u32_column("src_id")?,
+                    dst: seg.u32_column("dst_id")?,
+                    rel: seg.u16_column("rel_code")?,
+                    disc: seg.u32_column("disc_ref")?,
+                    strings: seg.strings()?,
+                    rel_types: &h.rel_types,
+                },
+            };
+            work.push(SegWork {
+                vt_s: seg.i64_column("vt_s")?,
+                vt_e: if h.vt_e_elided {
+                    None
+                } else {
+                    Some(seg.i64_column("vt_e")?)
+                },
+                vid_hi: seg.u64_column("vid64")?,
+                vid_lo: seg.u32_column("vid_lo32")?,
+                ident,
+                cands: std::mem::take(cands),
+            });
+        }
+
+        // Phase 3: the keys — a sha256 per surviving edge row, so this is the
+        // term that scales with the correction count, and it fans out.
+        let dict = self.dict();
+        let total: usize = work.iter().map(|w| w.cands.len()).sum();
+        let (width, chunk, parallel) = match force {
+            Some((w, c)) => (w, c.max(1), w >= 2),
+            None => {
+                let w = crate::scan::scan_threads().min(total.div_ceil(KEY_CHUNK));
+                (w, KEY_CHUNK, w >= 2 && total >= KEY_PARALLEL_MIN)
+            }
+        };
+        if parallel {
+            let chunks: Vec<(usize, usize, usize)> = work
+                .iter()
+                .enumerate()
+                .flat_map(|(w, sw)| {
+                    (0..sw.cands.len())
+                        .step_by(chunk)
+                        .map(move |lo| (w, lo, (lo + chunk).min(sw.cands.len())))
+                })
+                .collect();
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let parts: Vec<Result<Vec<DiffKey<'a>>>> = crate::pool::run(width, |_| {
+                let mut part: Vec<DiffKey<'a>> = Vec::new();
+                let mut buf = String::new();
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&(w, lo, hi)) = chunks.get(k) else { break };
+                    work[w].keys_into(dict, lo, hi, t_a, t_b, &mut buf, &mut part)?;
+                }
+                Ok(part)
+            });
+            out.reserve(total);
+            for part in parts {
+                out.extend(part?);
+            }
+        } else {
+            let mut buf = String::new();
+            for sw in &work {
+                sw.keys_into(dict, 0, sw.cands.len(), t_a, t_b, &mut buf, out)?;
+            }
+        }
+        drop(work);
+
+        self.diff_belief_staged(kind, t1, t2, t_a, t_b, out)
+    }
+
+    /// The belief tests of one segment: `(row, tt, change)` for every row of
+    /// the window's row range whose belief state moved in `(t1, t2]`. The
+    /// valid-time test itself is applied when the key is built.
+    #[allow(clippy::too_many_arguments)]
+    fn belief_candidates(
+        &self,
+        seg: &crate::segment::Segment<crate::segment::MmapSource>,
+        seg_id: u64,
+        closes: &crate::visibility::CloseIndex,
+        t1: i64,
+        t2: i64,
+        t_a: i64,
+        t_b: i64,
+    ) -> Result<Vec<Candidate>> {
+        let mut cands: Vec<Candidate> = Vec::new();
+        let h = seg.header();
+        // Segment-level window prune, from the header alone: no column is
+        // read, and for a narrow window this is every segment but one.
+        // `GNOMON_SEGMENT_PRUNE=0` plans every segment instead
+        if self.designs().segment_prune && (h.vt_min >= t_b || h.vt_e_max <= t_a) {
+            crate::vistouch::pruned(1);
+            return Ok(cands);
+        }
+        let vt_s = seg.i64_column("vt_s")?;
+        let n_rows = vt_s.len();
+        if n_rows == 0 {
+            return Ok(cands);
+        }
+        let (w_lo, w_hi) = window_rows(vt_s, h.vt_e_elided, t_a, t_b);
+        if w_lo >= w_hi {
+            return Ok(cands);
+        }
+        // The belief state is computed for the window's rows only.
+        // Rows are stored in `vt_s` order, so `[w_lo, w_hi)` is the only
+        // part of the segment the window can use, and every belief test
+        // below is a per-row predicate: restricting first gives the same
+        // rows as clipping afterwards. A window covering the whole
+        // segment takes the whole-segment code unchanged.
+        //
+        // `GNOMON_WINDOW_FIRST=0` computes both for the whole segment
+        // and lets the window clips below do the rest, which is the
+        // whole-segment body.
+        let (b_lo, b_hi) = if self.designs().window_first {
+            (w_lo, w_hi)
+        } else {
+            (0, n_rows)
+        };
+        let view = if self.designs().range_visibility {
+            crate::visibility::close_view_range(seg.sidecar(), closes, seg_id, b_lo, b_hi, n_rows)
+        } else {
+            crate::visibility::CloseView::None
+        };
+
+        if self.designs().range_visibility {
             // --- Added: tt_s ∈ (t1, t2], O(runs), usually O(1) ------------ //
             // Intersected with the window's row range as the ranges are
             // walked, so a correction history outside the window is never
@@ -571,7 +878,7 @@ impl NativeStore {
             // both are shape-dependent and `SegmentHeader::tt_s_at` is
             // documented as runs-only.
             let tt = seg.tt_s_view()?;
-            for (rs, re) in added_ranges_in(&tt, tt.bounds(), t1, t2, n_rows, w_lo, w_hi) {
+            for (rs, re) in added_ranges_in(&tt, tt.bounds(), t1, t2, n_rows, b_lo, b_hi) {
                 for i in rs.max(w_lo)..re.min(w_hi) {
                     cands.push(Candidate {
                         row: i as u32,
@@ -586,10 +893,10 @@ impl NativeStore {
             // `close_view` has already resolved run-over-sidecar precedence
             // exactly as the per-row belief test does, so this slice *is* the
             // effective close set and no second lookup is needed.
-            let walk: &[(u32, i64)] = if crate::scan::is_whole(w_lo, w_hi, n_rows) {
+            let walk: &[(u32, i64)] = if crate::scan::is_whole(b_lo, b_hi, n_rows) {
                 view.as_slice()
             } else {
-                crate::visibility::rows_in(view.as_slice(), w_lo, w_hi)
+                crate::visibility::rows_in(view.as_slice(), b_lo, b_hi)
             };
             crate::vistouch::closes(walk.len());
             for &(row, tt_e) in walk {
@@ -612,86 +919,37 @@ impl NativeStore {
                     });
                 }
             }
-            if cands.is_empty() {
-                continue;
-            }
-
-            // --- valid-time window, then materialize --------------------- //
-            let vt_e = if h.vt_e_elided {
-                None
-            } else {
-                Some(seg.i64_column("vt_e")?)
-            };
-            let vid_hi = seg.u64_column("vid64")?;
-            let vid_lo = seg.u32_column("vid_lo32")?;
-            match kind {
-                RowKind::Node => {
-                    let uid_id = seg.u32_column("uid_id")?;
-                    for c in &cands {
-                        let i = c.row as usize;
-                        // `vt_e` elided means every row is instantaneous,
-                        // exactly as `version_keys` reads it
-                        let ve = vt_e.map(|col| col[i]).unwrap_or(vt_s[i] + 1);
-                        if !in_window(vt_s[i], ve, t_a, t_b) {
-                            continue;
-                        }
-                        out.push(BeliefDiffRow {
-                            kind,
-                            key: self.uid_of(uid_id[i])?,
-                            vid: Id96 {
-                                hi: vid_hi[i],
-                                lo: vid_lo[i],
-                            }
-                            .to_hex(),
-                            tt: c.tt,
-                            change: c.change,
-                            vt_s: vt_s[i],
-                            vt_e: ve,
-                        });
-                    }
+        } else {
+            // `GNOMON_RANGE_VISIBILITY=0`: each row of the belief
+            // domain is tested on its own, then clipped to the window
+            let tt = seg.tt_s_view()?;
+            let sidecar = seg.sidecar();
+            let hi = b_hi.min(n_rows);
+            crate::vistouch::rows(hi.saturating_sub(b_lo));
+            for i in b_lo..hi {
+                let row = i as u32;
+                let tt_s = tt.at(row)?;
+                let tt_e = crate::read::effective_tt_e(closes, &sidecar, seg_id, row);
+                if i < w_lo || i >= w_hi {
+                    continue;
                 }
-                RowKind::Edge => {
-                    let strings = seg.strings()?;
-                    let src = seg.u32_column("src_id")?;
-                    let dst = seg.u32_column("dst_id")?;
-                    let rel = seg.u16_column("rel_code")?;
-                    let disc = seg.u32_column("disc_ref")?;
-                    for c in &cands {
-                        let i = c.row as usize;
-                        let ve = vt_e.map(|col| col[i]).unwrap_or(vt_s[i] + 1);
-                        if !in_window(vt_s[i], ve, t_a, t_b) {
-                            continue;
-                        }
-                        let src_uid = self.uid_of(src[i])?;
-                        let dst_uid = self.uid_of(dst[i])?;
-                        let rel_type = h
-                            .rel_types
-                            .get(rel[i] as usize)
-                            .ok_or_else(|| {
-                                EngineError::corrupt(format!("rel_code {} has no entry", rel[i]))
-                                    .at_row(i as u32)
-                            })?
-                            .clone();
-                        let disc_s = strings.get(disc[i])?.to_string();
-                        out.push(BeliefDiffRow {
-                            kind,
-                            key: edge_eid(&src_uid, &dst_uid, &rel_type, &disc_s).to_hex(),
-                            vid: Id96 {
-                                hi: vid_hi[i],
-                                lo: vid_lo[i],
-                            }
-                            .to_hex(),
-                            tt: c.tt,
-                            change: c.change,
-                            vt_s: vt_s[i],
-                            vt_e: ve,
-                        });
-                    }
+                if tt_s > t1 && tt_s <= t2 {
+                    cands.push(Candidate {
+                        row,
+                        tt: tt_s,
+                        change: BeliefChange::Added,
+                    });
+                }
+                if tt_e > t1 && tt_e <= t2 && tt_e != OPEN_END {
+                    cands.push(Candidate {
+                        row,
+                        tt: tt_e,
+                        change: BeliefChange::Retracted,
+                    });
                 }
             }
         }
-
-        self.diff_belief_staged(kind, t1, t2, t_a, t_b, out)
+        Ok(cands)
     }
 
     /// The open batch's contribution, which a batch must see for the same
@@ -701,66 +959,63 @@ impl NativeStore {
     ///
     /// Bounded by the batch, never by the store, so it does not weaken the
     /// cost claim. Every committed path reaches this with an empty batch.
-    fn diff_belief_staged(
-        &self,
+    fn diff_belief_staged<'a>(
+        &'a self,
         kind: RowKind,
         t1: i64,
         t2: i64,
         t_a: i64,
         t_b: i64,
-        out: &mut Vec<BeliefDiffRow>,
+        out: &mut Vec<DiffKey<'a>>,
     ) -> Result<()> {
         if !self.in_batch() {
             return Ok(());
         }
         let staged_closes: &HashMap<Id96, i64> = self.staged_closes();
-        let push = |kind: RowKind,
-                        key: String,
-                        vid: Id96,
-                        vt_s: i64,
-                        vt_e: i64,
-                        tt_s: i64,
-                        out: &mut Vec<BeliefDiffRow>| {
+        let push = |kind: u8,
+                    node: &'a str,
+                    eid: Id96,
+                    vid: Id96,
+                    vt_s: i64,
+                    vt_e: i64,
+                    tt_s: i64,
+                    out: &mut Vec<DiffKey<'a>>| {
             if !in_window(vt_s, vt_e, t_a, t_b) {
                 return;
             }
+            let key = |tt: i64, change: BeliefChange| DiffKey {
+                kind,
+                node,
+                eid,
+                tt,
+                change,
+                vid,
+                vt_s,
+                vt_e,
+            };
             if tt_s > t1 && tt_s <= t2 {
-                out.push(BeliefDiffRow {
-                    kind,
-                    key: key.clone(),
-                    vid: vid.to_hex(),
-                    tt: tt_s,
-                    change: BeliefChange::Added,
-                    vt_s,
-                    vt_e,
-                });
+                out.push(key(tt_s, BeliefChange::Added));
             }
             let tt_e = staged_closes.get(&vid).copied().unwrap_or(OPEN_END);
             if tt_e != OPEN_END && tt_e > t1 && tt_e <= t2 {
-                out.push(BeliefDiffRow {
-                    kind,
-                    key,
-                    vid: vid.to_hex(),
-                    tt: tt_e,
-                    change: BeliefChange::Retracted,
-                    vt_s,
-                    vt_e,
-                });
+                out.push(key(tt_e, BeliefChange::Retracted));
             }
         };
+        let dict = self.dict();
         match kind {
             RowKind::Node => {
                 for r in self.staged_nodes() {
-                    let uid = self.uid_of(r.uid_id)?;
-                    push(kind, uid, r.vid, r.vt_s, r.vt_e, r.tt_s, out);
+                    let uid = uid_str(dict, r.uid_id)?;
+                    push(0, uid, Id96::default(), r.vid, r.vt_s, r.vt_e, r.tt_s, out);
                 }
             }
             RowKind::Edge => {
+                let mut buf = String::new();
                 for r in self.staged_edges() {
-                    let src = self.uid_of(r.src_id)?;
-                    let dst = self.uid_of(r.dst_id)?;
-                    let eid = edge_eid(&src, &dst, &r.rel_type, &r.disc).to_hex();
-                    push(kind, eid, r.vid, r.vt_s, r.vt_e, r.tt_s, out);
+                    let src = uid_str(dict, r.src_id)?;
+                    let dst = uid_str(dict, r.dst_id)?;
+                    let eid = edge_eid_buf(&mut buf, src, dst, &r.rel_type, &r.disc);
+                    push(1, "", eid, r.vid, r.vt_s, r.vt_e, r.tt_s, out);
                 }
             }
         }
@@ -771,7 +1026,7 @@ impl NativeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::version_vid;
+    use crate::derive::{edge_eid, version_vid};
     use crate::manifest::EventLogRef;
     use crate::read::{Belief, VersionFilter};
     use crate::row::{EdgeRow, NodeRow};
@@ -1447,5 +1702,97 @@ mod tests {
                 "a batch must see the correction it just recorded");
         s.rollback().unwrap();
         assert_eq!(diff(&s, 800, 1000), committed, "rollback must undo both");
+    }
+
+    // -- binary keys, page selection, parallel key build ------------- //
+
+    /// A store wide enough that the page is a small part of the population:
+    /// 1200 edges over 25 entities in four batches, a node version per entity
+    /// per batch, and every fifth edge closed later, so both tags, both kinds
+    /// and many distinct uids and eids are in play.
+    fn wide(name: &str) -> (PathBuf, NativeStore) {
+        let root = tmp_root(name);
+        let mut s = NativeStore::open(&root).unwrap();
+        let (partitions, _) = {
+            let (p, t) = s.layout();
+            (*p, t)
+        };
+        s.set_layout(partitions, 4096);
+        let mut vids = Vec::new();
+        for batch in 0..4u32 {
+            let tt = 100 + batch as i64 * 100;
+            s.begin(tt).unwrap();
+            let ids: Vec<u32> = (0..25)
+                .map(|k| s.ensure_entity(&format!("w{k}"), "Node").unwrap())
+                .collect();
+            for i in 0..300u32 {
+                let n = batch * 300 + i;
+                let (a, b) = ((n % 25) as usize, ((n * 7 + 3) % 25) as usize);
+                let r = edge_row(ids[a], ids[b], &format!("w{a}"), &format!("w{b}"), n, tt);
+                vids.push(r.vid);
+                s.stage_edge(r).unwrap();
+            }
+            for (k, id) in ids.iter().enumerate() {
+                s.stage_node(node_row(*id, batch * 25 + k as u32, tt)).unwrap();
+            }
+            s.commit(EventLogRef::default()).unwrap();
+        }
+        s.begin(900).unwrap();
+        for v in vids.iter().step_by(5) {
+            s.close_version(RowKind::Edge, *v, 900).unwrap();
+        }
+        s.commit(EventLogRef::default()).unwrap();
+        (root, s)
+    }
+
+    /// The page is the prefix of the string order, at every page size, and
+    /// the string order is what the binary keys produced.
+    ///
+    /// The reference is built independently of [`DiffKey`]: the full answer's
+    /// rows re-sorted by [`BeliefDiffRow::order_key`], i.e. by the strings.
+    /// Dropping `eid` from `DiffKey::order`, or comparing `vid` before `tt`,
+    /// or selecting to `limit` instead of `limit - 1`, each fails here.
+    #[test]
+    fn binary_keys_order_like_the_string_rows() {
+        let (_root, s) = wide("k1-order");
+        let full = s.diff_belief(0, 1000, ALL_VT.0, ALL_VT.1, usize::MAX).unwrap();
+        let n = full.rows.len();
+        assert!(n > 1200, "the fixture must be wide, got {n}");
+        assert!(full.rows.iter().any(|r| r.kind == RowKind::Node));
+        assert!(full.retracted_total > 200);
+        let mut by_string = full.rows.clone();
+        by_string.sort_by(|a, b| a.order_key().cmp(&b.order_key()));
+        assert_eq!(full.rows, by_string, "binary order == string order");
+        for limit in [0, 1, 2, 3, 24, 25, 26, 100, 999, n - 1, n, n + 1] {
+            let page = s.diff_belief(0, 1000, ALL_VT.0, ALL_VT.1, limit).unwrap();
+            assert_eq!(page.rows, by_string[..limit.min(n)].to_vec(), "limit {limit}");
+            assert_eq!(page.truncated, n > limit, "limit {limit}");
+            assert_eq!(
+                (page.added_total, page.retracted_total),
+                (full.added_total, full.retracted_total),
+                "limit {limit}: totals count the population"
+            );
+        }
+        // the totals are the tag counts of the population
+        let added = full.rows.iter().filter(|r| r.change == BeliefChange::Added).count();
+        assert_eq!((full.added_total, full.retracted_total), (added, n - added));
+    }
+
+    /// The key build fans out over the pool; the answer may not notice the
+    /// width or the task size. `(1, _)` is the serial path, `(8, 7)` and
+    /// `(3, 1)` force many tiny tasks over several threads.
+    #[test]
+    fn the_key_build_is_independent_of_its_fan_out() {
+        let (_root, s) = wide("k1-fanout");
+        for (t1, t2, w) in [(0, 1000, ALL_VT), (150, 900, ALL_VT), (0, 1000, (300, 700))] {
+            for limit in [5, 333, usize::MAX] {
+                let want = s.diff_belief_at(t1, t2, w.0, w.1, limit, Some((1, 4096))).unwrap();
+                for force in [(8, 7), (3, 1), (32, 64)] {
+                    let got = s.diff_belief_at(t1, t2, w.0, w.1, limit, Some(force)).unwrap();
+                    assert_eq!(got, want, "force {force:?} t1={t1} t2={t2} limit={limit}");
+                }
+                assert_eq!(s.diff_belief(t1, t2, w.0, w.1, limit).unwrap(), want);
+            }
+        }
     }
 }

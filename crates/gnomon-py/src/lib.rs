@@ -31,8 +31,7 @@ use gnomon_core::read::{
     Belief, EdgeVersionOut, NodeVersionOut, VersionFilter, VersionRows,
 };
 use gnomon_core::row::{EdgeRow, NodeRow, RowKind};
-use gnomon_core::scan::{ScanRequest, ScanSet, ScanTarget};
-use gnomon_core::segment::MmapSource;
+use gnomon_core::scan::ScanRequest;
 use gnomon_core::staging::PartitionMap;
 use gnomon_core::store::{
     segment_id_of, NativeStore as CoreStore, NeighborDir, NeighborRows,
@@ -70,6 +69,9 @@ fn err(e: EngineError) -> PyErr {
 }
 
 type Res<T> = Result<T, PyErr>;
+
+/// `(rows_total, page)` of `resolve_entities_page`.
+type ResolvePage = (usize, Vec<(String, u8, String, String)>);
 
 fn kind_of(kind: &str) -> Res<RowKind> {
     match kind {
@@ -569,6 +571,27 @@ impl NativeStore {
         Ok(())
     }
 
+    /// Stage `ops[op_index]` of an event-log record (an
+    /// `ingest_events` op) at `tt` in the engine, exactly as the Python bulk
+    /// row build would. `(edge rows, node rows)` when staged; `None` when the
+    /// op is not in the accepted shape or `GNOMON_INGEST_RAW=0`, with nothing
+    /// changed, and the caller then takes the Python path.
+    fn stage_ingest_events_raw(
+        &mut self,
+        record: &[u8],
+        op_index: usize,
+        tt: i64,
+    ) -> Res<Option<(usize, usize)>> {
+        let t = Timer::start();
+        let r = self
+            .inner
+            .stage_ingest_events_raw(record, op_index, tt)
+            .map_err(err);
+        t.stop(G::PyIngestRaw);
+        ip::add(G::PyCalls, 1);
+        r
+    }
+
     /// Close committed (or same-batch) versions.
     ///
     /// `vt_s`, when given, is the valid-time start of each row in `vids`,
@@ -678,6 +701,25 @@ impl NativeStore {
         self.inner.resolve_entities(query, as_of_tt).map_err(err)
     }
 
+    /// One page of entity resolution: `(rows_total, page)`, where
+    /// the rows are `resolve_entities`'s restricted to canonical label
+    /// `label` (when given), ordered by `(score, uid)` and sliced to
+    /// `[offset, offset + limit)`. `rows_total` counts after the label
+    /// filter. Only the page's strings cross the binding.
+    #[pyo3(signature = (query, as_of_tt = OPEN_END, label = None, offset = 0, limit = 100))]
+    fn resolve_entities_page(
+        &self,
+        query: &str,
+        as_of_tt: i64,
+        label: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Res<ResolvePage> {
+        self.inner
+            .resolve_entities_page(query, as_of_tt, label, offset, limit)
+            .map_err(err)
+    }
+
     fn props_for_vids(&self, kind: &str, vids: Vec<String>) -> Res<HashMap<String, String>> {
         self.inner
             .props_for_vids(kind_of(kind)?, &vids)
@@ -701,46 +743,6 @@ impl NativeStore {
         limit: Option<usize>,
         columns: Option<Vec<String>>,
     ) -> Res<Bound<'py, PyDict>> {
-        // a current-only store must refuse a past-belief scan rather than
-        // silently answer it from the surviving rows
-        self.inner.assert_full_belief(as_of_tt).map_err(err)?;
-        let t_open = std::time::Instant::now();
-        let m = self.inner.manifest();
-        let mut files = Vec::new();
-        for (lane, entries) in [
-            (
-                gnomon_core::row::Lane::Event,
-                &m.edge_lanes.event,
-            ),
-            (
-                gnomon_core::row::Lane::Interval,
-                &m.edge_lanes.interval,
-            ),
-        ] {
-            for e in entries {
-                files.push((lane, e.file.clone()));
-            }
-        }
-        let mut segs = Vec::with_capacity(files.len());
-        for (lane, file) in &files {
-            // via the store so checksums are walked on first touch
-            segs.push((
-                self.inner.open_segment(file).map_err(err)?,
-                *lane,
-                segment_id_of(file),
-            ));
-        }
-        let targets: Vec<ScanTarget<'_, MmapSource>> = segs
-            .iter()
-            .map(|(segment, lane, id)| ScanTarget {
-                segment,
-                lane: *lane,
-                id: *id,
-            })
-            .collect();
-        let set = ScanSet::new(targets).with_closes(self.inner.close_index().map_err(err)?);
-        let open_ns = t_open.elapsed().as_nanos() as u64;
-
         let req = ScanRequest {
             as_of_tt,
             vt_min,
@@ -772,7 +774,14 @@ impl NativeStore {
                 c
             }),
         };
-        let (cols, stats, timings) = set.materialize_edges_timed(&req).map_err(err)?;
+        // the belief check, segment opens, the scan and its adjacency
+        // postings all live in the engine, so its tests run this same path
+        let gnomon_core::store::EdgeScan {
+            cols,
+            stats,
+            timings,
+            open_ns,
+        } = self.inner.scan_edges(&req).map_err(err)?;
         let t_eid = std::time::Instant::now();
 
         // eid is derived, never stored. This layer owns the
@@ -883,6 +892,14 @@ impl NativeStore {
         // there — a discrepancy from "scan_edges/scan_nodes already return".
         d.set_item("blocks_skipped", stats.blocks_skipped)?;
         d.set_item("blocks_considered", stats.blocks_considered)?;
+        // the staircase derived at open for event-lane segments
+        // that store `vt_e`, counted apart from the written one above
+        d.set_item("derived_blocks_skipped", stats.derived_blocks_skipped)?;
+        d.set_item("derived_blocks_considered", stats.derived_blocks_considered)?;
+        // adjacency posting rows walked, and the segments whose
+        // rows came from postings; zero for a scan with no small filter
+        d.set_item("adj_rows_walked", stats.adj_rows_walked)?;
+        d.set_item("adj_segments", stats.adj_segments)?;
         // Stage wall times (ms). Six `Instant`s on a path that moves tens of
         // megabytes; the alternative is subtracting stages from a Python wall
         // clock that contains all of them at once.
@@ -1035,6 +1052,16 @@ impl NativeStore {
         let rows: Vec<u32> = seg_rows.iter().map(|&v| v as u32).collect();
         let pairs = self.inner.edge_idents_at(&ids, &rows).map_err(err)?;
         Ok(pairs.into_iter().unzip())
+    }
+
+    /// Canonical-JSON props for explicit `(segment id, row)` scan addresses
+    /// of `kind` rows, in input order — `props_for_vids` for a
+    /// caller that already holds the rows' addresses. Same generation rule
+    /// as `edge_idents_at`.
+    fn props_at(&self, kind: &str, seg_ids: Vec<i64>, seg_rows: Vec<i64>) -> Res<Vec<String>> {
+        let ids: Vec<u64> = seg_ids.iter().map(|&v| v as u64).collect();
+        let rows: Vec<u32> = seg_rows.iter().map(|&v| v as u32).collect();
+        self.inner.props_at(kind_of(kind)?, &ids, &rows).map_err(err)
     }
 
     /// SHA of the current generation's manifest — with the generation
@@ -1226,7 +1253,8 @@ impl NativeStore {
     /// incremental maintenance that makes it O(1) rides with those
     /// indexes.
     fn stats(&self, py: Python<'_>) -> Res<Py<PyDict>> {
-        let acc = self.inner.stats_accum().map_err(err)?;
+        // the per-generation summary: no clone of the out-degree map
+        let acc = self.inner.stats_summary().map_err(err)?;
         let d = PyDict::new(py);
         d.set_item("n_entities", self.inner.dict().len())?;
         d.set_item("n_node_versions", acc.n_node_versions)?;
@@ -1234,7 +1262,7 @@ impl NativeStore {
         d.set_item("vt_min", acc.vt_min)?;
         d.set_item("vt_max", acc.vt_max)?;
         d.set_item("rel_type_counts", &acc.rel_type_counts)?;
-        d.set_item("max_out_degree", acc.max_out_degree())?;
+        d.set_item("max_out_degree", acc.max_out_degree)?;
         d.set_item("generation", self.inner.generation())?;
         Ok(d.into())
     }
@@ -1377,6 +1405,17 @@ impl NativeStore {
     /// Whether this store is the stripped current-only configuration.
     fn current_only(&self) -> bool {
         self.inner.current_only()
+    }
+
+    /// The engine designs this handle runs with, `name -> in force`,
+    /// fixed when the handle was opened. Receipts record this rather than
+    /// the environment, which may have changed since.
+    fn designs(&self, py: Python<'_>) -> Res<Py<PyDict>> {
+        let d = PyDict::new(py);
+        for (name, on) in self.inner.designs().named() {
+            d.set_item(name, on)?;
+        }
+        Ok(d.into())
     }
 
     /// Collect superseded generations: manifests older than the retention
@@ -2166,6 +2205,87 @@ impl NativeStore {
     fn is_read_only(&self) -> bool {
         self.inner.is_read_only()
     }
+
+    // appended at the end of this `#[pymethods]` block, never inserted.
+
+    /// `temporal_reachability`'s earliest-arrival search: the page
+    /// `[offset, offset + limit)` of the reached nodes ordered by
+    /// `(arrival, uid)`, as `{"uids", "arrival", "total"}`; `None` inside an
+    /// open write batch (the operator keeps its NumPy path there).
+    #[pyo3(signature = (src, t_a, t_b, as_of_tt, direction, offset, limit))]
+    #[allow(clippy::too_many_arguments)]
+    fn reach_earliest<'py>(
+        &self,
+        py: Python<'py>,
+        src: u32,
+        t_a: i64,
+        t_b: i64,
+        as_of_tt: i64,
+        direction: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        let dir = gnomon_core::reach::ReachDir::parse(direction).map_err(err)?;
+        let out = py
+            .detach(|| self.inner.reach_earliest(src, t_a, t_b, as_of_tt, dir, offset, limit))
+            .map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("uids", out.uids)?;
+        d.set_item("arrival", out.arrival)?;
+        d.set_item("total", out.total)?;
+        Ok(Some(d))
+    }
+
+    /// `diff_snapshots` without `scope`: the four identity lists' pages
+    /// and totals, and the content-change candidates whose stored text
+    /// differs (the operator compares those itself). `None` inside an open
+    /// write batch.
+    fn diff_snapshots<'py>(
+        &self,
+        py: Python<'py>,
+        t1: i64,
+        t2: i64,
+        as_of_tt: i64,
+        limit: usize,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        let out = py
+            .detach(|| self.inner.diff_snapshots(t1, t2, as_of_tt, limit))
+            .map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("nodes_added", out.nodes_added)?;
+        d.set_item("nodes_added_total", out.nodes_added_total)?;
+        d.set_item("nodes_removed", out.nodes_removed)?;
+        d.set_item("nodes_removed_total", out.nodes_removed_total)?;
+        for (key, descs, total) in [
+            ("edges_added", &out.edges_added, out.edges_added_total),
+            ("edges_removed", &out.edges_removed, out.edges_removed_total),
+        ] {
+            let rows = PyList::empty(py);
+            for e in descs {
+                let r = PyDict::new(py);
+                r.set_item("eid", &e.eid)?;
+                r.set_item("src", &e.src)?;
+                r.set_item("dst", &e.dst)?;
+                r.set_item("rel_type", &e.rel_type)?;
+                rows.append(r)?;
+            }
+            d.set_item(key, rows)?;
+            d.set_item(format!("{key}_total"), total)?;
+        }
+        let nc = PyList::empty(py);
+        for c in &out.node_cands {
+            nc.append((&c.uid, &c.vid_a, &c.vid_b, &c.label_a, &c.label_b, &c.props_a, &c.props_b))?;
+        }
+        d.set_item("node_cands", nc)?;
+        let ec = PyList::empty(py);
+        for c in &out.edge_cands {
+            ec.append((&c.eid, &c.vid_a, &c.vid_b, &c.props_a, &c.props_b))?;
+        }
+        d.set_item("edge_cands", ec)?;
+        Ok(Some(d))
+    }
 }
 
 /// Plain (non-Python) helpers of the binding.
@@ -2434,6 +2554,10 @@ fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("OPEN_END", gnomon_core::OPEN_END)?;
     m.add("BLOCK_ROWS", gnomon_core::defaults::BLOCK_ROWS)?;
+    m.add(
+        "ADJ_FILTER_MAX_IDS",
+        gnomon_core::defaults::ADJ_FILTER_MAX_IDS,
+    )?;
     m.add(
         "SEGMENT_TARGET_BYTES",
         gnomon_core::defaults::SEGMENT_TARGET_BYTES,

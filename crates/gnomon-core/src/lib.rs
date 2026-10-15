@@ -16,11 +16,13 @@ pub mod beliefdiff;
 pub mod codec;
 pub mod compact;
 pub mod derive;
+pub mod designs;
 pub mod digest;
 pub mod dict;
 pub mod error;
 pub mod gc;
 pub mod ingest_phase;
+pub mod ingest_raw;
 pub mod integrity;
 pub mod interval;
 pub mod linfor;
@@ -31,6 +33,9 @@ pub mod motif;
 pub mod nameidx;
 pub mod node_belief;
 pub mod phase;
+pub(crate) mod pool;
+pub mod reach;
+pub mod snapdiff;
 pub mod read;
 pub mod row;
 pub mod scan;
@@ -46,6 +51,10 @@ pub mod visibility;
 pub mod vistouch;
 #[cfg(test)]
 mod windowfirst_tests;
+#[cfg(test)]
+mod ablation_tests;
+#[cfg(test)]
+mod scaling_tests;
 
 pub use derive::{edge_eid, version_vid, Id96};
 pub use dict::Dictionary;
@@ -253,6 +262,23 @@ pub mod defaults {
     pub const LANE_MAX_PARTITION_CROSSINGS: u32 = 2;
     /// TCSR switches to dense per-vertex offsets at or above this density.
     pub const TCSR_DENSE_THRESHOLD: f64 = 0.5;
+    /// The largest incidence filter (`touching_ids`) a scan
+    /// answers from adjacency postings.
+    ///
+    /// Whether postings pay is decided per segment, exactly: they are taken
+    /// only when the posting rows of the filter's ids are fewer than the rows
+    /// the scan would examine there (`scan::PostingsSource`), so a taken
+    /// segment never examines more rows than the scan. This cap bounds only
+    /// what finding that out costs: one slice lookup per id per segment
+    /// (a binary search over the segment's active vertices, about 20 probes
+    /// at a million), and on a handle without the segment's index, loading or
+    /// building it. At 1,024 ids the lookups are about 20,000 probes, under
+    /// one block of rows ([`BLOCK_ROWS`]), so asking never costs more than
+    /// scanning a block. Filters past it (a motif node filter of thousands)
+    /// take the scan without asking. The seed-driven snapshot
+    /// (`ops_snapshot.SEED_EXPANSION_MAX_IDS`) uses the same bound for its
+    /// frontier, so every scan it makes can take postings.
+    pub const ADJ_FILTER_MAX_IDS: usize = 1024;
     /// Generations between full manifest checkpoints.
     /// Retained manifest bytes at SF1 scale go as G·(h+s) + s·G²/(2K) and
     /// worst-case open as one checkpoint parse + K delta parses; 512 puts the
@@ -286,6 +312,33 @@ pub mod defaults {
     /// both 1M and 10M (spawn-and-merge overhead against a straggler-set
     /// finish line); the win only appears from 4 workers up.
     pub const PARALLEL_SCAN_MIN_THREADS: usize = 4;
+    /// The row threshold of the **grouped aggregate's** own two parallel
+    /// stages: the row loop of its select and its fold.
+    ///
+    /// [`PARALLEL_SCAN_MIN_ROWS`] was calibrated on 2026-08-01 for the scan
+    /// stages, when a fan-out spawned threads per call. The fold is a
+    /// different kind of work: tens of nanoseconds per row (hash-group
+    /// lookup, distinct bitset) against a few per row for a select, and
+    /// the stages run on the persistent pool, so a fan-out costs a
+    /// wake-up rather than a spawn. Under the scan gate a 1M-row
+    /// `agg.rel_bucket` folded on one worker: 29.4 ms of a 32.5 ms call at
+    /// 29 ns/row. Its own threshold, calibrated by a sweep, takes it
+    /// to the multi-worker fold.
+    ///
+    /// Only the aggregate's row path reads this. The count-by-bucket path
+    /// never folds a row and keeps the scan gate for its planner,
+    /// and so does every other scan: the global gate's measured costs at
+    /// 1M (`series.count`, `burst.zscore`, 0.1-0.2 ms slower under a lower
+    /// global gate) are not paid here. `GNOMON_AGG_PARALLEL_MIN_ROWS`
+    /// overrides, for measurement only.
+    pub const AGG_PARALLEL_MIN_ROWS: u64 = 131_072;
+    /// Block size of the `vt_e` staircase **derived at open** for an
+    /// event-lane segment that stores `vt_e`. The structure is
+    /// held in memory only (never written), so its granularity is not a
+    /// format question: 4,096 rows is the block size a simulation
+    /// selected, and costs 8 bytes per block, about 20 KB on a
+    /// 10M-row segment.
+    pub const DERIVED_VT_E_BLOCK_ROWS: u32 = 4_096;
     /// Row-range units the read path aims to cut **per worker**.
     ///
     /// The units of both parallel read stages used to be one per opened

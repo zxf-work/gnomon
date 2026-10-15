@@ -102,8 +102,8 @@ MOTIF_FILTER = 200
 #: invisible to a query whose window is everything.
 #:
 #: The `*.w10` variants below are the same three operator calls with the
-#: window replaced by a window of **fixed absolute width**, `W10_WIDTH`
-#: ticks, at a fixed absolute offset `W10_OFFSET` past the extent's start.
+#: window replaced by a window of **fixed absolute width**, `FIXED_WINDOW_WIDTH`
+#: ticks, at a fixed absolute offset `FIXED_WINDOW_OFFSET` past the extent's start.
 #: The synthetic corpus puts exactly one event on every tick (`_vt_s`:
 #: "event `i` starts at tick `i`"), so at every scale in the sweep this is
 #: the same 10 ticks holding the same ~10 events, well clear of the burst
@@ -115,15 +115,15 @@ MOTIF_FILTER = 200
 #: microseconds), so the ids are always runnable; on those the window is a
 #: fixed *fraction* of the extent instead and the absolute-width claim does
 #: not apply. The fixed-width claim is measured on the synthetic sweep.
-W10_WIDTH = 10
-W10_OFFSET = 1_000
+FIXED_WINDOW_WIDTH = 10
+FIXED_WINDOW_OFFSET = 1_000
 
 
 def _w10_window(t0: int, t1: int) -> dict[str, int]:
     """The fixed absolute-width window, placed inside `[t0, t1)`."""
     span = max(1, t1 - t0)
-    t_a = t0 + min(W10_OFFSET, span // 4)
-    t_b = min(t_a + W10_WIDTH, t1)
+    t_a = t0 + min(FIXED_WINDOW_OFFSET, span // 4)
+    t_b = min(t_a + FIXED_WINDOW_WIDTH, t1)
     if t_b <= t_a:                       # degenerate extent: never empty
         t_b = min(t_a + 1, t1)
     return {"t_a": int(t_a), "t_b": int(t_b)}
@@ -232,7 +232,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # published query order and every prior receipt stay comparable.
         # Same three operators as `series.count` / `burst.zscore` /
         # `agg.rel_bucket` above and the same arguments, except that the
-        # window is `_w10_window` — fixed at W10_WIDTH absolute ticks
+        # window is `_w10_window` — fixed at FIXED_WINDOW_WIDTH absolute ticks
         # instead of the whole extent — and the stride is 1, so the bucket
         # count is the window width rather than a fixed 100 buckets that
         # would grow with the store. These carry no `op` of their own, so
@@ -244,7 +244,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         Query("series.count.w10", "graph_metric_timeseries",
               {"metric": "edge_event_count", "window": _w10_window(t0, t1),
                "stride": 1},
-              f"bucketed event rate over a fixed {W10_WIDTH}-tick window "
+              f"bucketed event rate over a fixed {FIXED_WINDOW_WIDTH}-tick window "
               f"(fixed-window variant)"),
         Query("agg.rel_bucket.w10", "aggregate_events",
               {"group_by": [{"dim": "rel_type"}, {"dim": "time_bucket"}],
@@ -253,12 +253,12 @@ def registry(t0: int, t1: int, tt_epoch1: int,
                "window": _w10_window(t0, t1),
                "stride": 1, "limit": 1000},
               f"count + distinct-dst by rel_type x time-bucket over a fixed "
-              f"{W10_WIDTH}-tick window (fixed-window variant)"),
+              f"{FIXED_WINDOW_WIDTH}-tick window (fixed-window variant)"),
         Query("burst.zscore.w10", "burst_detection",
               {"target": {"kind": "edge_event_rate"},
                "window": _w10_window(t0, t1),
                "stride": 1, "method": "zscore", "params": {"z": 3.0}},
-              f"burst flags over the same fixed {W10_WIDTH}-tick window "
+              f"burst flags over the same fixed {FIXED_WINDOW_WIDTH}-tick window "
               f"(fixed-window variant)"),
         # The belief diff. Appended after
         # every existing id and touching none of their arguments, so the
@@ -274,7 +274,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # arbitrary literals would mean something different on each.
         #
         # **Window.** `_w10_window`, not the whole extent, for exactly the
-        # reason W10_WIDTH's note above gives: a whole-extent window makes the
+        # reason FIXED_WINDOW_WIDTH's note above gives: a whole-extent window makes the
         # answer — and so the latency — grow with the store by construction,
         # which would hide the property this operator exists to demonstrate.
         # The claim under test is that the cost is `O(segments x (runs +
@@ -291,7 +291,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
               {"t1": tt_epoch1, "t2": OPEN_END,
                "window": _w10_window(t0, t1), "limit": 1000},
               f"versions whose belief state changed between the first belief "
-              f"epoch and current belief, over a fixed {W10_WIDTH}-tick "
+              f"epoch and current belief, over a fixed {FIXED_WINDOW_WIDTH}-tick "
               f"valid-time window",
               requires=("bitemporal",)),
     ]
@@ -504,6 +504,15 @@ def run_system(name: str, store_path: Path,
     return out
 
 
+#: The engine's ablation switches. A run records what was set; a store
+#: receipt records what the opened handle actually ran with
+#: (`NativeAdapter.designs()`), since the engine reads them at open.
+ABLATION_VARS = ("GNOMON_RANGE_VISIBILITY", "GNOMON_WINDOW_FIRST", "GNOMON_SEGMENT_PRUNE",
+                 "GNOMON_TCSR", "GNOMON_VIDFILTER", "GNOMON_EXISTENCE_PROBE",
+                 "GNOMON_TIME_CODEC", "GNOMON_SEED_EXPANSION", "GNOMON_ADJ_FILTERED_SCAN",
+                 "GNOMON_INGEST_RAW")
+
+
 def manifest(data: Dataset, systems: list[str]) -> dict[str, Any]:
     """Everything needed to say whether two runs are comparable.
 
@@ -540,6 +549,8 @@ def manifest(data: Dataset, systems: list[str]) -> dict[str, Any]:
         "hostname": platform.node().split(".")[0],
         "measurement_host": MEASUREMENT_HOST,
         "on_measurement_host": platform.node().split(".")[0] == MEASUREMENT_HOST,
+        # unset everywhere is the shipped engine
+        "ablation_env": {k: os.environ.get(k) for k in ABLATION_VARS},
     }
 
 
@@ -875,6 +886,9 @@ def store_receipt(store_path: Path, skip_cost_check: bool) -> dict[str, Any]:
                                     if "GNOMON_SEGMENT_CACHE_BYTES" in os.environ else None),
             # Recorded on the receipt, never silently assumed.
             "skip_cost_check": skip_cost_check,
+            # the designs this handle ran with, and what was set
+            "designs": store.adapter.designs(),
+            "ablation_env": {k: os.environ.get(k) for k in ABLATION_VARS},
         }
     finally:
         store.close()

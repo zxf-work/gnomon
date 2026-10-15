@@ -297,9 +297,24 @@ pub enum G {
     VfBuilt,
     /// Count: keys those filters were built over (rows, before dedup).
     VfKeys,
+    // --- the raw-record `ingest_events` fast path -------------------------
+    // Appended. `py_ingest_raw_ns` is the binding's body; the five `_ns`
+    // slots below divide it (the probe slot is the endpoint-existence
+    // probe's share, whose own `probe.*` timers run inside it).
+    PyIngestRaw,
+    IngestRawParseNs,
+    IngestRawProbeNs,
+    IngestRawEnsureNs,
+    IngestRawIdentityNs,
+    IngestRawStageNs,
+    /// Count: edge / node rows staged by the fast path.
+    IngestRawEdgeRows,
+    IngestRawNodeRows,
+    /// Count: calls that fell back to the Python path (shape not accepted).
+    IngestRawFallbacks,
 }
 
-pub const G_COUNT: usize = 78;
+pub const G_COUNT: usize = 87;
 pub const G_NAMES: [&str; G_COUNT] = [
     "py_begin_ns",
     "py_stage_edges_ns",
@@ -379,6 +394,15 @@ pub const G_NAMES: [&str; G_COUNT] = [
     "vf_remap_ns",
     "vf_built",
     "vf_keys",
+    "py_ingest_raw_ns",
+    "ingest_raw_parse_ns",
+    "ingest_raw_probe_ns",
+    "ingest_raw_ensure_ns",
+    "ingest_raw_identity_ns",
+    "ingest_raw_stage_ns",
+    "ingest_raw_edge_rows",
+    "ingest_raw_node_rows",
+    "ingest_raw_fallbacks",
 ];
 
 #[cfg(feature = "ingest-timers")]
@@ -580,7 +604,7 @@ mod tests {
 
     #[test]
     fn names_cover_every_slot() {
-        assert_eq!(G_NAMES.len(), G::VfKeys as usize + 1);
+        assert_eq!(G_NAMES.len(), G::IngestRawFallbacks as usize + 1);
         assert_eq!(S_NAMES.len(), S::EncWinRaw as usize + 1);
         assert_eq!(CTX_NAMES.len(), Ctx::Vidfilter as usize + 1);
         let mut all: Vec<&str> = G_NAMES.iter().chain(S_NAMES.iter()).copied().collect();

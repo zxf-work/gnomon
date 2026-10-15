@@ -36,7 +36,7 @@ const SPAN: i64 = 1_000_000;
 
 fn tmp_root(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w23-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-segsha-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     p
 }
@@ -440,7 +440,7 @@ fn a_lying_name_index_never_returns_a_node_whose_name_does_not_match() {
 // T4 — an unpublished id is reused after a crash                         //
 // --------------------------------------------------------------------- //
 
-const CHILD_ROOT_ENV: &str = "GNOMON_W23_CRASH_CHILD_ROOT";
+const CHILD_ROOT_ENV: &str = "GNOMON_SEGSHA_CRASH_CHILD_ROOT";
 
 /// Child half of T4: a no-op unless the parent set [`CHILD_ROOT_ENV`] and
 /// `GNOMON_CRASH_POINT=after_seal`, in which case it seals one batch into the

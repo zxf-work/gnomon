@@ -143,11 +143,49 @@ pub enum Phase {
     VisCloses,
     /// Inner iterations of the belief diff's range-list difference.
     VisSteps,
+    /// Segments skipped on manifest or header bounds, summed over every
+    /// prune site; zero under `GNOMON_SEGMENT_PRUNE=0`.
+    SegPruned,
+    /// Rows given a per-row belief test; nonzero only under
+    /// `GNOMON_RANGE_VISIBILITY=0`.
+    VisRows,
+    /// Endpoint-column rows scanned for adjacency; nonzero only under
+    /// `GNOMON_TCSR=scan`.
+    AdjScanRows,
+    /// Adjacency posting rows walked by filtered scans, and
+    /// the segments whose rows came from postings.
+    SelAdjRows,
+    SelAdjSegments,
+    /// Aggregate calls answered from believed-range lengths (the
+    /// count-by-bucket path); zero under `GNOMON_AGG_RANGE_COUNT=0`.
+    AggRangeCounts,
+    /// The reachability kernel's stages — the window's believed
+    /// edges gathered from the planner's ranges, the CSR, the label-setting
+    /// search, and the `(arrival, uid)` page.
+    ReachEdges,
+    ReachCsr,
+    ReachSearch,
+    ReachPage,
+    /// The snapshot diff's stages — the node half, the two edge
+    /// point-state plans, the row merge plus identity join, and the eids and
+    /// pages of the added/removed edges.
+    SnapNodes,
+    SnapEdgePlan,
+    SnapEdgeJoin,
+    SnapEdgePages,
+    /// Time spent deriving event-lane `vt_e` staircases at
+    /// cached segment opens, summed.
+    StairDeriveNs,
+    /// Segments whose staircase was derived at open.
+    StairDerived,
+    /// Heap the derived staircases hold, summed over the
+    /// derivations counted (bytes).
+    StairDerivedBytes,
 }
 
 /// Wire names, indexed by [`Phase`]. Kept beside the enum so the two cannot
 /// drift; a test asserts the lengths agree.
-pub const NAMES: [&str; 35] = [
+pub const NAMES: [&str; 52] = [
     "agg_calls",
     "agg_labels_ns",
     "agg_prune_ns",
@@ -183,6 +221,23 @@ pub const NAMES: [&str; 35] = [
     "vis_runs",
     "vis_closes",
     "vis_steps",
+    "seg_pruned",
+    "vis_rows",
+    "adj_scan_rows",
+    "sel_adj_rows",
+    "sel_adj_segments",
+    "agg_range_counts",
+    "reach_edges_ns",
+    "reach_csr_ns",
+    "reach_search_ns",
+    "reach_page_ns",
+    "snap_nodes_ns",
+    "snap_edge_plan_ns",
+    "snap_edge_join_ns",
+    "snap_edge_pages_ns",
+    "stair_derive_ns",
+    "stair_derived",
+    "stair_derived_bytes",
 ];
 
 const N: usize = NAMES.len();
@@ -246,7 +301,16 @@ mod tests {
     fn names_cover_every_slot_in_declaration_order() {
         // The enum's last variant must be the last name: a phase added
         // without a name would silently write into another phase's slot.
-        assert_eq!(Phase::VisSteps as usize, N - 1);
+        assert_eq!(Phase::StairDerivedBytes as usize, N - 1);
+        assert_eq!(NAMES[Phase::SnapEdgePages as usize], "snap_edge_pages_ns");
+        assert_eq!(NAMES[Phase::StairDeriveNs as usize], "stair_derive_ns");
+        assert_eq!(NAMES[Phase::ReachEdges as usize], "reach_edges_ns");
+        assert_eq!(NAMES[Phase::AggRangeCounts as usize], "agg_range_counts");
+        assert_eq!(NAMES[Phase::SelAdjRows as usize], "sel_adj_rows");
+        assert_eq!(NAMES[Phase::AdjScanRows as usize], "adj_scan_rows");
+        assert_eq!(NAMES[Phase::VisRows as usize], "vis_rows");
+        assert_eq!(NAMES[Phase::SegPruned as usize], "seg_pruned");
+        assert_eq!(NAMES[Phase::VisSteps as usize], "vis_steps");
         assert_eq!(NAMES[Phase::FoldMapBytesMax as usize], "fold_map_bytes_max");
         assert_eq!(NAMES[Phase::VisCodes as usize], "vis_codes");
         assert_eq!(NAMES[Phase::SelPlanBusy as usize], "sel_plan_busy_ns");

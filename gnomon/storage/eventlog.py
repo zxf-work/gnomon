@@ -625,6 +625,8 @@ def replay(eventlog_path: str | Path, adapter: Any, *,
     log = EventLog(eventlog_path)
     note_cursor = getattr(adapter, "note_event_cursor", None) if thread_cursor \
         else None
+    # an adapter that can stage ops from their record gets it
+    pass_raw = bool(getattr(adapter, "accepts_raw_record", False))
     chain = SEED_CHAIN
     n = 0
     compactions = 0
@@ -636,7 +638,10 @@ def replay(eventlog_path: str | Path, adapter: Any, *,
         chain = extend_chain(chain, raw)
         adapter.begin()
         try:
-            adapter.apply_ops(batch["ops"], tt)
+            if pass_raw:
+                adapter.apply_ops(batch["ops"], tt, raw=raw)
+            else:
+                adapter.apply_ops(batch["ops"], tt)
         except GnomonError:
             # a batch that failed on the live path fails identically here
             # (apply is deterministic); skip it, exactly as the writer did

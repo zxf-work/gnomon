@@ -34,6 +34,15 @@ pub struct VisTouch {
     pub runs: u64,
     pub closes: u64,
     pub steps: u64,
+    /// Segments skipped on manifest or header bounds, at every prune
+    /// site (`GNOMON_SEGMENT_PRUNE`). Not a stored item, so not in [`VisTouch::items`].
+    pub pruned: u64,
+    /// Rows given a per-row belief test (`GNOMON_RANGE_VISIBILITY`). Rows, not stored
+    /// items, so not in [`VisTouch::items`].
+    pub rows: u64,
+    /// Endpoint-column rows scanned to find adjacency without the
+    /// index (`GNOMON_TCSR=scan`). Not in [`VisTouch::items`].
+    pub adj: u64,
 }
 
 impl VisTouch {
@@ -50,7 +59,7 @@ pub const ENABLED: bool = cfg!(feature = "ingest-timers");
 #[cfg(feature = "ingest-timers")]
 thread_local! {
     static TOUCH: std::cell::Cell<VisTouch> = const {
-        std::cell::Cell::new(VisTouch { codes: 0, runs: 0, closes: 0, steps: 0 })
+        std::cell::Cell::new(VisTouch { codes: 0, runs: 0, closes: 0, steps: 0, pruned: 0, rows: 0, adj: 0 })
     };
 }
 
@@ -104,6 +113,39 @@ pub(crate) fn steps(n: usize) {
     #[cfg(feature = "ingest-timers")]
     if n > 0 {
         bump(|t| t.steps += n as u64, crate::phase::Phase::VisSteps, n as u64);
+    }
+    #[cfg(not(feature = "ingest-timers"))]
+    let _ = n;
+}
+
+/// `n` segments pruned on their bounds.
+#[inline]
+pub(crate) fn pruned(n: usize) {
+    #[cfg(feature = "ingest-timers")]
+    if n > 0 {
+        bump(|t| t.pruned += n as u64, crate::phase::Phase::SegPruned, n as u64);
+    }
+    #[cfg(not(feature = "ingest-timers"))]
+    let _ = n;
+}
+
+/// `n` rows given a per-row belief test.
+#[inline]
+pub(crate) fn rows(n: usize) {
+    #[cfg(feature = "ingest-timers")]
+    if n > 0 {
+        bump(|t| t.rows += n as u64, crate::phase::Phase::VisRows, n as u64);
+    }
+    #[cfg(not(feature = "ingest-timers"))]
+    let _ = n;
+}
+
+/// `n` endpoint-column rows scanned for adjacency.
+#[inline]
+pub(crate) fn adj(n: usize) {
+    #[cfg(feature = "ingest-timers")]
+    if n > 0 {
+        bump(|t| t.adj += n as u64, crate::phase::Phase::AdjScanRows, n as u64);
     }
     #[cfg(not(feature = "ingest-timers"))]
     let _ = n;

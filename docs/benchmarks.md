@@ -39,8 +39,9 @@ build record carries:
   step (compaction, gc, stats, digest), with RSS before and after each;
 * `ingest_phase_totals`: ingest time split into exclusive phases, each with
   its seconds and share — event generation and driver bookkeeping on the
-  client side; the Python row build and batch conversion; the PyO3 call
-  boundary; the write-ahead event-log append; inside the engine, staging,
+  client side; the Python row build and batch conversion, or for bulk
+  events the engine’s own row build from the log record (parse, identity
+  hashing, staging); the PyO3 call boundary; the write-ahead event-log append; inside the engine, staging,
   the endpoint existence probe, correction resolution, sealing (sort,
   encode, write, fsync), compaction, and commit publication (manifest and
   fsyncs) — plus the residual no phase claims (typically well under 1%);
@@ -52,12 +53,13 @@ The console prints the phase table at the end, for example (100k
 entities on a 32-core VM):
 
 ```
-ingest_phase_totals: ingest 25.5s, residual 0.06%
-   58.41%       14.87s  commit publish (manifest, fsyncs)
-   16.98%        4.32s  event-log append
-   15.11%        3.84s  seal (sort, encode, write, fsync)
-    4.74%        1.21s  Python row build and batch conversion
-    2.08%        0.53s  compaction
+ingest_phase_totals: ingest 30.0s, residual 0.07%
+   60.98%       18.29s  commit publish (manifest, fsyncs)
+   17.94%        5.38s  seal (sort, encode, write, fsync)
+   16.33%        4.90s  event-log append
+    1.80%        0.54s  compaction
+    1.27%        0.38s  event generation (client)
+    0.67%        0.20s  raw-record ingest (engine row build)
     ...
 ```
 
@@ -127,6 +129,30 @@ Two more measurement modes share `--store`: `--window-start 0.1,0.5,0.9`
 reports the interval-row staircase’s block-skip fraction at several window
 positions, and `--as-of-distance 1,10,100` sweeps `hist.asof` across belief
 times that many generations back from the log’s tail.
+
+## Design switches
+
+The engine’s design switches ([configuration](configuration.md#design-switches))
+turn one design off at a time without changing any answer, so a run with a
+switch set measures what that design buys. Set the variable for the whole
+run, both drivers record it:
+
+```bash
+GNOMON_WINDOW_FIRST=0 python scripts/eval_harness.py --store runs/synth-100k \
+    --log runs/synth-100k/eventlog.jsonl --json runs/registry-no-window-first.json
+```
+
+* the query receipt’s manifest records `ablation_env`, the switch variables
+  as set in the environment;
+* a `--store` receipt also records `designs`, what the opened handle
+  actually ran with (`store.adapter.designs()`), since the engine reads the
+  switches once, at open;
+* the build record of `build_synth_store.py` records `ablation_env` too.
+  `GNOMON_TIME_CODEC` is a write-time switch: it shapes the store being
+  built, not the queries run on it later.
+
+Answer hashes must not move with any switch; comparing a switched run’s
+hashes against a default run’s on the same store is a cheap check of that.
 
 ## Small and large runs
 

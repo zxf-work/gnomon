@@ -64,8 +64,22 @@ pub struct TtSView<'a> {
     dict: &'a [i64],
     blocks: &'a [(u32, u32)],
     block_rows: usize,
-    codes: Option<TtCodes<'a>>,
+    shape: Shape<'a>,
     bounds: (i64, i64),
+}
+
+/// Which representation the view reads. One discriminant, matched once per
+/// `at()` (it replaced an `Option<TtCodes>`; the dictionary arm still
+/// matches the code width inside, so a dictionary read is the same two
+/// matches it was).
+#[derive(Clone, Copy)]
+enum Shape<'a> {
+    /// The run list in the header.
+    Runs,
+    /// Dictionary codes, per-block bounds in `blocks`.
+    Dict(TtCodes<'a>),
+    /// `GNOMON_TIME_CODEC=raw`: one raw `i64` per row, no block bounds.
+    Raw(&'a [i64]),
 }
 
 impl<'a> TtSView<'a> {
@@ -78,7 +92,7 @@ impl<'a> TtSView<'a> {
             dict: &[],
             blocks: &[],
             block_rows: 0,
-            codes: None,
+            shape: Shape::Runs,
             bounds: h.tt_s_bounds(),
         }
     }
@@ -95,7 +109,24 @@ impl<'a> TtSView<'a> {
             dict: &[],
             blocks: &[],
             block_rows: 0,
-            codes: None,
+            shape: Shape::Runs,
+            bounds,
+        }
+    }
+
+    /// A raw per-row `tt_s` column ([`crate::segment::TimeCodec::Raw`]).
+    pub(crate) fn raw(
+        h: &'a crate::segment::SegmentHeader,
+        col: &'a [i64],
+        bounds: (i64, i64),
+    ) -> Self {
+        let _ = h;
+        Self {
+            runs: &[],
+            dict: &[],
+            blocks: &[],
+            block_rows: 0,
+            shape: Shape::Raw(col),
             bounds,
         }
     }
@@ -110,7 +141,7 @@ impl<'a> TtSView<'a> {
             dict: &h.tt_s_dict,
             blocks: &h.tt_s_code_blocks,
             block_rows: h.tt_s_block_rows as usize,
-            codes: Some(codes),
+            shape: Shape::Dict(codes),
             bounds,
         }
     }
@@ -124,7 +155,13 @@ impl<'a> TtSView<'a> {
     /// Does this segment code `tt_s` by dictionary?
     #[inline]
     pub fn is_dictionary(&self) -> bool {
-        self.codes.is_some()
+        matches!(self.shape, Shape::Dict(_))
+    }
+
+    /// Is `tt_s` a raw per-row column?
+    #[inline]
+    pub fn is_raw(&self) -> bool {
+        matches!(self.shape, Shape::Raw(_))
     }
 
     /// `(min, max)` transaction time, folded once when the segment opened.
@@ -141,8 +178,8 @@ impl<'a> TtSView<'a> {
     /// nearly as long as the segment.
     #[inline]
     pub fn at(&self, row: u32) -> Result<i64> {
-        match self.codes {
-            Some(codes) => {
+        match self.shape {
+            Shape::Dict(codes) => {
                 let code = codes.get(row as usize).ok_or_else(|| {
                     EngineError::corrupt(format!(
                         "tt_s code column has {} rows, asked for row {row}",
@@ -156,7 +193,13 @@ impl<'a> TtSView<'a> {
                     ))
                 })
             }
-            None => self
+            Shape::Raw(col) => col.get(row as usize).copied().ok_or_else(|| {
+                EngineError::corrupt(format!(
+                    "tt_s column has {} rows, asked for row {row}",
+                    col.len()
+                ))
+            }),
+            Shape::Runs => self
                 .runs
                 .partition_point(|(start, _)| *start <= row)
                 .checked_sub(1)
@@ -176,10 +219,11 @@ impl<'a> TtSView<'a> {
     /// on the dictionary it is counted from the codes, which is the same
     /// number the run list would have held.
     pub fn run_count(&self) -> usize {
-        match self.codes {
-            None => self.runs.len(),
-            Some(TtCodes::U16(c)) => count_runs(c),
-            Some(TtCodes::U32(c)) => count_runs(c),
+        match self.shape {
+            Shape::Runs => self.runs.len(),
+            Shape::Dict(TtCodes::U16(c)) => count_runs(c),
+            Shape::Dict(TtCodes::U32(c)) => count_runs(c),
+            Shape::Raw(c) => count_runs(c),
         }
     }
 
@@ -203,7 +247,7 @@ impl<'a> TtSView<'a> {
         as_of: i64,
         rows: usize,
     ) -> Vec<(usize, usize)> {
-        let Some(codes) = self.codes else {
+        let Shape::Dict(codes) = self.shape else {
             return Vec::new();
         };
         let rows = rows.min(codes.len());
@@ -286,7 +330,7 @@ impl<'a> TtSView<'a> {
         lo: usize,
         hi: usize,
     ) -> Vec<(usize, usize)> {
-        let Some(codes) = self.codes else {
+        let Shape::Dict(codes) = self.shape else {
             return Vec::new();
         };
         let rows = rows.min(codes.len());
@@ -343,6 +387,45 @@ impl<'a> TtSView<'a> {
             start = end;
         }
         crate::vistouch::codes(walked);
+        out
+    }
+}
+
+impl TtSView<'_> {
+    /// Row ranges of `[lo, hi)` written by `as_of`, on the raw shape:
+    /// the mixed case only, as for the dictionary. With no block bounds
+    /// every row of the range is read; each read counts as a row tested.
+    /// Rows past the column's end are not written, as on the dictionary.
+    pub(crate) fn believed_ranges_raw(
+        &self,
+        as_of: i64,
+        rows: usize,
+        lo: usize,
+        hi: usize,
+    ) -> Vec<(usize, usize)> {
+        let Shape::Raw(col) = self.shape else {
+            return Vec::new();
+        };
+        let hi = hi.min(rows).min(col.len());
+        if lo >= hi {
+            return Vec::new();
+        }
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut run: Option<usize> = None;
+        for (r, &t) in col.iter().enumerate().take(hi).skip(lo) {
+            match (t <= as_of, run) {
+                (true, None) => run = Some(r),
+                (false, Some(s)) => {
+                    out.push((s, r));
+                    run = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(s) = run {
+            out.push((s, hi));
+        }
+        crate::vistouch::rows(hi - lo);
         out
     }
 }

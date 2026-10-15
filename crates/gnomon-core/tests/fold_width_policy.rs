@@ -441,7 +441,14 @@ fn the_estimated_table_size_bounds_the_measured_one() {
 fn a_scalar_aggregate_is_never_narrowed_by_the_budget() {
     let _serial = serial();
     let root = tmp_root("scalar");
-    let store = build(&root);
+    let mut store = build(&root);
+    // an ungrouped count is answered from range lengths and never
+    // reaches the fold; this test is about the fold's width, so it runs the
+    // row path (`GNOMON_AGG_RANGE_COUNT=0`)
+    store.set_designs(gnomon_core::designs::Designs {
+        agg_range_count: false,
+        ..gnomon_core::designs::Designs::ALL
+    });
     let req = AggregateRequest {
         dims: vec![],
         aggs: vec![Agg::Count],

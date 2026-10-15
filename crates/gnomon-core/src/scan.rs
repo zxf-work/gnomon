@@ -37,17 +37,32 @@ fn scan_threads_override(v: Option<&str>) -> Option<usize> {
 /// Worker count for the parallel scan stages.
 ///
 /// `GNOMON_SCAN_THREADS` overrides, including oversubscription past the core
-/// count, hence the 64 clamp;
-/// when unset the behavior is exactly what shipped: one worker per
-/// available core, capped at 16. Read per call, so a harness can sweep
-/// thread counts within one process against one warm store.
+/// count, hence the 64 clamp.
+/// Read per call, so a harness can sweep thread counts within one process
+/// against one warm store.
+///
+/// When unset: one worker per available core, with no fixed cap — on a
+/// 32-vCPU machine, 32 workers took `series.count` from 23.6 ms (at 16) to
+/// 21.1 ms — and the stages run on the persistent pool
+/// ([`crate::pool`]), so the width costs a wake-up rather than a spawn.
 pub(crate) fn scan_threads() -> usize {
     scan_threads_override(std::env::var("GNOMON_SCAN_THREADS").ok().as_deref())
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get().min(16))
-                .unwrap_or(1)
-        })
+        .unwrap_or_else(available_cores)
+}
+
+/// `std::thread::available_parallelism()`, read once per process.
+///
+/// On Linux it is not a cheap call: it reads the cgroup CPU quota files and
+/// the affinity mask, about 0.15 ms per call on the 32-vCPU host, and
+/// it was being paid on every scan and every aggregate. Neither the quota
+/// nor the affinity of a running engine is something it reacts to mid-life.
+pub(crate) fn available_cores() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    })
 }
 
 /// Row threshold above which a stage fans out. `GNOMON_PARALLEL_MIN_ROWS`
@@ -62,14 +77,6 @@ pub(crate) fn parallel_min_rows() -> u64 {
         .unwrap_or(crate::defaults::PARALLEL_SCAN_MIN_ROWS)
 }
 
-/// Escape hatch for the interval staircase test's A/B gate: with
-/// `GNOMON_NO_STAIRCASE=1`, `select_range` never applies
-/// the staircase prefix cut, so the row loop below it runs over exactly the
-/// rows it would have without the staircase existing at all. This isolates
-/// "the staircase changed which rows are examined" from "the staircase
-/// changed the answer" — the second must never happen, the gate needs the
-/// first measured independently. Not a production knob: no other code path
-/// reads it.
 /// Answer the window cut from the model rather than from the decoded
 /// column?
 ///
@@ -149,20 +156,16 @@ impl<'a> VtS<'a> {
     }
 }
 
-/// The interval lane's `vt_e` block prune, off.
-///
-/// `GNOMON_NO_STAIRCASE` keeps its name: it is what every ops script and the
-/// interval staircase test's escape hatch already set, and
-/// renaming an environment variable breaks callers to no purpose. The
-/// *structure* is renamed because "staircase" collides with Staircase Join
-/// (Grust et al., 2003) and because a per-block maximum used to skip
-/// blocks is small materialized aggregates (Moerkotte, 1998), not
-/// something this engine gets to name.
-pub(crate) fn staircase_disabled() -> bool {
-    std::env::var("GNOMON_NO_STAIRCASE")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-}
+// The `vt_e` block prune, off: `GNOMON_NO_STAIRCASE=1`, read at open
+// ([`crate::designs::Designs::staircase`]). With it off the planner
+// never applies the prefix cut, so the row loop runs over exactly the rows
+// it would without any staircase -- which isolates "the staircase changed
+// which rows are examined" from "the staircase changed the answer". The
+// interval staircase test sets it for its A/B comparison.
+// The *structure* is renamed because "staircase" collides with Staircase
+// Join (Grust et al., 2003) and because a per-block maximum used to skip
+// blocks is small materialized aggregates (Moerkotte, 1998), not something
+// this engine gets to name.
 
 /// The prefix of `open` whose rows fall below `lo`, clipped at `lo`.
 ///
@@ -186,9 +189,38 @@ fn open_ranges_below(open: &[(u32, u32)], lo: usize) -> &[(u32, u32)] {
 /// is something to chunk. Widths below `PARALLEL_SCAN_MIN_THREADS` never
 /// engage: t=2 lost to t=1 at both measured scales.
 pub(crate) fn parallel_gate(threads: usize, units: usize, min_units: usize, rows: u64) -> bool {
+    parallel_gate_at(threads, units, min_units, rows, parallel_min_rows())
+}
+
+/// [`parallel_gate`] with the row threshold given: the one form both the
+/// scan gate and the aggregate's own gate ([`agg_parallel_min_rows`]) use,
+/// so the width and unit terms cannot drift apart between them.
+pub(crate) fn parallel_gate_at(
+    threads: usize,
+    units: usize,
+    min_units: usize,
+    rows: u64,
+    min_rows: u64,
+) -> bool {
     threads >= crate::defaults::PARALLEL_SCAN_MIN_THREADS
         && units >= min_units
-        && rows >= parallel_min_rows()
+        && rows >= min_rows
+}
+
+/// Parse a row-threshold override: a non-negative integer, or unset.
+/// Unparseable values are treated as unset — a measurement knob must never
+/// make reads fail.
+fn min_rows_override(v: Option<&str>) -> Option<u64> {
+    v.and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// The grouped aggregate's own row threshold:
+/// [`crate::defaults::AGG_PARALLEL_MIN_ROWS`], or
+/// `GNOMON_AGG_PARALLEL_MIN_ROWS` for a measurement sweep. Read per call, like
+/// `GNOMON_PARALLEL_MIN_ROWS`, so a sweep can run in one process.
+pub(crate) fn agg_parallel_min_rows() -> u64 {
+    min_rows_override(std::env::var("GNOMON_AGG_PARALLEL_MIN_ROWS").ok().as_deref())
+        .unwrap_or(crate::defaults::AGG_PARALLEL_MIN_ROWS)
 }
 
 use crate::derive::Id96;
@@ -333,6 +365,45 @@ pub struct ScanStats {
     /// Blocks in interval-lane segments that survived `prunes` and carried a
     /// staircase, i.e. the denominator `blocks_skipped` is a fraction of.
     pub blocks_considered: u64,
+    /// The same two counters for the staircase **derived at
+    /// open** on event-lane segments that store `vt_e`. Kept apart so that
+    /// `blocks_skipped`/`blocks_considered` keep meaning the written
+    /// interval-lane structure, which the lane-routing tests read.
+    pub derived_blocks_skipped: u64,
+    pub derived_blocks_considered: u64,
+    /// Adjacency posting rows a filtered scan walked: the slice lengths
+    /// of the filter's ids in the segments whose rows came from postings
+    /// (fix B). Zero when no segment's did.
+    pub adj_rows_walked: u64,
+    /// Segments whose rows came from adjacency postings.
+    pub adj_segments: usize,
+}
+
+/// Where a filtered scan gets one segment's rows incident to
+/// the request's ids: the segment's adjacency index, or with the index off
+/// (`GNOMON_TCSR=scan`) one scan of its endpoint columns. The store provides
+/// it ([`crate::store::NativeStore::scan_edges`]); a bare scan has none.
+pub trait PostingsSource: Sync {
+    /// Rows of target `idx` whose `src_id` -- and, unless `src_only`, whose
+    /// `dst_id` -- is in `ids`, ascending and deduplicated. `None` when the
+    /// posting rows are not fewer than `budget`, the rows the scan would
+    /// examine in that segment: then the scan is no dearer, and runs.
+    fn postings(
+        &self,
+        idx: usize,
+        ids: &[u32],
+        src_only: bool,
+        budget: usize,
+    ) -> Result<Option<Postings>>;
+}
+
+/// One segment's rows from [`PostingsSource::postings`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Postings {
+    /// ascending, deduplicated row ids
+    pub rows: Vec<u32>,
+    /// posting rows walked to find them (before deduplication)
+    pub walked: u64,
 }
 
 /// Wall time of each scan stage, in nanoseconds.
@@ -402,6 +473,17 @@ pub struct ScanTarget<'a, S: SegmentSource> {
 pub struct ScanSet<'a, S: SegmentSource> {
     targets: Vec<ScanTarget<'a, S>>,
     closes: std::sync::Arc<CloseIndex>,
+    /// The designs the owning handle runs with. Every production
+    /// constructor passes the handle's ([`ScanSet::with_designs`]); a bare
+    /// scan runs every design.
+    designs: crate::designs::Designs,
+    /// Adjacency postings for a filtered scan, when the store attached
+    /// them ([`ScanSet::with_postings`]).
+    postings: Option<&'a dyn PostingsSource>,
+    /// The row threshold of the select's row loop (stage R) when
+    /// the caller has its own ([`ScanSet::with_row_loop_min_rows`]); `None`
+    /// is the scan gate, [`parallel_min_rows`].
+    row_loop_min_rows: Option<u64>,
 }
 
 impl<'a, S: SegmentSource> ScanSet<'a, S> {
@@ -409,7 +491,21 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         Self {
             targets,
             closes: std::sync::Arc::default(),
+            designs: crate::designs::Designs::ALL,
+            postings: None,
+            row_loop_min_rows: None,
         }
+    }
+
+    /// The segment behind a plan's `idx` (the range consumers read
+    /// their own columns from it).
+    pub(crate) fn segment(&self, idx: usize) -> &'a Segment<S> {
+        self.targets[idx].segment
+    }
+
+    /// How many segments this scan was built over.
+    pub(crate) fn n_targets(&self) -> usize {
+        self.targets.len()
     }
 
     /// For callers with no close runs — segment ids are positional.
@@ -431,6 +527,33 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
     /// scan sees every stored row as still believed.
     pub fn with_closes(mut self, closes: std::sync::Arc<CloseIndex>) -> Self {
         self.closes = closes;
+        self
+    }
+
+    /// Run this scan with the owning handle's designs.
+    pub fn with_designs(mut self, designs: crate::designs::Designs) -> Self {
+        self.designs = designs;
+        self
+    }
+
+    /// The designs this scan runs with.
+    pub fn designs(&self) -> crate::designs::Designs {
+        self.designs
+    }
+
+    /// Answer an incidence-filtered request from adjacency
+    /// postings wherever they name fewer rows than the scan would examine.
+    pub fn with_postings(mut self, postings: &'a dyn PostingsSource) -> Self {
+        self.postings = Some(postings);
+        self
+    }
+
+    /// Gate this scan's row loop (stage R of [`ScanSet::select_units`]) at
+    /// `min_rows` examined rows instead of the scan gate. The
+    /// grouped aggregate passes its own threshold here; its planner (stage
+    /// P) keeps the scan gate, and so does every other scan.
+    pub fn with_row_loop_min_rows(mut self, min_rows: u64) -> Self {
+        self.row_loop_min_rows = Some(min_rows);
         self
     }
 
@@ -518,6 +641,95 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         self.select_units_inner(req, Some(threads), Some(rows_per_unit.max(1)))
     }
 
+    /// Stage P of the scan, on its own: every segment's [`SegPlan`] — the
+    /// believed, window-clipped row ranges and the column handles the row
+    /// loop would read — in segment order. Gated and fanned out exactly as
+    /// [`ScanSet::select_units`] fans it out; it is a function of its
+    /// own so the range-count aggregate can consume the ranges
+    /// without ever building a selection vector.
+    fn plan_all(
+        &self,
+        req: &ScanRequest,
+        threads: usize,
+        candidate_rows: u64,
+    ) -> Result<(Vec<SegPlan<'a>>, ScanStats)> {
+        Ok(if self.postings.is_none()
+            && parallel_gate(threads, self.targets.len(), 8, candidate_rows)
+        {
+                let width = threads.min(self.targets.len());
+                let mut order: Vec<usize> = (0..self.targets.len()).collect();
+                order.sort_by(|&a, &b| {
+                    self.targets[b]
+                        .segment
+                        .rows()
+                        .cmp(&self.targets[a].segment.rows())
+                        .then(a.cmp(&b))
+                });
+                let next = std::sync::atomic::AtomicUsize::new(0);
+                let parts: Vec<Result<(Vec<SegPlan<'a>>, ScanStats)>> =
+                    crate::pool::run(width, |_| {
+                                    let t_worker = std::time::Instant::now();
+                                    let mut ps = Vec::new();
+                                    let mut st = ScanStats::default();
+                                    loop {
+                                        let k = next
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        let Some(&i) = order.get(k) else { break };
+                                        let (p, one) = self.plan_range(req, i, i + 1)?;
+                                        st.segments_total += one.segments_total;
+                                        st.segments_pruned += one.segments_pruned;
+                                        st.blocks_skipped += one.blocks_skipped;
+                                        st.blocks_considered += one.blocks_considered;
+                                        st.derived_blocks_skipped += one.derived_blocks_skipped;
+                                        st.derived_blocks_considered += one.derived_blocks_considered;
+                                        st.adj_rows_walked += one.adj_rows_walked;
+                                        st.adj_segments += one.adj_segments;
+                                        ps.extend(p);
+                                    }
+                                    crate::phase::add(
+                                        crate::phase::Phase::SelPlanBusy,
+                                        t_worker.elapsed().as_nanos() as u64,
+                                    );
+                                    Ok((ps, st))
+                    });
+                let mut plans: Vec<SegPlan<'a>> = Vec::new();
+                let mut stats = ScanStats::default();
+                for part in parts {
+                    let (p, st) = part?;
+                    plans.extend(p);
+                    stats.segments_total += st.segments_total;
+                    stats.segments_pruned += st.segments_pruned;
+                    stats.blocks_skipped += st.blocks_skipped;
+                    stats.blocks_considered += st.blocks_considered;
+                    stats.derived_blocks_skipped += st.derived_blocks_skipped;
+                    stats.derived_blocks_considered += st.derived_blocks_considered;
+                    stats.adj_rows_walked += st.adj_rows_walked;
+                    stats.adj_segments += st.adj_segments;
+                }
+                // segment order, whatever order the workers claimed them in
+                plans.sort_by_key(|p| p.idx);
+                (plans, stats)
+            } else {
+                let t_worker = std::time::Instant::now();
+                let planned = self.plan_range(req, 0, self.targets.len())?;
+                crate::phase::add(
+                    crate::phase::Phase::SelPlanBusy,
+                    t_worker.elapsed().as_nanos() as u64,
+                );
+                planned
+            })
+    }
+
+    /// The believed, window-clipped row ranges of every planned segment:
+    /// [`ScanSet::select_units`]' stage P, without stage R. A caller that
+    /// can answer from range lengths — a count — never pays for the row loop
+    /// or the selection vectors. Stats are the planner's (no rows examined).
+    pub(crate) fn plan_believed(&self, req: &ScanRequest) -> Result<(Vec<SegPlan<'a>>, ScanStats)> {
+        let threads = scan_threads();
+        let candidate_rows: u64 = self.targets.iter().map(|t| t.segment.rows() as u64).sum();
+        self.plan_all(req, threads, candidate_rows)
+    }
+
     fn select_units_inner(
         &self,
         req: &ScanRequest,
@@ -544,73 +756,14 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         //
         // Gated the same way the select stage already was, because the unit
         // being fanned out over here is still the segment.
-        let (mut plans, mut stats) =
-            if parallel_gate(threads, self.targets.len(), 8, candidate_rows) {
-                let width = threads.min(self.targets.len());
-                let mut order: Vec<usize> = (0..self.targets.len()).collect();
-                order.sort_by(|&a, &b| {
-                    self.targets[b]
-                        .segment
-                        .rows()
-                        .cmp(&self.targets[a].segment.rows())
-                        .then(a.cmp(&b))
-                });
-                let next = std::sync::atomic::AtomicUsize::new(0);
-                let parts: Vec<Result<(Vec<SegPlan<'a>>, ScanStats)>> =
-                    std::thread::scope(|scope| {
-                        let handles: Vec<_> = (0..width)
-                            .map(|_| {
-                                let (order, next) = (&order, &next);
-                                scope.spawn(move || {
-                                    let t_worker = std::time::Instant::now();
-                                    let mut ps = Vec::new();
-                                    let mut st = ScanStats::default();
-                                    loop {
-                                        let k = next
-                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                        let Some(&i) = order.get(k) else { break };
-                                        let (p, one) = self.plan_range(req, i, i + 1)?;
-                                        st.segments_total += one.segments_total;
-                                        st.segments_pruned += one.segments_pruned;
-                                        st.blocks_skipped += one.blocks_skipped;
-                                        st.blocks_considered += one.blocks_considered;
-                                        ps.extend(p);
-                                    }
-                                    crate::phase::add(
-                                        crate::phase::Phase::SelPlanBusy,
-                                        t_worker.elapsed().as_nanos() as u64,
-                                    );
-                                    Ok((ps, st))
-                                })
-                            })
-                            .collect();
-                        handles
-                            .into_iter()
-                            .map(|h| h.join().expect("scan planner panicked"))
-                            .collect()
-                    });
-                let mut plans: Vec<SegPlan<'a>> = Vec::new();
-                let mut stats = ScanStats::default();
-                for part in parts {
-                    let (p, st) = part?;
-                    plans.extend(p);
-                    stats.segments_total += st.segments_total;
-                    stats.segments_pruned += st.segments_pruned;
-                    stats.blocks_skipped += st.blocks_skipped;
-                    stats.blocks_considered += st.blocks_considered;
-                }
-                // segment order, whatever order the workers claimed them in
-                plans.sort_by_key(|p| p.idx);
-                (plans, stats)
-            } else {
-                let t_worker = std::time::Instant::now();
-                let planned = self.plan_range(req, 0, self.targets.len())?;
-                crate::phase::add(
-                    crate::phase::Phase::SelPlanBusy,
-                    t_worker.elapsed().as_nanos() as u64,
-                );
-                planned
-            };
+        //
+        // Except a scan with adjacency postings attached (an incidence
+        // filter over a few nodes). Its per-segment plan is the same
+        // preparation plus a few slice lookups, so `candidate_rows` (every
+        // stored row) says nothing about its work, and spawning the planner's
+        // threads cost more than the plan: 0.6 ms of a 0.65 ms scan on the
+        // 10M store, against 0.05 ms planned on this thread.
+        let (mut plans, mut stats) = self.plan_all(req, threads, candidate_rows)?;
 
         // ---- cut the units -----------------------------------------------
         let examined: usize = plans.iter().map(|p| p.rows).sum();
@@ -632,7 +785,13 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         let touching = req.touching_ids.as_ref().map(|ids| IdSet::new(ids));
         let parallel = match force_threads {
             Some(w) => w > 1 && units.len() > 1,
-            None => parallel_gate(threads, units.len(), 8, examined as u64),
+            None => parallel_gate_at(
+                threads,
+                units.len(),
+                8,
+                examined as u64,
+                self.row_loop_min_rows.unwrap_or_else(parallel_min_rows),
+            ),
         };
         let mut out: Vec<(usize, Selection)> = Vec::with_capacity(units.len());
         if parallel {
@@ -646,12 +805,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             order.sort_by(|&a, &b| units[b].rows.cmp(&units[a].rows).then(a.cmp(&b)));
             let next = std::sync::atomic::AtomicUsize::new(0);
             let parts: Vec<Result<UnitPart>> =
-                std::thread::scope(|scope| {
-                    let handles: Vec<_> = (0..width)
-                        .map(|_| {
-                            let (order, next, units, plans, touching) =
-                                (&order, &next, &units, &plans, &touching);
-                            scope.spawn(move || {
+                crate::pool::run(width, |_| {
                                 let t_worker = std::time::Instant::now();
                                 let mut sels = Vec::new();
                                 let mut st = ScanStats::default();
@@ -665,7 +819,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                                         req,
                                         p,
                                         &p.ranges[unit.lo..unit.hi],
-                                        touching,
+                                        &touching,
                                     );
                                     st.rows_examined += examined;
                                     if !rows.is_empty() {
@@ -680,13 +834,6 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                                 );
                                 crate::phase::add(crate::phase::Phase::SelWorkers, 1);
                                 Ok((sels, st))
-                            })
-                        })
-                        .collect();
-                    handles
-                        .into_iter()
-                        .map(|h| h.join().expect("scan worker panicked"))
-                        .collect()
                 });
             for part in parts {
                 let (sels, st) = part?;
@@ -744,13 +891,15 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         let mut out: Vec<SegPlan<'a>> = Vec::new();
         let as_of = clamp_tt(req.as_of_tt);
         let has_touching = req.touching_ids.is_some();
-        // read once per range dispatch, not per segment (the staircase escape hatch)
-        let staircase_off = staircase_disabled();
+        // the handle's design, read at open (`GNOMON_NO_STAIRCASE=1`)
+        let staircase_on = self.designs.staircase;
 
         for (idx, target) in self.targets.iter().enumerate().take(hi_idx).skip(lo_idx) {
             let seg: &'a Segment<S> = target.segment;
-            if self.prunes(seg, req) {
+            // `GNOMON_SEGMENT_PRUNE=0` plans every segment instead
+            if self.designs.segment_prune && self.prunes(seg, req) {
                 stats.segments_pruned += 1;
+                crate::vistouch::pruned(1);
                 continue;
             }
             let t_cols = std::time::Instant::now();
@@ -789,21 +938,30 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // known. Before that split, a running maximum being a prefix
             // aggregate meant one open-ended row anywhere ended the
             // structure's usefulness for the whole rest of the segment.
-            let has_vt_e_blocks = !staircase_off && !h.block_vt_e_running_max.is_empty();
-            if has_vt_e_blocks {
-                stats.blocks_considered += h.block_vt_e_running_max.len() as u64;
+            //
+            // The structure is the header's on an interval-lane
+            // segment and the one derived at open on an event-lane segment
+            // that stores `vt_e` -- the same running maximum and open-row
+            // ranges either way ([`Segment::vt_e_staircase`]); the planner
+            // was already lane-agnostic, it only lacked the structure.
+            let stair = if staircase_on { seg.vt_e_staircase() } else { None };
+            if let Some(st) = &stair {
+                if st.derived {
+                    stats.derived_blocks_considered += st.running_max.len() as u64;
+                } else {
+                    stats.blocks_considered += st.running_max.len() as u64;
+                }
             }
-            let lo = match req.vt_min {
-                Some(t) if h.vt_e_elided => vt_s.partition_point_lt(t),
-                Some(t) if has_vt_e_blocks => {
-                    let block_rows = if h.vt_e_block_rows > 0 {
-                        h.vt_e_block_rows
+            let lo = match (req.vt_min, &stair) {
+                (Some(t), _) if h.vt_e_elided => vt_s.partition_point_lt(t),
+                (Some(t), Some(st)) => {
+                    let b = st.running_max.partition_point(|&m| m <= t);
+                    if st.derived {
+                        stats.derived_blocks_skipped += b as u64;
                     } else {
-                        h.block_rows
-                    } as usize;
-                    let b = h.block_vt_e_running_max.partition_point(|&m| m <= t);
-                    stats.blocks_skipped += b as u64;
-                    b.saturating_mul(block_rows).min(vt_s.len())
+                        stats.blocks_skipped += b as u64;
+                    }
+                    b.saturating_mul(st.block_rows).min(vt_s.len())
                 }
                 _ => 0,
             };
@@ -811,7 +969,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // `vt_e` is the sentinel, so they overlap every window their
             // `vt_s` reaches, and the cut never spoke for them.
             let open_below: &[(u32, u32)] = if lo > 0 {
-                open_ranges_below(&h.open_rows, lo)
+                open_ranges_below(stair.as_ref().map_or(&h.open_rows[..], |st| st.open_rows), lo)
             } else {
                 &[]
             };
@@ -857,13 +1015,18 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // the whole segment's scan from a range extend into a row loop.
             let n = vt_s.len();
             // a whole-extent request never builds the domain at all
-            let domain: Option<Vec<(usize, usize)>> = if open_below.is_empty() && is_whole(lo, hi, n) {
+            // `GNOMON_WINDOW_FIRST=0` never builds the domain either: the
+            // whole-segment path
+            let domain: Option<Vec<(usize, usize)>> = if !self.designs.window_first
+                || (open_below.is_empty() && is_whole(lo, hi, n))
+            {
                 None
             } else {
                 let d = request_domain(open_below, lo, hi);
-                window_first(&d, n).then_some(d)
+                // the per-row test always works on the request's rows
+                (!self.designs.range_visibility || window_first(&d, n)).then_some(d)
             };
-            let view = if domain.is_some() {
+            let view = if domain.is_some() || !self.designs.range_visibility {
                 crate::visibility::CloseView::None
             } else {
                 crate::visibility::close_view(seg.sidecar(), &self.closes, target.id)
@@ -888,7 +1051,26 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // the request's domain it costs what the domain holds.
             let t_closes = std::time::Instant::now();
             let tt = seg.tt_s_view()?;
-            let (clipped, rows) = if let Some(domain) = &domain {
+            let (clipped, rows) = if let (Some(domain), false) =
+                (&domain, self.designs.range_visibility)
+            {
+                // `GNOMON_RANGE_VISIBILITY=0`: every row of the request's
+                // domain tested on its own; the output is the same clipped,
+                // coalesced list the range path builds
+                let clipped = crate::visibility::believed_ranges_per_row(
+                    &tt,
+                    seg.sidecar(),
+                    &self.closes,
+                    target.id,
+                    as_of,
+                    domain,
+                    n,
+                    crate::visibility::RowBelief::Current,
+                )?;
+                crate::phase::since(crate::phase::Phase::SelCloses, t_closes);
+                let rows = clipped.iter().map(|(a, b)| b - a).sum();
+                (clipped, rows)
+            } else if let Some(domain) = &domain {
                 let mut clipped: Vec<(usize, usize)> = Vec::new();
                 let mut rows = 0usize;
                 for &(a, b) in domain {
@@ -915,7 +1097,22 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                 crate::phase::since(crate::phase::Phase::SelCloses, t_closes);
                 (clipped, rows)
             } else {
-                let ranges = believed_ranges_closed(&tt, seg.tt_s_bounds(), as_of, n, &view);
+                let ranges = if self.designs.range_visibility {
+                    believed_ranges_closed(&tt, seg.tt_s_bounds(), as_of, n, &view)
+                } else {
+                    // a whole-extent request, or `GNOMON_WINDOW_FIRST=0`:
+                    // every row of the segment, then the same clip
+                    crate::visibility::believed_ranges_per_row(
+                        &tt,
+                        seg.sidecar(),
+                        &self.closes,
+                        target.id,
+                        as_of,
+                        &[(0, n)],
+                        n,
+                        crate::visibility::RowBelief::Current,
+                    )?
+                };
                 crate::phase::since(crate::phase::Phase::SelCloses, t_closes);
 
                 // The window cut is applied here, once, so a unit's ranges
@@ -953,6 +1150,31 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                     push(a, b, &mut clipped);
                 }
                 (clipped, rows)
+            };
+            if rows == 0 {
+                continue;
+            }
+            // An incidence filter over a few nodes. The rows the
+            // filter can match are the filter's adjacency postings; where
+            // they are fewer than the `rows` above, the plan keeps only the
+            // posting rows inside those ranges, so the row test below sees
+            // them and nothing else. Every test still runs on every row it
+            // sees (valid time, relation, incidence): the postings only
+            // decide which rows are looked at, never which are selected.
+            let (clipped, rows) = match (self.postings, req.touching_ids.as_deref()) {
+                (Some(src), Some(ids)) => {
+                    match src.postings(idx, ids, req.touching_both, rows)? {
+                        Some(p) => {
+                            stats.adj_rows_walked += p.walked;
+                            stats.adj_segments += 1;
+                            crate::phase::add(crate::phase::Phase::SelAdjRows, p.walked);
+                            crate::phase::add(crate::phase::Phase::SelAdjSegments, 1);
+                            intersect_rows(&p.rows, &clipped)
+                        }
+                        None => (clipped, rows),
+                    }
+                }
+                _ => (clipped, rows),
             };
             if rows == 0 {
                 continue;
@@ -1300,19 +1522,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                 Ok(part)
             };
             let parts: Vec<Result<EdgeColumns>> = if parallel {
-                std::thread::scope(|scope| {
-                    let handles: Vec<_> = ranges
-                        .iter()
-                        .map(|range| {
-                            let (sels, probe) = (&selections, &probe);
-                            scope.spawn(move || run(range, sels, probe))
-                        })
-                        .collect();
-                    handles
-                        .into_iter()
-                        .map(|h| h.join().expect("materialize worker panicked"))
-                        .collect()
-                })
+                crate::pool::run(ranges.len(), |i| run(&ranges[i], &selections, &probe))
             } else {
                 ranges.iter().map(|r| run(r, &selections, &probe)).collect()
             };
@@ -1393,20 +1603,20 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
 /// bounding. `ranges` is already cut to the window's `[lo, hi)` (it is
 /// *computed* for those rows rather than cut afterwards), so a unit is
 /// a contiguous slice of it and the row loop clips nothing.
-struct SegPlan<'a> {
+pub(crate) struct SegPlan<'a> {
     /// index into `ScanSet::targets` — the `Selection::segment` this yields
-    idx: usize,
-    vt_e: Option<&'a [i64]>,
-    rel_codes: Option<&'a [u16]>,
+    pub(crate) idx: usize,
+    pub(crate) vt_e: Option<&'a [i64]>,
+    pub(crate) rel_codes: Option<&'a [u16]>,
     src: Option<&'a [u32]>,
     dst: Option<&'a [u32]>,
-    rel_allowed: Option<Vec<bool>>,
+    pub(crate) rel_allowed: Option<Vec<bool>>,
     needs_row_test: bool,
     /// ascending, disjoint, window-clipped, and (after `cut_units`) split so
     /// that no range straddles a unit boundary
-    ranges: Vec<(usize, usize)>,
+    pub(crate) ranges: Vec<(usize, usize)>,
     /// rows in `ranges`
-    rows: usize,
+    pub(crate) rows: usize,
 }
 
 /// One scan worker's claimed units: the selections they produced, tagged
@@ -1676,9 +1886,13 @@ fn concat_parts(
         ));
     }
     if parallel {
-        std::thread::scope(|scope| {
-            for (part, dest) in jobs {
-                scope.spawn(move || dest.fill(part));
+        // Each job is moved out exactly once, by the index that owns it.
+        let jobs: Vec<std::sync::Mutex<Option<(EdgeColumns, Dest<'_>)>>> =
+            jobs.into_iter().map(|j| std::sync::Mutex::new(Some(j))).collect();
+        crate::pool::run(jobs.len(), |i| {
+            let job = jobs[i].lock().unwrap_or_else(|e| e.into_inner()).take();
+            if let Some((part, dest)) = job {
+                dest.fill(part);
             }
         });
     } else {
@@ -1797,6 +2011,17 @@ pub(crate) fn believed_ranges(
         }
         return tt.believed_ranges_dict(as_of, rows);
     }
+    // a raw column decides the extremes from the same bounds and
+    // reads every row otherwise
+    if tt.is_raw() {
+        if tt_min > as_of {
+            return Vec::new();
+        }
+        if tt_max <= as_of {
+            return if rows > 0 { vec![(0, rows)] } else { Vec::new() };
+        }
+        return tt.believed_ranges_raw(as_of, rows, 0, rows);
+    }
     let runs = tt.runs();
     let Some(&(first, _)) = runs.first() else {
         return Vec::new();
@@ -1851,6 +2076,36 @@ const WINDOW_FIRST_MAX_RANGES: usize = 64;
 /// the window cut (each clipped below `min(lo, hi)`, exactly as the planner's
 /// clip loop clips them) and then `[lo, hi)`. Ascending and disjoint; two
 /// entries can abut.
+/// The posting rows (ascending) that fall inside the planned ranges
+/// (ascending, disjoint), as coalesced ranges, and their count. One merge
+/// pass over both lists.
+pub(crate) fn intersect_rows(
+    rows: &[u32],
+    ranges: &[(usize, usize)],
+) -> (Vec<(usize, usize)>, usize) {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut n = 0usize;
+    let mut k = 0usize;
+    for &r in rows {
+        let r = r as usize;
+        while k < ranges.len() && ranges[k].1 <= r {
+            k += 1;
+        }
+        if k == ranges.len() {
+            break;
+        }
+        if r < ranges[k].0 {
+            continue;
+        }
+        n += 1;
+        match out.last_mut() {
+            Some(last) if last.1 == r => last.1 = r + 1,
+            _ => out.push((r, r + 1)),
+        }
+    }
+    (out, n)
+}
+
 fn request_domain(open_below: &[(u32, u32)], lo: usize, hi: usize) -> Vec<(usize, usize)> {
     let below = lo.min(hi);
     let mut d: Vec<(usize, usize)> = Vec::with_capacity(open_below.len() + 1);
@@ -1924,6 +2179,15 @@ pub(crate) fn believed_ranges_in(
             return vec![(lo, hi)];
         }
         return tt.believed_ranges_dict_in(as_of, rows, lo, hi);
+    }
+    if tt.is_raw() {
+        if tt_min > as_of {
+            return Vec::new();
+        }
+        if tt_max <= as_of {
+            return vec![(lo, hi)];
+        }
+        return tt.believed_ranges_raw(as_of, rows, lo, hi);
     }
     let runs = tt.runs();
     let Some(&(first, _)) = runs.first() else {
@@ -2888,6 +3152,70 @@ mod tests {
         }
     }
 
+    /// An event-lane segment that stores `vt_e`, with the
+    /// staircase derived at open. For a sweep of windows the derived cut
+    /// lets through exactly `expected()`'s rows -- the brute per-row filter
+    /// -- and the same rows as the switch-off arm, never examines more rows
+    /// than it, and does skip blocks. Open-ended rows below the cut come
+    /// back through the derived open-row ranges.
+    #[test]
+    fn derived_event_lane_staircase_is_only_a_bound() {
+        let dir = tmp("derived-staircase-scan");
+        let mut rows: Vec<EdgeRow> = (0..601u32)
+            .map(|i| edge(1_000 + i as i64 * 3, i, 10, "SENT", i % 11, (i + 5) % 11))
+            .collect();
+        rows.sort_by_key(|r| r.sort_key());
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.vt_e = match i % 41 {
+                0 => crate::OPEN_END,
+                k if k % 5 == 0 => r.vt_s + 900,
+                _ => r.vt_s + 7,
+            };
+        }
+        let path = dir.join("0.tgs");
+        write_edge_segment(&path, &rows, &SegmentSpec { lane: Lane::Event, ..Default::default() }).unwrap();
+        let mut seg = Segment::open(&path, MemorySource::load(&path).unwrap(), true).unwrap();
+        assert!(!seg.header().vt_e_elided && seg.header().block_vt_e_running_max.is_empty());
+        assert!(seg.derive_vt_e_staircase(16).unwrap(), "fixture-is-real: one is derived");
+        let rows_of = |sel: &[Selection]| -> Vec<(i64, Id96)> {
+            let mut v: Vec<(i64, Id96)> = sel
+                .iter()
+                .flat_map(|s| {
+                    s.rows.iter().map(|&r| {
+                        (seg.i64_column("vt_s").unwrap()[r as usize], seg.vid_at(r as usize).unwrap())
+                    })
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let on = ScanSet::from_pairs(vec![(&seg, Lane::Event)]);
+        let off = ScanSet::from_pairs(vec![(&seg, Lane::Event)]).with_designs(crate::designs::Designs {
+            staircase: false,
+            ..crate::designs::Designs::ALL
+        });
+        let mut skipped_somewhere = false;
+        for (vt_min, vt_max) in [(0i64, i64::MAX), (1_500, 1_600), (2_000, 2_001), (2_500, 2_800), (2_799, 2_801), (3_000, i64::MAX)] {
+            let req = ScanRequest { vt_min: Some(vt_min), vt_max: Some(vt_max), ..ScanRequest::current() };
+            let (s_on, st_on) = on.select(&req).unwrap();
+            let (s_off, st_off) = off.select(&req).unwrap();
+            assert_eq!(rows_of(&s_on), expected(&rows, &req), "[{vt_min}, {vt_max})");
+            assert_eq!(rows_of(&s_on), rows_of(&s_off), "[{vt_min}, {vt_max})");
+            assert!(st_on.rows_examined <= st_off.rows_examined, "[{vt_min}, {vt_max})");
+            assert_eq!(
+                (st_off.derived_blocks_considered, st_off.derived_blocks_skipped),
+                (0, 0),
+                "off consults nothing"
+            );
+            assert!(st_on.derived_blocks_considered > 0, "on consults the derived staircase");
+            // the written-staircase counters keep meaning the interval lane
+            assert_eq!((st_on.blocks_considered, st_on.blocks_skipped), (0, 0));
+            skipped_somewhere |=
+                st_on.derived_blocks_skipped > 0 && st_on.rows_examined < st_off.rows_examined;
+        }
+        assert!(skipped_somewhere, "fixture-is-real: the derived cut must actually cut");
+    }
+
     #[test]
     fn as_of_tt_hides_later_batches() {
         let f = Fixture::build("asof");
@@ -3188,6 +3516,29 @@ mod tests {
         // the materialize form: clusters >= 4
         assert!(parallel_gate(16, 4, 4, ROWS));
         assert!(!parallel_gate(16, 3, 4, ROWS));
+    }
+
+    /// The aggregate's own gate engages a 1M-row fold that the
+    /// scan gate keeps serial, and keeps the width and unit terms exactly.
+    #[test]
+    fn the_aggregate_gate_engages_at_one_million_rows_and_the_scan_gate_does_not() {
+        const AGG: u64 = crate::defaults::AGG_PARALLEL_MIN_ROWS;
+        const SCAN: u64 = crate::defaults::PARALLEL_SCAN_MIN_ROWS;
+        const { assert!(AGG < 1_000_000 && 1_000_000 < SCAN, "the gap the aggregate threshold exists for") };
+        assert!(parallel_gate_at(32, 16, 2, 1_000_000, AGG));
+        assert!(!parallel_gate_at(32, 16, 2, 1_000_000, SCAN));
+        assert!(!parallel_gate_at(32, 16, 2, AGG - 1, AGG));
+        assert!(parallel_gate_at(32, 16, 2, AGG, AGG));
+        // width and units, as for the scan gate
+        assert!(!parallel_gate_at(3, 16, 2, 1_000_000, AGG));
+        assert!(!parallel_gate_at(32, 1, 2, 1_000_000, AGG));
+        // the override parses strictly and fails open
+        assert_eq!(min_rows_override(Some(" 65536 ")), Some(65_536));
+        assert_eq!(min_rows_override(Some("0")), Some(0));
+        for bad in ["", "-1", "1e5", "lots"] {
+            assert_eq!(min_rows_override(Some(bad)), None, "{bad:?}");
+        }
+        assert_eq!(min_rows_override(None), None);
     }
 
     // ------------------------------------------------------------------ //
@@ -4108,5 +4459,17 @@ mod tests {
         assert_eq!(scan_threads_override(Some(" 8 ")), Some(8));
         assert_eq!(scan_threads_override(Some("32")), Some(32));
         assert_eq!(scan_threads_override(Some("4096")), Some(64));
+    }
+
+    /// The default width is the machine's parallelism, uncapped (an
+    /// earlier version clamped it to 16), and the probe is cached.
+    #[test]
+    fn default_width_is_every_available_core() {
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        assert_eq!(available_cores(), cores);
+        assert_eq!(available_cores(), available_cores());
+        if std::env::var("GNOMON_SCAN_THREADS").is_err() {
+            assert_eq!(scan_threads(), cores);
+        }
     }
 }

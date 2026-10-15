@@ -159,6 +159,31 @@ pub fn edge_eid_hi(buf: &mut String, src: &str, dst: &str, rel_type: &str, disc:
     u64::from_be_bytes(d[..8].try_into().expect("a sha256 digest has 32 bytes"))
 }
 
+/// `edge_eid(src, dst, rel_type, disc)` without the hex round trip.
+///
+/// The canonical JSON is built into the caller's reused `buf` exactly as
+/// [`edge_eid_hi`] builds it, and the [`Id96`] is read from the first twelve
+/// digest bytes big-endian — `hi` from bytes 0..8, `lo` from 8..12 — which is
+/// what [`Id96::from_hex`] makes of the first 24 hex characters of the
+/// digest. No `String` is allocated per call once `buf` has grown.
+pub fn edge_eid_buf(buf: &mut String, src: &str, dst: &str, rel_type: &str, disc: &str) -> Id96 {
+    buf.clear();
+    buf.push('[');
+    escape_into(src, buf);
+    buf.push(',');
+    escape_into(dst, buf);
+    buf.push(',');
+    escape_into(rel_type, buf);
+    buf.push(',');
+    escape_into(disc, buf);
+    buf.push(']');
+    let d = Sha256::digest(buf.as_bytes());
+    Id96 {
+        hi: u64::from_be_bytes(d[..8].try_into().expect("a sha256 digest has 32 bytes")),
+        lo: u32::from_be_bytes(d[8..12].try_into().expect("a sha256 digest has 32 bytes")),
+    }
+}
+
 /// Version id: `hash(identity, tt_s, vt_s)` — the refinement of the
 /// spec's `hash(eid, tt_s)`, which collides when one batch splits a version
 /// into two fragments at the same transaction time.
@@ -250,6 +275,43 @@ mod tests {
         by_id.sort();
         let by_id_hex: Vec<String> = by_id.iter().map(|i| i.to_hex()).collect();
         assert_eq!(by_hex, by_id_hex);
+    }
+
+    /// The belief diff sorts its rows on `Id96` instead of the hex string,
+    /// so the equivalence must hold on the inputs that would break a careless
+    /// comparison too: equal `hi` with `lo` deciding, top bits set (a signed
+    /// compare would invert them), and `lo` values that a sign-extending or
+    /// little-endian read would reorder.
+    #[test]
+    fn id96_ordering_equals_hex_ordering_on_adversarial_ids() {
+        let his = [0u64, 1, 0x7fff_ffff_ffff_ffff, 0x8000_0000_0000_0000, u64::MAX, 0x00ff, 0xff00];
+        let los = [0u32, 1, 0x7fff_ffff, 0x8000_0000, u32::MAX, 0x00ff, 0xff00, 0x0100];
+        let ids: Vec<Id96> = his
+            .iter()
+            .flat_map(|&hi| los.iter().map(move |&lo| Id96 { hi, lo }))
+            .collect();
+        for a in &ids {
+            for b in &ids {
+                assert_eq!(a.cmp(b), a.to_hex().cmp(&b.to_hex()), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn edge_eid_buf_equals_edge_eid() {
+        let mut buf = String::new();
+        let cases: Vec<(String, String, String, String)> = (0..300)
+            .map(|i| (format!("n{i}"), format!("m{}", i * 7 % 13), "SENT_MSG_TO".into(), format!("#{i}")))
+            .chain([
+                ("q\"t".into(), "b\\s".into(), "R".into(), "".into()),
+                ("\n\t".into(), "中文".into(), "a/b".into(), "\u{1f}".into()),
+                ("".into(), "".into(), "".into(), "".into()),
+            ])
+            .collect();
+        for (a, b, r, d) in &cases {
+            assert_eq!(edge_eid_buf(&mut buf, a, b, r, d), edge_eid(a, b, r, d), "{a:?} {b:?} {r:?} {d:?}");
+            assert_eq!(edge_eid_buf(&mut buf, a, b, r, d).hi, edge_eid_hi(&mut buf, a, b, r, d));
+        }
     }
 
     #[test]

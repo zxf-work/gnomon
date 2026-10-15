@@ -105,8 +105,8 @@ T_MAX = N_SEGMENTS * ROWS_PER_BATCH
 #: The fixed narrow window: 10 ticks at a fixed absolute offset, the same
 #: regression probe used and the same width as the `*.w10` registry
 #: queries in `scripts/eval_harness.py`.
-W10_A = 1_000
-W10_WIDTH = 10
+FIXED_WINDOW_A = 1_000
+FIXED_WINDOW_WIDTH = 10
 
 #: Starved and generous segment-cache budgets. 1 MB cannot hold this store's
 #: decoded columns; 32 GB is the campaign's own setting.
@@ -241,10 +241,10 @@ def test_fixture_is_many_segments_and_a_narrow_window_opens_one(store_root):
     )
     assert report["rows"] == T_MAX
 
-    narrow = _aggregate(adapter, W10_A, W10_A + W10_WIDTH)
+    narrow = _aggregate(adapter, FIXED_WINDOW_A, FIXED_WINDOW_A + FIXED_WINDOW_WIDTH)
     assert narrow["segments_total"] == segments
     assert narrow["segments_opened"] == 1, (
-        f"a {W10_WIDTH}-tick window falls inside one generation's disjoint "
+        f"a {FIXED_WINDOW_WIDTH}-tick window falls inside one generation's disjoint "
         f"valid-time range, so exactly one segment's manifest bounds can "
         f"intersect it; the engine opened "
         f"{narrow['segments_opened']} of {narrow['segments_total']}. "
@@ -267,8 +267,8 @@ def test_pruning_does_not_change_the_answer(store_root):
     """Selectivity must be invisible in the answers, at every window and
     under either cache budget (residency never changes answers)."""
     adapter = _native_adapter(store_root)
-    windows = [(0, T_MAX), (W10_A, W10_A + W10_WIDTH), (0, ROWS_PER_BATCH),
-               (T_MAX - ROWS_PER_BATCH, T_MAX), (W10_A, W10_A + 1_000)]
+    windows = [(0, T_MAX), (FIXED_WINDOW_A, FIXED_WINDOW_A + FIXED_WINDOW_WIDTH), (0, ROWS_PER_BATCH),
+               (T_MAX - ROWS_PER_BATCH, T_MAX), (FIXED_WINDOW_A, FIXED_WINDOW_A + 1_000)]
     for t_a, t_b in windows:
         got = _aggregate(adapter, t_a, t_b)
         total = sum(int(c) for c in got["aggs"][0])
@@ -285,13 +285,13 @@ def test_pruning_does_not_change_the_answer(store_root):
 def test_answers_are_identical_under_either_cache_budget(store_root, monkeypatch, budget):
     monkeypatch.setenv("GNOMON_SEGMENT_CACHE_BYTES", budget)
     adapter = _native_adapter(store_root)
-    narrow = _answer(_aggregate(adapter, W10_A, W10_A + W10_WIDTH))
+    narrow = _answer(_aggregate(adapter, FIXED_WINDOW_A, FIXED_WINDOW_A + FIXED_WINDOW_WIDTH))
     whole = _answer(_aggregate(adapter, 0, T_MAX))
     adapter.close()
     assert narrow[0] > 0 and whole[0] > 0
     # the counts a window-bounded answer must have, from the fixture's own
     # arithmetic rather than from a second engine call
-    assert sum(int(c) for c in narrow[3][0]) == W10_WIDTH
+    assert sum(int(c) for c in narrow[3][0]) == FIXED_WINDOW_WIDTH
     assert sum(int(c) for c in whole[3][0]) == T_MAX
 
 
@@ -365,15 +365,15 @@ def test_a_ten_tick_window_costs_a_fraction_of_the_whole_extent(store_root, monk
     monkeypatch.setenv("GNOMON_SEGMENT_CACHE_BYTES", CACHE_GENEROUS)
     adapter = _native_adapter(store_root)
 
-    narrow_stats = _aggregate(adapter, W10_A, W10_A + W10_WIDTH)
+    narrow_stats = _aggregate(adapter, FIXED_WINDOW_A, FIXED_WINDOW_A + FIXED_WINDOW_WIDTH)
     whole_stats = _aggregate(adapter, 0, T_MAX)
-    narrow = _p50_ms_per_call(lambda: _aggregate(adapter, W10_A, W10_A + W10_WIDTH))
+    narrow = _p50_ms_per_call(lambda: _aggregate(adapter, FIXED_WINDOW_A, FIXED_WINDOW_A + FIXED_WINDOW_WIDTH))
     whole = _p50_ms_per_call(lambda: _aggregate(adapter, 0, T_MAX))
     adapter.close()
 
     ratio = narrow / whole
     assert ratio <= MAX_WINDOW_RATIO, (
-        f"a {W10_WIDTH}-tick window cost {ratio:.3f} of the whole "
+        f"a {FIXED_WINDOW_WIDTH}-tick window cost {ratio:.3f} of the whole "
         f"{T_MAX}-tick extent (limit {MAX_WINDOW_RATIO}): "
         f"{narrow * 1e3:.1f}us vs {whole * 1e3:.1f}us over "
         f"{whole_stats['segments_total']} segments. The window has lost its "
@@ -387,7 +387,7 @@ def test_a_ten_tick_window_costs_a_fraction_of_the_whole_extent(store_root, monk
         f"the ratio passed but the engine still opened "
         f"{narrow_stats['segments_opened']} of "
         f"{narrow_stats['segments_total']} segments for a "
-        f"{W10_WIDTH}-tick window"
+        f"{FIXED_WINDOW_WIDTH}-tick window"
     )
     assert whole_stats["segments_opened"] == whole_stats["segments_total"]
 

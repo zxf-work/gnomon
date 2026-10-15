@@ -1517,6 +1517,13 @@ def _make_record(out: Path, n_entities: int, seed: int, batch: int, compact_ever
         "record": str(record_path.relative_to(ROOT)) if _safe_relative(record_path) else str(record_path),
         "build_info": {
             "engine": _engine_build_info(),
+            # the ablation switches in force for this build; the time
+            # codec is a write-time switch, so it shapes the store itself
+            "ablation_env": {k: os.environ.get(k) for k in (
+                "GNOMON_TIME_CODEC", "GNOMON_EXISTENCE_PROBE", "GNOMON_VIDFILTER",
+                "GNOMON_RANGE_VISIBILITY", "GNOMON_WINDOW_FIRST", "GNOMON_SEGMENT_PRUNE",
+                "GNOMON_TCSR", "GNOMON_SEED_EXPANSION", "GNOMON_ADJ_FILTERED_SCAN",
+                "GNOMON_INGEST_RAW")},
             "n_entities": n_entities,
             "seed": seed,
             "batch": batch,

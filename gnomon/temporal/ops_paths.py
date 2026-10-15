@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from gnomon.core.errors import CostError, LimitError
+from gnomon.core.errors import CostError, InvalidArgError, LimitError
 from gnomon.core.model import OPEN_END
 from gnomon.storage.base import StorageAdapter
 from gnomon.temporal.algebra import (
@@ -110,6 +110,11 @@ def temporal_reachability(adapter: StorageAdapter, args: dict[str, Any]) -> dict
     delta = args["delta_max_wait"]
     sid = int(adapter.dense_ids([args["src"]])[0])
 
+    if delta is None:
+        page = _engine_reach(adapter, sid, t_a, t_b, as_of, args)
+        if page is not None:
+            return page
+
     e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t_a, vt_max=t_b,
                                columns=("src_id", "dst_id", "vt_s", "vt_e"))
     src, dst, vt_s, vt_e = e["src_id"], e["dst_id"], e["vt_s"], e["vt_e"]
@@ -143,6 +148,52 @@ def temporal_reachability(adapter: StorageAdapter, args: dict[str, Any]) -> dict
             for u, a in zip(uids, arr[reached])]
     rows.sort(key=lambda r: (r["earliest_arrival"], r["uid"]))
     return paginate(rows, args["limit"], args["cursor"])
+
+
+def _reach_kernel(adapter: StorageAdapter) -> bool:
+    """Does this adapter carry the engine's earliest-arrival search?
+
+    Only the native engine, and only with `GNOMON_REACH_KERNEL` not set to
+    `python` -- read when the handle opens and reported by `designs()`, like
+    every other design switch. The single-label case only: under
+    `delta_max_wait` a smaller arrival can disable a later edge, so the
+    multi-label search below stays the one implementation of that case.
+    """
+    designs = getattr(adapter, "designs", None)
+    if designs is None or not hasattr(adapter, "reach_earliest"):
+        return False
+    return bool(designs().get("reach_kernel", False))
+
+
+def _engine_reach(adapter: StorageAdapter, sid: int, t_a: int, t_b: int,
+                  as_of: int, args: dict[str, Any]) -> dict[str, Any] | None:
+    """The kernel's answer in `paginate`'s exact shape, or `None` to run the
+    NumPy path. The engine orders the reached nodes by `(arrival, uid)` --
+    uid by code point, which is UTF-8 byte order -- selects the requested
+    page and sorts only that, so rows (and uid strings) are built for the
+    page alone; the total comes back beside it."""
+    if not _reach_kernel(adapter):
+        return None
+    cursor, limit = args["cursor"], args["limit"]
+    try:
+        offset = int(cursor) if cursor else 0
+    except ValueError:
+        raise InvalidArgError(f"bad cursor: {cursor!r}") from None
+    if offset < 0:
+        return None     # Python slice semantics for a negative offset: leave them to paginate
+    got = adapter.reach_earliest(sid, t_a, t_b, as_of, args["direction"], offset, limit)
+    if got is None:
+        return None
+    rows = [{"uid": u, "earliest_arrival": int(a)}
+            for u, a in zip(got["uids"], got["arrival"])]
+    total = int(got["total"])
+    truncated = offset + len(rows) < total
+    return {
+        "rows": rows,
+        "rows_total": total,
+        "truncated": truncated,
+        "cursor": str(offset + len(rows)) if truncated else None,
+    }
 
 
 def _multilabel_arrivals(n: int, sid: int, t_a: int, t_b: int, delta: int,

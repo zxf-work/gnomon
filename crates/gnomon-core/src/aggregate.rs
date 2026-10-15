@@ -755,16 +755,8 @@ pub(crate) fn aggregate_partials<S: SegmentSource>(
     } else {
         Vec::new()
     };
-    let parts: Vec<Result<GroupMap>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..width)
-            .map(|w| {
-                let layout = &layout;
-                let plan = &plan;
-                let order = &order;
-                let next = &next;
-                let cols = &cols;
-                let shared = &shared;
-                scope.spawn(move || -> Result<GroupMap> {
+    let parts: Vec<Result<GroupMap>> = crate::pool::run(width, |w| -> Result<GroupMap> {
+                    let (layout, plan, cols) = (&layout, &plan, &cols);
                     let t = std::time::Instant::now();
                     let mut map = GroupMap::new();
                     loop {
@@ -805,13 +797,6 @@ pub(crate) fn aggregate_partials<S: SegmentSource>(
                         note_map_bytes(&map, layout);
                     }
                     Ok(map)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("aggregate worker panicked"))
-            .collect()
     });
     let t_merge = std::time::Instant::now();
     let mut merged = GroupMap::new();
@@ -955,6 +940,204 @@ fn finalize(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Count by time bucket from believed row ranges
+// ---------------------------------------------------------------------------
+
+/// Bucket-count arrays larger than this go to the row path: the range path
+/// holds one `u64` per bucket, and a window over a tiny stride is a group
+/// count no fold would have to materialise either.
+const RANGE_COUNT_MAX_BUCKETS: u128 = 1 << 20;
+
+/// `Some(bucket count)` when `req` is answerable from range lengths alone:
+/// one `time_bucket` dimension (or none), and only `count` aggregates. The
+/// rel-type and endpoint dimensions, `count_distinct`, and every stat need a
+/// value per row and keep the fold.
+fn range_count_buckets(req: &AggregateRequest) -> Option<usize> {
+    if req.aggs.is_empty() || !req.aggs.iter().all(|a| matches!(a, Agg::Count)) {
+        return None;
+    }
+    let stride = match req.dims.as_slice() {
+        [] => 1,
+        [Dim::TimeBucket { stride }] if *stride > 0 => *stride,
+        _ => return None,
+    };
+    // an empty window still selects (and the counter reports) the interval
+    // rows that overlap it; leave that degenerate shape to the row path
+    if req.t_b <= req.t_a {
+        return None;
+    }
+    let span = req.t_b as i128 - req.t_a as i128;
+    let n = (span + stride as i128 - 1) / stride as i128;
+    if req.dims.is_empty() {
+        return Some(1);
+    }
+    (n as u128 <= RANGE_COUNT_MAX_BUCKETS).then_some(n as usize)
+}
+
+/// Rows of the ascending, disjoint `ranges` below row `x`, with a forward
+/// cursor: successive calls must not decrease `x`.
+struct RangePrefix<'r> {
+    ranges: &'r [(usize, usize)],
+    j: usize,
+    done: usize,
+}
+
+impl<'r> RangePrefix<'r> {
+    fn new(ranges: &'r [(usize, usize)]) -> Self {
+        Self {
+            ranges,
+            j: 0,
+            done: 0,
+        }
+    }
+
+    #[inline]
+    fn below(&mut self, x: usize) -> usize {
+        while self.j < self.ranges.len() && self.ranges[self.j].1 <= x {
+            self.done += self.ranges[self.j].1 - self.ranges[self.j].0;
+            self.j += 1;
+        }
+        match self.ranges.get(self.j) {
+            Some(&(a, _)) if a < x => self.done + (x - a),
+            _ => self.done,
+        }
+    }
+}
+
+/// Events per bucket over the planned segments, and the rows the row path
+/// would have selected (the `rows_selected` counter), without a selection
+/// vector or a group table.
+///
+/// The planner's ranges are the believed rows of the window, already clipped
+/// to `vt_s < t_b` and — wherever it is exact — to `vt_e > t_a`. Rows are
+/// stored in `vt_s` order, so inside a segment bucket `k` is the row interval
+/// `[P(t_a + k·stride), P(t_a + (k+1)·stride))` with `P` a binary search of
+/// `vt_s`; its count is the length of that interval's intersection with the
+/// ranges, read off a prefix sum. Cost per segment: the buckets the
+/// segment's `vt_s` span reaches, times a binary search, plus its ranges —
+/// never its rows.
+///
+/// Exactness against the fold, which counts a selected row when `vt_s >=
+/// t_a` (an event is containment of `vt_s`; the scan's window is overlap):
+///
+/// * `vt_s >= t_a` is the suffix from `P(t_a)`, so starting the first bucket
+///   there is the fold's cut;
+/// * the scan's remaining per-row test is `vt_e > t_a`, for interval-lane
+///   rows. On every row the fold counts it holds already: `vt_e > vt_s >=
+///   t_a`, by the store's valid-interval invariant `vt_s < vt_e`
+///   (`integrity::check_rows`, finding `valid-interval-empty`). So it only
+///   decides `rows_selected` for rows below `P(t_a)`, and is applied to
+///   exactly those;
+/// * a relation filter is decided per segment: a segment whose relations are
+///   all allowed takes the range path; one with a mix is walked row by row
+///   with the scan's own tests (still no selection vector, no table).
+fn range_counts<S: SegmentSource>(
+    segments: &[&Segment<S>],
+    plans: &[crate::scan::SegPlan<'_>],
+    req: &AggregateRequest,
+    n_buckets: usize,
+) -> Result<(Vec<u64>, u64)> {
+    let stride = match req.dims.as_slice() {
+        [Dim::TimeBucket { stride }] => *stride,
+        _ => i64::MAX,
+    };
+    let (t_a, t_b) = (req.t_a, req.t_b);
+    let mut counts = vec![0u64; n_buckets];
+    let mut selected = 0u64;
+    // bucket of an in-window vt_s
+    let bucket = |v: i64| -> usize {
+        if stride == i64::MAX {
+            0
+        } else {
+            ((v as i128 - t_a as i128) / stride as i128) as usize
+        }
+    };
+    for p in plans {
+        if p.ranges.is_empty() || n_buckets == 0 {
+            continue;
+        }
+        let vt_s = segments[p.idx].i64_column("vt_s")?;
+        // the scan tests a relation only where it has both the filter and
+        // the code column (`select_rows`); so does this
+        let mixed_rel = match (&p.rel_allowed, p.rel_codes) {
+            (Some(allowed), Some(_)) => !allowed.iter().all(|&a| a),
+            _ => false,
+        };
+        if mixed_rel {
+            // the scan's own row tests, in its own order, then the fold's cut
+            let allowed = p.rel_allowed.as_ref().expect("mixed implies a filter");
+            let codes = p.rel_codes.expect("mixed implies a code column");
+            for &(a, b) in &p.ranges {
+                for i in a..b {
+                    if let Some(vt_e) = p.vt_e {
+                        if vt_e[i] <= t_a {
+                            continue;
+                        }
+                    }
+                    if !allowed.get(codes[i] as usize).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    selected += 1;
+                    if vt_s[i] >= t_a {
+                        counts[bucket(vt_s[i])] += 1;
+                    }
+                }
+            }
+            continue;
+        }
+        let lo_row = p.ranges[0].0;
+        let hi_row = p.ranges[p.ranges.len() - 1].1;
+        let span = &vt_s[lo_row..hi_row];
+        let pos = |from: usize, t: i64| -> usize {
+            from + span[from - lo_row..].partition_point(|v| *v < t)
+        };
+        let start = pos(lo_row, t_a);
+        let mut pre = RangePrefix::new(&p.ranges);
+        let below_start = pre.below(start);
+        // rows below `t_a` the scan selected: those whose vt_e passes
+        selected += match p.vt_e {
+            None => below_start as u64,
+            Some(vt_e) => {
+                let mut n = 0u64;
+                for &(a, b) in &p.ranges {
+                    if a >= start {
+                        break;
+                    }
+                    n += vt_e[a..b.min(start)].iter().filter(|&&e| e > t_a).count() as u64;
+                }
+                n
+            }
+        };
+        if start >= hi_row {
+            continue;
+        }
+        selected += (p.rows - below_start) as u64;
+        // buckets this segment's in-window rows can reach
+        let k_first = bucket(vt_s[start]);
+        let k_last = bucket(vt_s[hi_row - 1]).min(n_buckets - 1);
+        let mut at = start;
+        let mut f_at = below_start;
+        for (k, slot) in counts.iter_mut().enumerate().take(k_last + 1).skip(k_first) {
+            let end = if k + 1 >= n_buckets || stride == i64::MAX {
+                hi_row
+            } else {
+                let edge = t_a as i128 + (k as i128 + 1) * stride as i128;
+                if edge >= t_b as i128 {
+                    hi_row
+                } else {
+                    pos(at, edge as i64)
+                }
+            };
+            let f_end = pre.below(end);
+            *slot += (f_end - f_at) as u64;
+            at = end;
+            f_at = f_end;
+        }
+    }
+    Ok((counts, selected))
+}
+
 impl NativeStore {
     /// Believed node labels as disjoint valid intervals per dense id, with
     /// a sorted global label table — the label dimension's temporal join,
@@ -1064,7 +1247,9 @@ impl NativeStore {
         ] {
             for e in entries {
                 stats.segments_total += 1;
-                if crate::scan::prunes_bounds(
+                // `GNOMON_SEGMENT_PRUNE=0` opens every segment instead
+                if self.designs().segment_prune
+                    && crate::scan::prunes_bounds(
                     &crate::scan::SegBounds {
                         tt_s_min: e.tt_s_min,
                         vt_min: e.vt_min,
@@ -1074,6 +1259,7 @@ impl NativeStore {
                     &scan_req,
                 ) {
                     stats.segments_pruned += 1;
+                    crate::vistouch::pruned(1);
                     continue;
                 }
                 files.push((lane, e.file.clone()));
@@ -1118,16 +1304,15 @@ impl NativeStore {
                 id: *id,
             })
             .collect();
-        let set = ScanSet::new(targets).with_closes(self.close_index()?);
-
-        let t_select = std::time::Instant::now();
-        // Row-range units, not one per opened segment. The fold below is
-        // per row and its partial states merge commutatively, so a segment's
-        // rows may be divided across workers; what must not change is the
-        // order the units arrive in, and `select_units` returns them in
-        // `(segment, row range)` order whichever worker claimed which.
-        let (selections, _stats) = set.select_units(&scan_req)?;
-        since(Phase::AggSelectWall, t_select);
+        // The row path's select and fold are gated at the
+        // aggregate's own row threshold, read once per call so both stages
+        // agree; the count-by-bucket path below only plans, and its planner
+        // keeps the scan gate
+        let agg_min_rows = crate::scan::agg_parallel_min_rows();
+        let set = ScanSet::new(targets)
+            .with_closes(self.close_index()?)
+            .with_designs(self.designs())
+            .with_row_loop_min_rows(agg_min_rows);
 
         // global rel codes: sorted names over the target headers, so code
         // order *is* name order and no per-row string ever exists
@@ -1146,52 +1331,102 @@ impl NativeStore {
             .collect();
         since(Phase::AggRelNames, t_rel);
 
-        // same recalibrated gates as the scan stages: fan out only where the
-        // A sweep showed it pays off
-        let rows: u64 = selections.iter().map(|s| s.rows.len() as u64).sum();
-        // The same number the gate already reads, also recorded on the
-        // handle, so "rows this query walked" is a counter delta around one
-        // call rather than a re-derivation from the answer.
-        self.note_selected_rows(rows);
-        stats.rows_selected = rows;
-        let width = crate::scan::scan_threads();
-        let width = if crate::scan::parallel_gate(width, selections.len(), 2, rows) {
-            width
+        // A count by time bucket is answered from the believed
+        // row ranges' lengths and never touches a row; see `range_counts`.
+        // `GNOMON_AGG_RANGE_COUNT=0` keeps the row path (read at open).
+        let range_buckets = if self.designs().agg_range_count {
+            range_count_buckets(req)
         } else {
-            1
+            None
         };
-        // How many partial tables the fold may hold at once, from what
-        // the planner already knows — the rel table it just built, the
-        // dictionary's dense id space, the label table, and the window over
-        // the stride. The estimate is recorded beside the width it produced,
-        // and `fold_map_bytes` records what the tables actually cost, so a
-        // record says on every query whether the estimate was worth trusting.
-        let layout = AggLayout::of(&req.aggs);
-        let est_map_bytes = est_groups(
-            req,
-            rows,
-            rel_names.len(),
-            self.dict().len(),
-            labels.as_ref().map(|l| l.names.len()).unwrap_or(0),
-        )
-        .saturating_mul(group_fixed_bytes(&layout));
-        let map_cap = fold_width_cap(width, est_map_bytes);
-        crate::phase::add(Phase::FoldWidthCap, map_cap as u64);
-        crate::phase::add(Phase::FoldMapBytesEst, est_map_bytes);
-        let t_fold = std::time::Instant::now();
-        let mut map = aggregate_partials(
-            &seg_refs,
-            &selections,
-            req,
-            &global_rel,
-            labels.as_ref(),
-            // endpoint ids are dense over the dictionary, which is what
-            // makes a per-group bitset possible at all
-            DistinctPlan::for_space(self.dict().len()),
-            width,
-            map_cap,
-        )?;
-        since(Phase::AggFoldWall, t_fold);
+        let mut map = if let Some(n_buckets) = range_buckets {
+            let t_select = std::time::Instant::now();
+            let (plans, _stats) = set.plan_believed(&scan_req)?;
+            since(Phase::AggSelectWall, t_select);
+            let t_fold = std::time::Instant::now();
+            let (counts, rows) = range_counts(&seg_refs, &plans, req, n_buckets)?;
+            self.note_selected_rows(rows);
+            stats.rows_selected = rows;
+            let mut map = GroupMap::new();
+            if req.dims.is_empty() {
+                let total: u64 = counts.iter().sum();
+                if total > 0 {
+                    let mut g = GroupState::new(0, 0);
+                    g.count = total;
+                    map.insert([0, 0], g);
+                }
+            } else {
+                for (k, &c) in counts.iter().enumerate() {
+                    if c > 0 {
+                        let mut g = GroupState::new(0, 0);
+                        g.count = c;
+                        map.insert([k as i64, 0], g);
+                    }
+                }
+            }
+            crate::phase::add(Phase::AggRangeCounts, 1);
+            since(Phase::AggFoldWall, t_fold);
+            map
+        } else {
+            let t_select = std::time::Instant::now();
+            // Row-range units, not one per opened segment. The fold below is
+            // per row and its partial states merge commutatively, so a segment's
+            // rows may be divided across workers; what must not change is the
+            // order the units arrive in, and `select_units` returns them in
+            // `(segment, row range)` order whichever worker claimed which.
+            let (selections, _stats) = set.select_units(&scan_req)?;
+            since(Phase::AggSelectWall, t_select);
+
+            // the aggregate's own row threshold: the scan stages'
+            // 4M gate kept a 1M-row fold on
+            // one worker at ~29 ns/row; the width and unit terms are the
+            // scan gate's
+            let rows: u64 = selections.iter().map(|s| s.rows.len() as u64).sum();
+            // The same number the gate already reads, also recorded on the
+            // handle, so "rows this query walked" is a counter delta around one
+            // call rather than a re-derivation from the answer.
+            self.note_selected_rows(rows);
+            stats.rows_selected = rows;
+            let width = crate::scan::scan_threads();
+            let width = if crate::scan::parallel_gate_at(width, selections.len(), 2, rows, agg_min_rows) {
+                width
+            } else {
+                1
+            };
+            // How many partial tables the fold may hold at once, from what
+            // the planner already knows — the rel table it just built, the
+            // dictionary's dense id space, the label table, and the window over
+            // the stride. The estimate is recorded beside the width it produced,
+            // and `fold_map_bytes` records what the tables actually cost, so a
+            // record says on every query whether the estimate was worth trusting.
+            let layout = AggLayout::of(&req.aggs);
+            let est_map_bytes = est_groups(
+                req,
+                rows,
+                rel_names.len(),
+                self.dict().len(),
+                labels.as_ref().map(|l| l.names.len()).unwrap_or(0),
+            )
+            .saturating_mul(group_fixed_bytes(&layout));
+            let map_cap = fold_width_cap(width, est_map_bytes);
+            crate::phase::add(Phase::FoldWidthCap, map_cap as u64);
+            crate::phase::add(Phase::FoldMapBytesEst, est_map_bytes);
+            let t_fold = std::time::Instant::now();
+            let map = aggregate_partials(
+                &seg_refs,
+                &selections,
+                req,
+                &global_rel,
+                labels.as_ref(),
+                // endpoint ids are dense over the dictionary, which is what
+                // makes a per-group bitset possible at all
+                DistinctPlan::for_space(self.dict().len()),
+                width,
+                map_cap,
+            )?;
+            since(Phase::AggFoldWall, t_fold);
+            map
+        };
         // the contract's SQL scalar-aggregate shape: an ungrouped call emits
         // exactly one row even over an empty window (count 0, stats null)
         if req.dims.is_empty() && map.is_empty() {
@@ -1565,5 +1800,109 @@ mod tests {
         let q = (s.div_euclid(3)) as f64;
         let r = (s.rem_euclid(3)) as f64;
         assert_eq!(mean(s, 3), q + r / 3.0);
+    }
+
+    // -- count by time bucket from believed ranges --------------------- //
+
+    #[test]
+    fn only_counts_by_time_bucket_take_the_range_path() {
+        let r = |dims: Vec<Dim>, aggs: Vec<Agg>, t_a: i64, t_b: i64| AggregateRequest {
+            as_of_tt: OPEN_END,
+            t_a,
+            t_b,
+            rel_types: None,
+            dims,
+            aggs,
+            max_groups: 10,
+        };
+        let tb = |stride| vec![Dim::TimeBucket { stride }];
+        assert_eq!(range_count_buckets(&r(tb(10), vec![Agg::Count], 0, 100)), Some(10));
+        assert_eq!(range_count_buckets(&r(tb(10), vec![Agg::Count], 0, 101)), Some(11));
+        assert_eq!(range_count_buckets(&r(tb(7), vec![Agg::Count, Agg::Count], 5, 6)), Some(1));
+        assert_eq!(range_count_buckets(&r(vec![], vec![Agg::Count], 0, 100)), Some(1));
+        // a value per row, or a group per relation, keeps the fold
+        assert_eq!(range_count_buckets(&r(tb(10), vec![Agg::CountDistinct { dst: true }], 0, 100)), None);
+        assert_eq!(range_count_buckets(&r(tb(10), vec![Agg::Count, Agg::Min(Source::VtS)], 0, 100)), None);
+        assert_eq!(range_count_buckets(&r(vec![Dim::RelType], vec![Agg::Count], 0, 100)), None);
+        assert_eq!(
+            range_count_buckets(&r(vec![Dim::TimeBucket { stride: 10 }, Dim::RelType], vec![Agg::Count], 0, 100)),
+            None
+        );
+        assert_eq!(range_count_buckets(&r(tb(10), vec![], 0, 100)), None);
+        // degenerate shapes stay where they were
+        assert_eq!(range_count_buckets(&r(tb(0), vec![Agg::Count], 0, 100)), None);
+        assert_eq!(range_count_buckets(&r(tb(10), vec![Agg::Count], 100, 100)), None);
+        assert_eq!(range_count_buckets(&r(tb(1), vec![Agg::Count], 0, 1 << 40)), None);
+    }
+
+    /// The range count is the fold's count, bucket for bucket, and its row
+    /// counter is the scan's `rows_selected` — over interval rows straddling
+    /// `t_a`, open-ended rows, three belief instants, a relation filter that
+    /// splits segments, one that allows everything and one that allows
+    /// nothing, strides from one tick to wider than the window, and the
+    /// ungrouped form. Mutating the bucket edge, the `t_a` cut, the prefix
+    /// cursor or the below-`t_a` counter each fails here.
+    #[test]
+    fn range_counts_equal_the_fold() {
+        let f = Fixture::build("rangecount");
+        let set = ScanSet::from_pairs(f.segs.iter().map(|s| (s, Lane::Event)).collect());
+        let seg_refs: Vec<&Segment<MemorySource>> = f.segs.iter().collect();
+        let global_rel: HashMap<&str, i64> =
+            [("PAID", 0i64), ("RATED", 1), ("SENT", 2)].into_iter().collect();
+        let mut nonempty = 0;
+        for as_of in [15, 25, OPEN_END] {
+            for (t_a, t_b) in [(1_050, 1_350), (0, 5_000), (1_100, 1_101), (1_399, 1_500), (900, 1_000), (1_200, 1_230)] {
+                for rels in [
+                    None,
+                    Some(vec!["SENT".to_string()]),
+                    Some(vec!["PAID".to_string(), "RATED".to_string(), "SENT".to_string()]),
+                    Some(vec!["NONE".to_string()]),
+                ] {
+                    for dims in [
+                        vec![Dim::TimeBucket { stride: 1 }],
+                        vec![Dim::TimeBucket { stride: 7 }],
+                        vec![Dim::TimeBucket { stride: 40 }],
+                        vec![Dim::TimeBucket { stride: 100_000 }],
+                        vec![],
+                    ] {
+                        let r = AggregateRequest {
+                            as_of_tt: as_of,
+                            t_a,
+                            t_b,
+                            rel_types: rels.clone(),
+                            dims: dims.clone(),
+                            aggs: vec![Agg::Count],
+                            max_groups: 1 << 20,
+                        };
+                        let scan_req = ScanRequest {
+                            as_of_tt: as_of,
+                            vt_min: Some(t_a),
+                            vt_max: Some(t_b),
+                            rel_types: rels.clone(),
+                            ..Default::default()
+                        };
+                        let (sel, _) = set.select(&scan_req).unwrap();
+                        let scanned: u64 = sel.iter().map(|x| x.rows.len() as u64).sum();
+                        let fold = aggregate_partials(
+                            &seg_refs, &sel, &r, &global_rel, None,
+                            DistinctPlan::for_space(IDS), 1, 1,
+                        )
+                        .unwrap();
+                        let n = range_count_buckets(&r).expect("eligible");
+                        let (plans, _) = set.plan_believed(&scan_req).unwrap();
+                        let (counts, selected) = range_counts(&seg_refs, &plans, &r, n).unwrap();
+                        let ctx = format!("as_of={as_of} [{t_a},{t_b}) rels={rels:?} dims={dims:?}");
+                        assert_eq!(selected, scanned, "rows_selected: {ctx}");
+                        let mut want = vec![0u64; n];
+                        for (key, g) in &fold {
+                            want[key[0] as usize] += g.count;
+                        }
+                        assert_eq!(counts, want, "{ctx}");
+                        nonempty += usize::from(counts.iter().any(|&c| c > 0));
+                    }
+                }
+            }
+        }
+        assert!(nonempty > 100, "the probe must not be vacuous ({nonempty})");
     }
 }

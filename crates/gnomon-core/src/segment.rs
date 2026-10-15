@@ -249,6 +249,13 @@ pub struct SegmentHeader {
     /// with no open-ended rows, which is the same thing to a reader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_rows: Vec<(u32, u32)>,
+    /// `(min, max)` `tt_s` of a segment that stores `tt_s` as a raw
+    /// per-row column ([`TimeCodec::Raw`], format [`SEGMENT_FORMAT_RAW_TT`]).
+    /// `None` on every other segment, which is every segment written with
+    /// the switch unset; absent from their headers, so their bytes do not
+    /// change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tt_s_raw_bounds: Option<(i64, i64)>,
 }
 
 impl SegmentHeader {
@@ -328,6 +335,9 @@ impl SegmentHeader {
     /// because it ascends) and O(runs) on the run list; fold it once (see
     /// [`Segment::tt_s_bounds`]) rather than per scan.
     pub fn tt_s_bounds(&self) -> (i64, i64) {
+        if let Some(b) = self.tt_s_raw_bounds {
+            return b;
+        }
         if let (Some(&lo), Some(&hi)) = (self.tt_s_dict.first(), self.tt_s_dict.last()) {
             return (lo, hi);
         }
@@ -426,6 +436,18 @@ fn tt_s_code_blocks(codes: &[u32]) -> Vec<(u32, u32)> {
             b.iter().fold((u32::MAX, 0u32), |(lo, hi), &c| (lo.min(c), hi.max(c)))
         })
         .collect()
+}
+
+/// The raw `tt_s` column and its `(min, max)`, for [`TimeCodec::Raw`].
+fn raw_tt_s_column(tts: impl Iterator<Item = i64>, n: usize) -> (ColumnBuilder, (i64, i64)) {
+    let mut c = ColumnBuilder::new(TT_S_RAW_COLUMN, DType::I64, n).raw(true);
+    let (mut lo, mut hi) = (i64::MAX, i64::MIN);
+    for t in tts {
+        c.push_i64(t);
+        lo = lo.min(t);
+        hi = hi.max(t);
+    }
+    (c, (lo, hi))
 }
 
 /// The per-row transaction-time code column's name.
@@ -625,6 +647,8 @@ struct ColumnBuilder {
     name: &'static str,
     dtype: DType,
     bytes: Vec<u8>,
+    /// Store raw without trial encoding ([`TimeCodec::Raw`]).
+    raw: bool,
 }
 
 impl ColumnBuilder {
@@ -633,7 +657,13 @@ impl ColumnBuilder {
             name,
             dtype,
             bytes: Vec::with_capacity(rows * dtype.size()),
+            raw: false,
         }
+    }
+
+    fn raw(mut self, raw: bool) -> Self {
+        self.raw = raw;
+        self
     }
 
     fn push_i64(&mut self, v: i64) {
@@ -649,6 +679,82 @@ impl ColumnBuilder {
         self.bytes.extend_from_slice(&v.to_le_bytes());
     }
 }
+
+/// How a segment stores its transaction-time axis and its time columns
+/// (ablation switch `GNOMON_TIME_CODEC`; a **write-time** choice).
+///
+/// * `Auto` (unset): today's adaptive writer. `tt_s` is a run list in the
+///   header below one run per [`TT_S_DICT_DENSITY_DEN`] rows and a
+///   dictionary-coded column with per-block code bounds above it; every
+///   `i64` column is trial-encoded (frame of reference or the per-block
+///   linear model, each with and without an exact divisor, or raw).
+/// * `Runs` (`GNOMON_TIME_CODEC=runs`): the run list at every density, which
+///   is exactly what the writer wrote before the dictionary ([`SegmentSpec::tt_s_dictionary`]
+///   `= false`). Isolates the dictionary and its block bounds.
+/// * `Raw` (`GNOMON_TIME_CODEC=raw`): `tt_s` as a raw per-row `i64` column
+///   ([`TT_S_RAW_COLUMN`]) with no runs, dictionary or block bounds, and
+///   `vt_s`/`vt_e` stored raw. Only the segment-level `(min, max)` is kept
+///   ([`SegmentHeader::tt_s_raw_bounds`]): it is pruning metadata, not
+///   encoding. Such a segment is written as format
+///   [`SEGMENT_FORMAT_RAW_TT`], so a build that predates it refuses the
+///   file instead of reading an empty run list as "nothing believed".
+///
+/// Every shape stores each row's `tt_s` exactly and is read through
+/// [`crate::ttime::TtSView`], so a store may mix them and every answer is
+/// the same; only bytes and the work of reading them differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeCodec {
+    Auto,
+    Runs,
+    Raw,
+}
+
+impl TimeCodec {
+    /// `raw` or `runs` (any case, trimmed); anything else, or unset, is
+    /// `Auto`: a measurement knob must never make a write fail.
+    pub fn parse(v: Option<&str>) -> TimeCodec {
+        match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+            Some("raw") => TimeCodec::Raw,
+            Some("runs") => TimeCodec::Runs,
+            _ => TimeCodec::Auto,
+        }
+    }
+
+    /// The codec for the segment about to be written. Read per segment
+    /// write (one environment read against a write measured in
+    /// milliseconds), so a harness can switch it between builds.
+    pub fn from_env() -> TimeCodec {
+        #[cfg(test)]
+        if let Some(c) = TIME_CODEC_OVERRIDE.with(|o| o.get()) {
+            return c;
+        }
+        Self::parse(std::env::var("GNOMON_TIME_CODEC").ok().as_deref())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests pin the write-time codec for a whole store build without
+    /// touching the process environment. Segment writers run on the
+    /// calling thread (seal, compaction and settle alike).
+    static TIME_CODEC_OVERRIDE: std::cell::Cell<Option<TimeCodec>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with every segment written on this thread using `codec`.
+#[cfg(test)]
+pub(crate) fn with_time_codec<T>(codec: TimeCodec, f: impl FnOnce() -> T) -> T {
+    let prev = TIME_CODEC_OVERRIDE.with(|o| o.replace(Some(codec)));
+    let out = f();
+    TIME_CODEC_OVERRIDE.with(|o| o.set(prev));
+    out
+}
+
+/// Segment format of a segment whose `tt_s` is a raw column
+/// ([`TimeCodec::Raw`]). Every other segment stays [`FORMAT_VERSION`].
+pub const SEGMENT_FORMAT_RAW_TT: u32 = 2;
+
+/// The raw per-row `tt_s` column's name (format 2 only).
+pub const TT_S_RAW_COLUMN: &str = "tt_s";
 
 /// Everything the caller must decide before rows become a file.
 pub struct SegmentSpec {
@@ -672,6 +778,10 @@ pub struct SegmentSpec {
     /// read through the same view, so a store written either way is read by
     /// either build.
     pub tt_s_dictionary: bool,
+    /// How `tt_s` and the time columns are stored. The default reads
+    /// `GNOMON_TIME_CODEC` when the spec is built, which every production
+    /// writer does once per segment.
+    pub time_codec: TimeCodec,
 }
 
 impl Default for SegmentSpec {
@@ -682,6 +792,7 @@ impl Default for SegmentSpec {
             closed_rows: Vec::new(),
             vt_e_block_rows: crate::defaults::BLOCK_ROWS,
             tt_s_dictionary: true,
+            time_codec: TimeCodec::from_env(),
         }
     }
 }
@@ -766,6 +877,58 @@ impl VtERunningMax {
     }
 }
 
+/// A `vt_e` staircase **derived at open**: the structure the
+/// interval-lane writer stores in the header ([`SegmentHeader::
+/// block_vt_e_running_max`], [`SegmentHeader::open_rows`]), computed from
+/// the stored `vt_e` column of an event-lane segment by the writer's own
+/// accumulator ([`VtERunningMax`]), so the two cannot disagree in meaning.
+///
+/// Held on the open [`Segment`] only, never written: segment bytes, and
+/// with them every content, store and segment digest, are what they were,
+/// and a store written by any earlier build gets the cut on its next open.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DerivedVtEStaircase {
+    /// running maximum of `vt_e` over closed rows, one entry per block
+    pub running_max: Vec<i64>,
+    pub block_rows: u32,
+    /// sorted, disjoint half-open ranges of rows whose `vt_e` is `OPEN_END`
+    pub open_rows: Vec<(u32, u32)>,
+}
+
+impl DerivedVtEStaircase {
+    /// One pass over `vt_e` in row order, at `block_rows` (> 0) granularity.
+    pub fn of(vt_e: &[i64], block_rows: u32) -> Self {
+        let block_rows = block_rows.max(1);
+        let mut acc = VtERunningMax {
+            block_rows: block_rows as usize,
+            closed_max: i64::MIN,
+            per_block: Vec::with_capacity(vt_e.len().div_ceil(block_rows as usize)),
+            open_rows: Vec::new(),
+        };
+        for (i, &v) in vt_e.iter().enumerate() {
+            acc.observe(i, v);
+        }
+        let (running_max, open_rows) = acc.finish(vt_e.len());
+        Self { running_max, block_rows, open_rows }
+    }
+
+    /// Heap held, in bytes (capacities).
+    pub fn heap_bytes(&self) -> u64 {
+        (self.running_max.capacity() * std::mem::size_of::<i64>()
+            + self.open_rows.capacity() * std::mem::size_of::<(u32, u32)>()) as u64
+    }
+}
+
+/// A segment's `vt_e` staircase as the planner reads it, written or derived.
+#[derive(Clone, Copy, Debug)]
+pub struct VtEStaircaseView<'a> {
+    pub running_max: &'a [i64],
+    pub block_rows: usize,
+    pub open_rows: &'a [(u32, u32)],
+    /// derived at open rather than read from the header
+    pub derived: bool,
+}
+
 /// Write `rows` (already sorted by `(vt_s, vid)`) as one segment file.
 ///
 /// Returns the segment's content address — the footer's `body_sha`, the
@@ -842,7 +1005,16 @@ pub fn write_edge_segment(path: &Path, rows: &[EdgeRow], spec: &SegmentSpec) -> 
     let (block_vt_e_running_max, open_rows) =
         vt_e_max_blocks.map(|s| s.finish(n)).unwrap_or_default();
 
-    let tt_s = encode_tt_s(tt_s_runs, n, spec.tt_s_dictionary);
+    // `GNOMON_TIME_CODEC` -- `runs` never codes by dictionary, `raw`
+    // writes a raw per-row column and no runs at all
+    let raw_tt = spec.time_codec == TimeCodec::Raw;
+    let tt_s = if raw_tt {
+        encode_tt_s(Vec::new(), n, false)
+    } else {
+        encode_tt_s(tt_s_runs, n, spec.tt_s_dictionary && spec.time_codec == TimeCodec::Auto)
+    };
+    let tt_raw = raw_tt.then(|| raw_tt_s_column(rows.iter().map(|r| r.tt_s), n));
+    let (c_vt_s, c_vt_e) = (c_vt_s.raw(raw_tt), c_vt_e.raw(raw_tt));
 
     let mut columns = vec![c_vt_s, c_src, c_dst, c_rel, c_vid_hi, c_vid_lo];
     if !vt_e_elided {
@@ -850,6 +1022,10 @@ pub fn write_edge_segment(path: &Path, rows: &[EdgeRow], spec: &SegmentSpec) -> 
     }
     columns.extend([c_props, c_disc, c_source, c_prov]);
     columns.extend(tt_s.column);
+    let tt_s_raw_bounds = tt_raw.map(|(c, bounds)| {
+        columns.push(c);
+        bounds
+    });
     fill_t.stop_ctx(S::ColumnFill);
 
     let first = &rows[0];
@@ -857,7 +1033,7 @@ pub fn write_edge_segment(path: &Path, rows: &[EdgeRow], spec: &SegmentSpec) -> 
     write_segment(
         path,
         SegmentHeader {
-            format: FORMAT_VERSION,
+            format: if raw_tt { SEGMENT_FORMAT_RAW_TT } else { FORMAT_VERSION },
             kind: RowKind::Edge,
             lane: spec.lane,
             rows: n as u32,
@@ -881,6 +1057,7 @@ pub fn write_edge_segment(path: &Path, rows: &[EdgeRow], spec: &SegmentSpec) -> 
             block_vt_e_running_max,
             open_rows,
             vt_e_block_rows: spec.vt_e_block_rows,
+            tt_s_raw_bounds,
         },
         columns,
         &strings,
@@ -949,7 +1126,16 @@ pub fn write_node_segment(path: &Path, rows: &[NodeRow], spec: &SegmentSpec) -> 
     let (block_vt_e_running_max, open_rows) =
         vt_e_max_blocks.map(|s| s.finish(n)).unwrap_or_default();
 
-    let tt_s = encode_tt_s(tt_s_runs, n, spec.tt_s_dictionary);
+    // `GNOMON_TIME_CODEC` -- `runs` never codes by dictionary, `raw`
+    // writes a raw per-row column and no runs at all
+    let raw_tt = spec.time_codec == TimeCodec::Raw;
+    let tt_s = if raw_tt {
+        encode_tt_s(Vec::new(), n, false)
+    } else {
+        encode_tt_s(tt_s_runs, n, spec.tt_s_dictionary && spec.time_codec == TimeCodec::Auto)
+    };
+    let tt_raw = raw_tt.then(|| raw_tt_s_column(rows.iter().map(|r| r.tt_s), n));
+    let (c_vt_s, c_vt_e) = (c_vt_s.raw(raw_tt), c_vt_e.raw(raw_tt));
 
     let mut columns = vec![c_vt_s, c_uid, c_vid_hi, c_vid_lo];
     if !vt_e_elided {
@@ -957,6 +1143,10 @@ pub fn write_node_segment(path: &Path, rows: &[NodeRow], spec: &SegmentSpec) -> 
     }
     columns.extend([c_label, c_props, c_name, c_source, c_prov]);
     columns.extend(tt_s.column);
+    let tt_s_raw_bounds = tt_raw.map(|(c, bounds)| {
+        columns.push(c);
+        bounds
+    });
     fill_t.stop_ctx(S::ColumnFill);
 
     let first = &rows[0];
@@ -964,7 +1154,7 @@ pub fn write_node_segment(path: &Path, rows: &[NodeRow], spec: &SegmentSpec) -> 
     write_segment(
         path,
         SegmentHeader {
-            format: FORMAT_VERSION,
+            format: if raw_tt { SEGMENT_FORMAT_RAW_TT } else { FORMAT_VERSION },
             kind: RowKind::Node,
             lane: spec.lane,
             rows: n as u32,
@@ -988,6 +1178,7 @@ pub fn write_node_segment(path: &Path, rows: &[NodeRow], spec: &SegmentSpec) -> 
             block_vt_e_running_max,
             open_rows,
             vt_e_block_rows: spec.vt_e_block_rows,
+            tt_s_raw_bounds,
         },
         columns,
         &strings,
@@ -1287,7 +1478,22 @@ fn write_segment(
     // `None` after two first differences on a column that has no common
     // factor, and the arm only wins where it is smaller. Nothing here needs
     // to know which column is which for that to hold.
-    let stored: Vec<Stored> = columns.iter().map(encode_column).collect();
+    let stored: Vec<Stored> = columns
+        .iter()
+        .map(|c| {
+            if c.raw {
+                // `TimeCodec::Raw`: no trial encoding at all
+                Stored {
+                    bytes: c.bytes.clone(),
+                    codec: crate::codec::CODEC_RAW,
+                    base: 0,
+                    divisor: 1,
+                }
+            } else {
+                encode_column(c)
+            }
+        })
+        .collect();
 
     // Offsets are relative to data_start, so they do not depend on how long
     // the header serializes to — which would otherwise be circular.
@@ -1325,7 +1531,8 @@ fn write_segment(
 
     let mut buf = Vec::with_capacity(data_start + cursor as usize + encoded_strings.len() + 512);
     buf.extend_from_slice(MAGIC);
-    buf.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    // the header's own format: FORMAT_VERSION, or SEGMENT_FORMAT_RAW_TT
+    buf.extend_from_slice(&header.format.to_le_bytes());
     buf.extend_from_slice(&(header_json.len() as u32).to_le_bytes());
     buf.extend_from_slice(&header_json);
     pad_to(&mut buf, data_start);
@@ -1476,6 +1683,9 @@ pub struct Segment<S: SegmentSource> {
     /// is the scan.
     tt_s_min: i64,
     tt_s_max: i64,
+    /// The `vt_e` staircase derived at a cached open, for an
+    /// event-lane segment that stores `vt_e` ([`Segment::derive_vt_e_staircase`]).
+    derived_vt_e: Option<DerivedVtEStaircase>,
 }
 
 /// How one column's bytes are served.
@@ -1538,7 +1748,7 @@ impl<S: SegmentSource> Segment<S> {
             )));
         }
         let format = read_u32(bytes, 4).map_err(at)?;
-        if format != FORMAT_VERSION {
+        if format != FORMAT_VERSION && format != SEGMENT_FORMAT_RAW_TT {
             return Err(at(EngineError::corrupt(format!(
                 "segment format {format} is not supported (expected {FORMAT_VERSION})"
             ))));
@@ -1573,6 +1783,19 @@ impl<S: SegmentSource> Segment<S> {
             )));
         }
 
+        // format 2 is exactly "tt_s is a raw column": the bounds and
+        // the column must both be there, and nowhere else
+        let raw_tt = format == SEGMENT_FORMAT_RAW_TT;
+        let raw_ok = header.tt_s_raw_bounds.is_some()
+            && header.format == format
+            && header.column(TT_S_RAW_COLUMN).is_some_and(|c| c.dtype == DType::I64);
+        if raw_tt != raw_ok || (!raw_tt && header.tt_s_raw_bounds.is_some()) {
+            return Err(at(EngineError::corrupt(format!(
+                "segment format {format} disagrees with its tt_s representation \
+                 (raw bounds {:?})",
+                header.tt_s_raw_bounds
+            ))));
+        }
         let (tt_s_min, tt_s_max) = header.tt_s_bounds();
         let mut seg = Self {
             source,
@@ -1583,6 +1806,7 @@ impl<S: SegmentSource> Segment<S> {
             decoded_strings: None,
             tt_s_min,
             tt_s_max,
+            derived_vt_e: None,
         };
         if verify_checksums {
             seg.verify(&footer, footer_start)?;
@@ -1700,6 +1924,62 @@ impl<S: SegmentSource> Segment<S> {
 
     pub fn header(&self) -> &SegmentHeader {
         &self.header
+    }
+
+    /// Would [`Self::derive_vt_e_staircase`] derive anything here? An
+    /// event-lane edge segment that stores `vt_e` (some row is not
+    /// instantaneous), holds rows, and has no written staircase.
+    pub fn wants_derived_vt_e_staircase(&self) -> bool {
+        let h = &self.header;
+        h.kind == RowKind::Edge
+            && h.lane == Lane::Event
+            && !h.vt_e_elided
+            && h.rows > 0
+            && h.block_vt_e_running_max.is_empty()
+    }
+
+    /// Derive this segment's `vt_e` staircase at `block_rows` granularity,
+    /// one pass over the stored `vt_e` column. Returns whether
+    /// one was derived; a segment that does not want one
+    /// ([`Self::wants_derived_vt_e_staircase`]) is left as it is.
+    ///
+    /// Called on the cached open path only
+    /// ([`crate::store::NativeStore::open_segment`]), with the handle's
+    /// staircase design on; an uncached one-pass walk would pay the pass and
+    /// drop it.
+    pub fn derive_vt_e_staircase(&mut self, block_rows: u32) -> Result<bool> {
+        if !self.wants_derived_vt_e_staircase() {
+            return Ok(false);
+        }
+        let derived = DerivedVtEStaircase::of(self.i64_column("vt_e")?, block_rows);
+        self.derived_vt_e = Some(derived);
+        Ok(true)
+    }
+
+    /// The derived staircase, if one was derived at open.
+    pub fn derived_vt_e_staircase(&self) -> Option<&DerivedVtEStaircase> {
+        self.derived_vt_e.as_ref()
+    }
+
+    /// The `vt_e` staircase the planner cuts with: the header's (interval
+    /// lane) when written, else the one derived at open, else none.
+    pub fn vt_e_staircase(&self) -> Option<VtEStaircaseView<'_>> {
+        let h = &self.header;
+        if !h.block_vt_e_running_max.is_empty() {
+            let block_rows = if h.vt_e_block_rows > 0 { h.vt_e_block_rows } else { h.block_rows };
+            return Some(VtEStaircaseView {
+                running_max: &h.block_vt_e_running_max,
+                block_rows: block_rows as usize,
+                open_rows: &h.open_rows,
+                derived: false,
+            });
+        }
+        self.derived_vt_e.as_ref().map(|d| VtEStaircaseView {
+            running_max: &d.running_max,
+            block_rows: d.block_rows as usize,
+            open_rows: &d.open_rows,
+            derived: true,
+        })
     }
 
     pub fn rows(&self) -> u32 {
@@ -1854,6 +2134,14 @@ impl<S: SegmentSource> Segment<S> {
     /// it looks the code column up by name, which is a walk over the column
     /// descriptors, and then every `at()` is two indexed loads.
     pub fn tt_s_view(&self) -> Result<crate::ttime::TtSView<'_>> {
+        if self.header.tt_s_raw_bounds.is_some() {
+            // a raw per-row column (format 2)
+            return Ok(crate::ttime::TtSView::raw(
+                &self.header,
+                self.i64_column(TT_S_RAW_COLUMN)?,
+                (self.tt_s_min, self.tt_s_max),
+            ));
+        }
         if self.header.tt_s_dict.is_empty() {
             // the bounds this segment folded at open, not a fold of the whole
             // run list per call
@@ -1989,6 +2277,7 @@ pub(crate) fn header_with_runs(runs: Vec<(u32, i64)>, rows: u32) -> SegmentHeade
         block_vt_e_running_max: Vec::new(),
         open_rows: Vec::new(),
         vt_e_block_rows: 0,
+        tt_s_raw_bounds: None,
     }
 }
 
@@ -2173,7 +2462,10 @@ mod tests {
 
     /// The field stays empty on the two shapes that must
     /// never carry a staircase — the event lane, and any elided-`vt_e`
-    /// segment (every row instantaneous), interval lane or not.
+    /// segment (every row instantaneous), interval lane or not. This is the
+    /// *written* format, which the derived staircase does not change: an event-lane segment's
+    /// staircase is derived at open and lives on the open segment only
+    /// (`derived_staircase_equals_the_written_one_and_changes_no_byte`).
     #[test]
     fn event_lane_and_elided_segments_carry_no_staircase() {
         let path_event = tmp("staircase-none-event");
@@ -2206,6 +2498,81 @@ mod tests {
         let seg = open(&path_elided);
         assert!(seg.header().vt_e_elided);
         assert!(seg.header().block_vt_e_running_max.is_empty());
+        // an open does not derive one by itself, and an elided segment
+        // never wants one
+        assert!(open(&path_event).derived_vt_e_staircase().is_none());
+        assert!(!seg.wants_derived_vt_e_staircase());
+    }
+
+    /// The staircase derived at open from an event-lane
+    /// segment's stored `vt_e` equals the one the interval-lane writer
+    /// stores for the same rows at the same block size (running max over
+    /// closed rows, open-ended rows as ranges, a final partial block), equals
+    /// a brute-force reference, and deriving it changes no byte of the file.
+    #[test]
+    fn derived_staircase_equals_the_written_one_and_changes_no_byte() {
+        let mut rows = sorted_edges(1_000);
+        for (i, r) in rows.iter_mut().enumerate() {
+            let jitter = ((i as i64) * 2_654_435_761).rem_euclid(4_999);
+            r.vt_e = match i % 97 {
+                // open-ended rows, single and in runs
+                0 | 1 | 2 | 50 => crate::OPEN_END,
+                _ => r.vt_s + 1 + jitter,
+            };
+        }
+        let block = 64u32;
+        let p_int = tmp("derived-stair-interval");
+        let p_evt = tmp("derived-stair-event");
+        for (p, lane) in [(&p_int, Lane::Interval), (&p_evt, Lane::Event)] {
+            write_edge_segment(
+                p,
+                &rows,
+                &SegmentSpec { lane, vt_e_block_rows: block, ..Default::default() },
+            )
+            .unwrap();
+        }
+        let before = fs::read(&p_evt).unwrap();
+        let written = open(&p_int);
+        let mut seg = open(&p_evt);
+        assert!(seg.header().block_vt_e_running_max.is_empty(), "the event lane writes none");
+        assert!(seg.vt_e_staircase().is_none(), "nothing to cut with before deriving");
+        assert!(seg.derive_vt_e_staircase(block).unwrap());
+        let d = seg.derived_vt_e_staircase().unwrap().clone();
+        assert_eq!(d.running_max, written.header().block_vt_e_running_max);
+        assert_eq!(d.open_rows, written.header().open_rows);
+        assert_eq!(d.block_rows, block);
+        // brute force
+        assert_eq!(d.running_max.len(), rows.len().div_ceil(block as usize));
+        for (b, &m) in d.running_max.iter().enumerate() {
+            let hi = ((b + 1) * block as usize).min(rows.len());
+            let want = rows[..hi]
+                .iter()
+                .map(|r| r.vt_e)
+                .filter(|&v| v != crate::OPEN_END)
+                .max()
+                .unwrap_or(i64::MIN);
+            assert_eq!(m, want, "block {b}");
+        }
+        let mut want_open: Vec<(u32, u32)> = Vec::new();
+        for (i, r) in rows.iter().enumerate() {
+            if r.vt_e == crate::OPEN_END {
+                match want_open.last_mut() {
+                    Some(l) if l.1 == i as u32 => l.1 += 1,
+                    _ => want_open.push((i as u32, i as u32 + 1)),
+                }
+            }
+        }
+        assert_eq!(d.open_rows, want_open);
+        let v = seg.vt_e_staircase().unwrap();
+        assert!(v.derived && v.block_rows == block as usize && v.running_max == d.running_max.as_slice());
+        // the interval segment reads its written one, and never derives
+        let mut written = written;
+        assert!(!written.vt_e_staircase().unwrap().derived);
+        assert!(!written.derive_vt_e_staircase(block).unwrap());
+        assert!(written.derived_vt_e_staircase().is_none());
+        // no byte of the file moved
+        assert_eq!(fs::read(&p_evt).unwrap(), before);
+        assert!(d.heap_bytes() >= (d.running_max.len() * 8) as u64);
     }
 
     /// The threshold is a measurement about the segment, not a policy: a

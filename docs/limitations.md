@@ -44,10 +44,30 @@ unfinished, stated plainly:
   refuses some window-bounded queries whose actual cost is small. Callers can
   pass `skip_cost_check=True` (the benchmark harness exposes
   `--skip-cost-check`).
-* **Some windowed reads still visit more than their window.** A time
-  window that starts in the middle of a segment still examines that
-  segment’s rows before the window. The windowed belief diff and windowed traversals open every
-  candidate segment before pruning it by its header bounds.
+* **Some windowed reads still visit more than their window.** The cut below
+  a window’s start is a prefix bound: it stops at the first block holding a
+  closed version still valid at the window’s start, so one long-lived
+  version early in a segment keeps the rows after it, up to the window, in
+  the scan. Event segments get this cut from a structure derived when the
+  segment is opened into the cache, which costs one pass over its `vt_e`
+  column per cached open. The windowed belief diff and windowed traversals
+  open every candidate segment before pruning it by its header bounds.
+* **The engine kernels cover stated shapes only.** The range-native
+  operators ([architecture](architecture.md#range-native-operators)) answer
+  the shapes listed there, on the native engine, outside an open write
+  batch. Everything else takes the general path, with the same answer and
+  the cost it had before: `temporal_reachability` with `delta_max_wait`,
+  `diff_snapshots` with `scope`, aggregations that group by relation or
+  endpoint or compute more than counts, and every call on the DuckDB
+  reference backend.
+* **Fast bulk ingest covers one shape.** `ingest_events` ops that carry a
+  `nodes` array or event `props` are staged by the Python row build, as are
+  all other write operations; the engine’s own path from the log record
+  covers only the plain bulk-event shape.
+* **Design switches are fixed per handle.** The engine reads its design
+  switches when a store is opened; changing the environment afterwards does
+  not affect an open handle (`store.adapter.designs()` says what it runs
+  with).
 * **Close records have two physical representations, not three.** A
   segment's closes are folded into either an "all current" flag or a sorted
   sparse list; a dense per-row representation is reserved in the format but

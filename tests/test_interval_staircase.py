@@ -189,7 +189,7 @@ def test_skip_ratio_is_nonzero_and_monotone_across_window_positions(tmp_path):
 
 
 def test_staircase_is_sound_against_the_no_staircase_escape_hatch(tmp_path, monkeypatch):
-    """`GNOMON_NO_STAIRCASE=1` (`scan.rs::staircase_disabled`) forces `lo = 0`
+    """`GNOMON_NO_STAIRCASE=1` (`Designs::staircase`, read at open) forces `lo = 0`
     on every interval-lane segment, i.e. the row loop runs over exactly the
     rows it would if the staircase field were empty. The contract: with the staircase on, the *answer* -- the selected `vt_s`
     multiset -- must be identical to the staircase-off run, and
@@ -198,14 +198,27 @@ def test_staircase_is_sound_against_the_no_staircase_escape_hatch(tmp_path, monk
     anyway, by the cut's soundness argument, which `scan::tests::
     staircase_cut_never_drops_a_matching_row` proves at the Rust level over
     many `vt_min` values; this is the one Python-visible corroboration)."""
-    adapter = _build_interval_lane_fixture(tmp_path / "s")
+    store = tmp_path / "s"
+    adapter = _build_interval_lane_fixture(store)
     t0, t1 = _extent(adapter)
     vt_min = t0 + int(0.75 * (t1 - t0))
 
     on = _scan_stats(adapter, vt_min)
+    assert adapter.designs()["staircase"] is True
+    adapter.close()
+    # the switch is read once per handle, at open, and reported by
+    # designs() like every other ablation switch
     monkeypatch.setenv("GNOMON_NO_STAIRCASE", "1")
+    adapter = _native_adapter(store)
+    assert adapter.designs()["staircase"] is False
     off = _scan_stats(adapter, vt_min)
     monkeypatch.delenv("GNOMON_NO_STAIRCASE", raising=False)
+    # a handle keeps the setting it was opened under
+    off_still = _scan_stats(adapter, vt_min)
+    assert (off_still["blocks_considered"], off_still["rows_examined"]) == (
+        off["blocks_considered"], off["rows_examined"])
+    adapter.close()
+    adapter = _native_adapter(store)
     on_again = _scan_stats(adapter, vt_min)
 
     assert on["blocks_skipped"] > 0, "fixture-is-real: the cut must actually fire when on"
@@ -216,8 +229,7 @@ def test_staircase_is_sound_against_the_no_staircase_escape_hatch(tmp_path, monk
         "the staircase must never change which rows are selected"
     )
     assert on["rows_examined"] <= off["rows_examined"]
-    # the escape hatch is read fresh per call (no cross-call caching to leak
-    # state between an on/off/on sequence within one process)
+    # an on/off/on sequence of handles within one process leaks no state
     assert on_again["blocks_skipped"] == on["blocks_skipped"]
     assert on_again["rows_examined"] == on["rows_examined"]
 

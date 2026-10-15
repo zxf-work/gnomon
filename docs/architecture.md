@@ -50,6 +50,20 @@ records the event-log offset and a rolling hash chain over the log prefix it
 has applied, so recovery replays exactly the missing suffix and refuses a log
 that does not match.
 
+### Bulk ingest from the log record
+
+The bi-temporal write semantics live in Python (`gnomon/storage/base.py`),
+which turns each event of an `ingest_events` op into Python objects before
+the engine sees it. For the common bulk shape — an `ingest_events` op with
+no `nodes` array and no event `props` — the engine instead stages the op
+straight from the event-log record the batch was just logged as (replay
+hands it the same bytes): it parses the op, derives the identity hashes,
+runs the same endpoint-existence probe, inserts the same dictionary entries
+in the same order and stages the same rows. Any other shape, or anything
+the parser does not accept, is refused before anything is changed and takes
+the Python row build, so the stored rows, dense ids and digests are the same
+either way.
+
 ## Segments
 
 A segment (`.tgs`) is written once and never modified. That one property
@@ -64,14 +78,35 @@ gives snapshot isolation, safe `mmap`, and lock-free concurrent readers.
   carries a SHA-256 (`body_sha`), recorded in the footer and in the
   manifest entry. A trailing magic marks a complete file.
 * Edge rows are routed at seal time into two physical classes: short-lived
-  **event** rows, and long-lived **interval** rows with an explicit `vt_e`,
-  which carry a per-block running maximum of `vt_e` (a prefix-max
-  "staircase") so a valid-time window search can skip blocks that end
-  before it starts. The class is physical only: it never affects identity,
-  answers or digests.
+  **event** rows, and long-lived **interval** rows with an explicit `vt_e`.
+  The class is physical only: it never affects identity, answers or
+  digests.
 * Segment headers carry zone maps (the ranges of `vt_s`, `vt_e` and `tt_s`
   per segment, and per-block bounds where a column needs them) that let
   scans prune whole segments and blocks.
+
+### Cutting below a window's start
+
+Rows are sorted by `vt_s`, so a valid-time window `[t_a, t_b)` bounds a
+segment's rows from above by binary search. From below it cannot: a row that
+started long before `t_a` may still be valid at `t_a`. The scan planner therefore
+uses a per-block running maximum of `vt_e` (a prefix-max "staircase"): every
+block before the first one whose maximum reaches `t_a` holds only rows that
+ended before the window, and is skipped. Rows with an open `vt_e` are kept
+apart as row ranges, so they never raise the maximum.
+
+* **Interval segments** carry the staircase in their header, written at seal
+  time.
+* **Event segments that store `vt_e`** get the same structure **derived when
+  the segment is opened** into the segment cache: one pass over the stored
+  `vt_e` column at 4,096-row blocks (8 bytes per block), kept with the cached
+  segment and never written. Segment bytes and digests are unchanged, so an
+  existing store gets the cut on its next open. Event segments whose rows
+  are all instantaneous store no `vt_e` and need no cut.
+
+The cut is a bound only: it never changes which rows are selected, only how
+many are examined. Scans report the written and the derived structure's
+`blocks_considered` / `blocks_skipped` separately.
 
 ### Time encoding
 
@@ -120,6 +155,51 @@ instead. Traversals choose between building a segment’s believed row ranges
 and testing belief per adjacency row, whichever reads less. The engine
 counts the runs, codes and closes each belief test reads (`phase_stats`),
 so this cost claim is checked by tests on counts rather than timings.
+
+## Range-native operators
+
+Several operators are answered in the engine from the believed row ranges
+the scan planner already computes, without first materialising the rows
+they select. Each covers a stated shape; any other call takes the general
+path, and both give the same answer, byte for byte (the tests compare them,
+and each can be switched off: [configuration](configuration.md#design-switches)).
+
+* **Counts by time bucket.** A count-only aggregation by time bucket — the
+  event-rate series behind `graph_metric_timeseries` and `burst_detection`,
+  and `aggregate_events` calls with one `time_bucket` dimension (or none)
+  and only `count` aggregates — intersects each segment's believed,
+  window-clipped row ranges with the bucket edges by binary search over
+  `vt_s`. It never builds a selection vector or a group table. A relation
+  filter that splits a segment is applied per row inside this path; the
+  relation and endpoint dimensions, `count_distinct` and the other
+  statistics take the row path.
+* **Belief diff, top-k on binary keys.** `diff_belief` keeps every row that
+  survives its filters as a binary sort key (kind, uid or edge identity,
+  `tt`, change, version id) built in parallel, counts its totals from the
+  keys, selects and sorts the requested page on them, and builds strings
+  for the page's rows only. The binary order is the string order the
+  answer is defined in.
+* **Global snapshot diff on dense identities.** `diff_snapshots` without
+  `scope` plans both point states as sorted row lists per segment and
+  retires every row present in both with a merge, without hashing anything:
+  the same stored row is the same version at both instants. Only the
+  leftovers are joined on identity — nodes on their dense dictionary id,
+  edges on their identity key, computed on the worker pool — and only
+  candidates whose stored property text differs go back to the operator,
+  which applies its own content comparison.
+* **Earliest-arrival reachability.** `temporal_reachability` without
+  `delta_max_wait` reads the window's believed rows into a by-source
+  compressed sparse row array (built in parallel) and runs a label-setting
+  search over a monotone radix heap. This is exact because traversing an
+  edge never decreases an arrival and is monotone in it, so the first label
+  taken off the heap is final; `delta_max_wait` breaks the second property
+  and keeps the general multi-label search. The page, ordered by
+  `(arrival, uid)`, is selected and sorted alone.
+* **Few-node scans.** `snapshot_subgraph` expands from its seeds, one scan
+  filtered to the frontier per hop, rather than building the whole snapshot
+  at the instant. A scan filtered to a few nodes (at most 1,024 ids) takes,
+  in each segment, the rows the adjacency index names for those ids
+  whenever they are fewer than the rows the scan would otherwise examine.
 
 ## Manifest generations
 
@@ -211,8 +291,18 @@ index is never authoritative.
 * Inside one process, `Store` serializes write batches; for many concurrent
   writer threads, `gnomon.write.GroupCommitWriter` coalesces submissions
   into shared commits.
-* Large scans run in parallel above 4M rows (`GNOMON_SCAN_THREADS` sets the
-  width); smaller ones run on one core.
+* The parallel read stages (the scan planner and row loop, column
+  materialisation, the aggregation fold, the reachability and diff kernels)
+  run on one persistent worker pool per process: its threads are started
+  once and parked between calls, so a fan-out costs a wake-up rather than a
+  thread spawn. The caller claims work items alongside the pool threads, so
+  concurrent callers on one handle, or a nested call from inside a worker,
+  always finish (serially, if every worker is busy) and get the same answer
+  as a single-threaded call.
+* The width defaults to one worker per available core
+  (`GNOMON_SCAN_THREADS` overrides it). A scan stage fans out only above 4M
+  candidate rows; the grouped aggregation's own row loop and fold, whose
+  per-row cost is several times a select's, fan out from 131,072 rows.
 * Decoded segments are cached per process within a byte budget
   (`GNOMON_SEGMENT_CACHE_BYTES`).
 

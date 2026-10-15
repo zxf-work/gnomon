@@ -408,6 +408,75 @@ fn merge_layers(own: &[(u32, i64)], under: &[(u32, i64)]) -> Vec<(u32, i64)> {
     out
 }
 
+/// Which half or halves of the belief predicate a per-row test applies:
+/// the per-row spelling of `believed_ranges_closed`,
+/// `believed_ranges_any` and `believed_ranges_superseded`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowBelief {
+    /// `tt_s <= as_of < tt_e`
+    Current,
+    /// `tt_s <= as_of`
+    Written,
+    /// `tt_s <= as_of` and `tt_e <= as_of`
+    Superseded,
+}
+
+/// The rows of `domain` that pass `mode` at `as_of`, each tested on its
+/// own, as maximal ascending ranges (`GNOMON_RANGE_VISIBILITY=0`).
+///
+/// The ablation of range-domain visibility: every row of the domain has its
+/// `tt_s` read through the view and its effective `tt_e` resolved by
+/// [`crate::read::effective_tt_e`] (a close-run probe, then the sidecar), with
+/// no bounds short-cut, no untouched-segment short-cut and no close view.
+/// The verdicts are coalesced by the rule every range primitive uses, so
+/// the output is the range primitives' answer clipped to `domain`, byte for
+/// byte (`ablation_tests::the_per_row_belief_test_selects_exactly_the_range_domain_rows`).
+///
+/// `domain` is ascending and disjoint, and `as_of` is below the unclamped
+/// `OPEN_END`, which `version_keys` answers without a walk. A row the view
+/// cannot place (a code column shorter than the segment, a run list that
+/// starts after row 0) is an error here where the range primitives skip it;
+/// no writer produces either.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn believed_ranges_per_row(
+    tt: &crate::ttime::TtSView<'_>,
+    sidecar: Sidecar<'_>,
+    closes: &CloseIndex,
+    segment: u64,
+    as_of: i64,
+    domain: &[(usize, usize)],
+    rows: usize,
+    mode: RowBelief,
+) -> Result<Vec<(usize, usize)>> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut tested = 0usize;
+    for &(lo, hi) in domain {
+        let hi = hi.min(rows);
+        for r in lo..hi {
+            tested += 1;
+            let row = r as u32;
+            let keep = tt.at(row)? <= as_of
+                && match mode {
+                    RowBelief::Written => true,
+                    RowBelief::Current => {
+                        as_of < crate::read::effective_tt_e(closes, &sidecar, segment, row)
+                    }
+                    RowBelief::Superseded => {
+                        crate::read::effective_tt_e(closes, &sidecar, segment, row) <= as_of
+                    }
+                };
+            if keep {
+                match out.last_mut() {
+                    Some(last) if last.1 == r => last.1 = r + 1,
+                    _ => out.push((r, r + 1)),
+                }
+            }
+        }
+    }
+    crate::vistouch::rows(tested);
+    Ok(out)
+}
+
 /// The folded, per-segment form: sorted `(row, tt_e)` pairs living in the
 /// segment header. Empty means `all_current` — the fast path.
 #[derive(Clone, Copy, Debug, Default)]

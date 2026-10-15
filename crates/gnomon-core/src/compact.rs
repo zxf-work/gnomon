@@ -606,6 +606,7 @@ impl NativeStore {
         // cached stats snapshot over all versions is now wrong. Postings need
         // no flush: `locate` resolves hits through the current manifest.
         *self.stats_cell().lock().expect("stats mutex poisoned") = None;
+        *self.stats_summary_cell().lock().expect("stats summary mutex poisoned") = None;
 
         Ok(CompactionReport {
             segments_before,

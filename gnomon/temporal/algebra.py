@@ -74,6 +74,10 @@ class OperatorSpec:
     #: the data did. Not part of the spec's identity, so it is excluded from
     #: comparison and repr.
     _validator: Any = field(default=None, compare=False, repr=False)
+    #: Filled arguments of calls that validated, keyed by `args_key` of the
+    #: caller's arguments. Handed out as fresh copies, never shared.
+    _filled_memo: dict[Any, dict[str, Any]] = field(
+        default_factory=dict, compare=False, repr=False)
 
 
 REGISTRY: dict[str, OperatorSpec] = {}
@@ -121,11 +125,91 @@ def _fill_defaults(schema: dict[str, Any], args: dict[str, Any]) -> dict[str, An
     return out
 
 
+#: Bound on each memo below, in entries; a full memo is simply cleared.
+MEMO_ENTRIES = 4096
+
+_SCALARS = (str, int, bool, type(None))
+
+
+def args_key(obj: Any) -> Any:
+    """A hashable key that equals another's exactly when the two argument
+    values are the same JSON value *of the same Python types*, dict keys in
+    the same order — so `1`, `1.0` and `True`, or a list and a tuple, never
+    share a key, because the JSON Schema check can treat them differently,
+    and `args_echo` keeps the caller's key order. `None` (do not memoize)
+    for anything outside plain JSON-shaped values."""
+    t = type(obj)
+    if t is dict:
+        items = []
+        for k, v in obj.items():
+            if type(k) is not str:
+                return None
+            kv = args_key(v)
+            if kv is None:
+                return None
+            items.append((k, kv))
+        return (dict, tuple(items))
+    if t is list:
+        out = []
+        for v in obj:
+            kv = args_key(v)
+            if kv is None:
+                return None
+            out.append(kv)
+        return (list, tuple(out))
+    if t is float:
+        # repr, not the value: 0.0 == -0.0, but they are different JSON
+        return None if obj != obj else (t, repr(obj))
+    if t in _SCALARS:
+        return (t, obj)
+    return None
+
+
+def json_copy(obj: Any) -> Any:
+    """Deep copy of a JSON-shaped value (dicts, lists and tuples over
+    immutable scalars): `copy.deepcopy` without its memo bookkeeping."""
+    t = type(obj)
+    if t is dict:
+        return {k: json_copy(v) for k, v in obj.items()}
+    if t is list:
+        return [json_copy(v) for v in obj]
+    if t is tuple:
+        return tuple(json_copy(v) for v in obj)
+    return obj
+
+
 def validate_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    return _validate_args_keyed(name, args)[0]
+
+
+def _validate_args_keyed(name: str, args: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+    """`validate_args`, plus the memo key of the caller's arguments.
+
+    A call whose arguments already validated is answered from the spec's
+    memo: validation and default filling are pure functions of the
+    arguments and the spec, and the memo lives on the spec, so re-registering
+    an operator starts a fresh one. Only successful validations are kept;
+    every invalid call is checked, and fails, exactly as before. The caller
+    gets a fresh deep copy, so mutating it cannot reach the memo.
+    """
     spec = REGISTRY.get(name)
     if spec is None:
         raise InvalidArgError(f"unknown operator: {name}",
                               known=sorted(REGISTRY))
+    key = args_key(args)
+    if key is not None:
+        hit = spec._filled_memo.get(key)
+        if hit is not None:
+            return json_copy(hit), key
+    filled = _validate_args(spec, name, args)
+    if key is not None:
+        if len(spec._filled_memo) >= MEMO_ENTRIES:
+            spec._filled_memo.clear()
+        spec._filled_memo[key] = json_copy(filled)
+    return filled, key
+
+
+def _validate_args(spec: OperatorSpec, name: str, args: dict[str, Any]) -> dict[str, Any]:
     if spec._validator is None:
         cls = jsonschema.validators.validator_for(spec.args_schema)
         cls.check_schema(spec.args_schema)

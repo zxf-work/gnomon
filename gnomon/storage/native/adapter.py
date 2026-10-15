@@ -69,6 +69,16 @@ class NativeAdapter(StorageAdapter):
     #: `edge_idents_at`. Portable backends keep the base class columns.
     TCSR_COLS = ("src_id", "dst_id", "vt_s", "vt_e", "seg_id", "seg_row")
 
+    #: `apply_ops` takes the batch's event-log record as `raw=`, so
+    #: an `ingest_events` op can be staged from it by the engine
+    #: (`stage_ingest_events_raw`). Callers holding the record (replay, the
+    #: live write path) pass it only to adapters that declare this.
+    accepts_raw_record = True
+
+    #: `(record bytes, {id(op): index in ops})` while `apply_ops` runs with a
+    #: record; `None` otherwise.
+    _raw_batch: tuple[bytes, dict[int, int]] | None = None
+
     #: Wall-clock microseconds the last `commit()` call spent outside the
     #: Rust engine's own `NativeStore::commit` (pyo3 argument marshalling,
     #: GIL bookkeeping, this method's own frame) -- the pyo3-boundary slice
@@ -226,7 +236,7 @@ class NativeAdapter(StorageAdapter):
         # The Python build from a live scan can, and does — so the batch is
         # the one case where the flag is ignored rather than honoured with a
         # wrong answer.
-        if tcsr_backend() == "rust" and not self._store.in_batch():
+        if tcsr_backend() in ("rust", "scan") and not self._store.in_batch():
             cols = _ShimCols()
             self._tcsr = (NativeTCSR(self, cols), cols)
             return self._tcsr
@@ -253,16 +263,46 @@ class NativeAdapter(StorageAdapter):
     # transaction time is taken from the first row written in the batch:
     # `apply_ops` stamps every row it produces with the batch's tt.
 
-    def apply_ops(self, ops: Sequence[dict[str, Any]], tt: int) -> None:
+    def apply_ops(self, ops: Sequence[dict[str, Any]], tt: int,
+                  raw: bytes | None = None) -> None:
         """Open the engine batch at the authoritative transaction time.
 
         `apply_ops` is the only caller that knows the batch's `tt` up front —
         individual writes only carry it per row, and `ensure_entities` does
         not carry it at all. Everything else is the inherited bi-temporal
         semantics, unchanged.
+
+        `raw` is this batch's event-log record, whose `ops` are
+        `ops`. With it, each `ingest_events` op is offered to the engine's
+        raw-record fast path first (`_ingest_events` below).
         """
         self._ensure_batch(tt)
-        super().apply_ops(ops, tt)
+        if raw is None:
+            super().apply_ops(ops, tt)
+            return
+        self._raw_batch = (raw, {id(op): i for i, op in enumerate(ops)})
+        try:
+            super().apply_ops(ops, tt)
+        finally:
+            self._raw_batch = None
+
+    def _ingest_events(self, op: dict[str, Any], tt: int) -> None:
+        """Stage the op from the batch's event-log record in the
+        engine when it is in the shape the engine reproduces exactly (no
+        `nodes`, no event `props`; see `crates/gnomon-core/src/
+        ingest_raw.rs`) and `GNOMON_INGEST_RAW` is not `0`. Otherwise — or
+        without a record — the Python row build, unchanged."""
+        rb = self._raw_batch
+        if rb is not None:
+            i = rb[1].get(id(op))
+            if i is not None:
+                try:
+                    done = self._store.stage_ingest_events_raw(rb[0], i, tt)
+                except Exception as e:
+                    raise _translate(e) from None
+                if done is not None:
+                    return
+        super()._ingest_events(op, tt)
 
     def begin(self) -> None:
         # the engine batch opens at the first apply_ops/write, when tt is known
@@ -492,6 +532,38 @@ class NativeAdapter(StorageAdapter):
         return self._nodes(self._read_op(
             lambda s: s.believed("node", uid, clamp_tt(as_of_tt))))
 
+    def nodes_valid_at(self, ids: Sequence[int], t: int,
+                       as_of_tt: int = OPEN_END) -> dict[int, tuple[str, str]]:
+        """`{dense id: (uid, label)}` for the ids among `ids` that have a
+        node version valid at instant `t` (`vt_s <= t < vt_e`) believed at
+        `as_of_tt` -- by one identity point read per id, not a node scan.
+
+        For the seed-driven `snapshot_subgraph`: exactly what
+        `nodes_columnar(as_of_tt, t, t + 1)` says about these ids. Where an
+        id has several such versions the label is the one that scan lists
+        last, the version greatest in `(vt_s, vid)`, which is the scan's
+        order (`read.rs::scan_node_versions`).
+        """
+        ids = [int(i) for i in ids]
+        if not ids:
+            return {}
+        as_of = clamp_tt(as_of_tt)
+        uids = self.uids_for(ids)
+
+        def run(s: Any) -> dict[int, tuple[str, str]]:
+            out: dict[int, tuple[str, str]] = {}
+            for i, uid in zip(ids, uids):
+                c = s.believed("node", uid, as_of)
+                best: tuple[tuple[int, str], str] | None = None
+                for vt_s, vt_e, vid, label in zip(c["vt_s"], c["vt_e"], c["vid"], c["label"]):
+                    if vt_s <= t < vt_e and (best is None or (vt_s, vid) > best[0]):
+                        best = ((vt_s, vid), label)
+                if best is not None:
+                    out[i] = (uid, best[1])
+            return out
+
+        return self._read_op(run)
+
     def believed_edge_versions(self, eid: str, as_of_tt: int = OPEN_END, *,
                                src: str | None = None, dst: str | None = None) -> list[EdgeVersion]:
         # src/dst are performance hints for backends that can anchor on them;
@@ -699,6 +771,19 @@ class NativeAdapter(StorageAdapter):
             [int(i) for i in seg_ids], [int(r) for r in seg_rows]))
         return np.asarray(eids, dtype=object), np.asarray(rels, dtype=object)
 
+    def props_at(self, kind: str, seg_ids: Sequence[int],
+                 seg_rows: Sequence[int]) -> list[dict]:
+        """Props of explicit scan addresses, in input order.
+
+        `props_for_vids` for rows whose addresses a scan projecting
+        `seg_id`/`seg_row` already returned: the engine reads exactly those
+        rows rather than sweeping every row of the kind for a vid. Valid only
+        against the generation that produced the addresses.
+        """
+        raw = self._read_op(lambda s: s.props_at(
+            kind, [int(i) for i in seg_ids], [int(r) for r in seg_rows]))
+        return [json.loads(text) for text in raw]
+
     def nodes_columnar(
         self,
         as_of_tt: int = OPEN_END,
@@ -847,6 +932,40 @@ class NativeAdapter(StorageAdapter):
         net replaces the native handle and a captured one would stay frozen.
         """
         return dict(self._store.open_path_stats())
+
+    def designs(self) -> dict[str, bool]:
+        """Which engine designs this handle runs with: `name -> in
+        force`. Each ablation switch (`GNOMON_RANGE_VISIBILITY=0`,
+        `GNOMON_WINDOW_FIRST=0`, `GNOMON_SEGMENT_PRUNE=0`, `GNOMON_TCSR=scan`,
+        `GNOMON_VIDFILTER=ignore`, `GNOMON_EXISTENCE_PROBE=walk`, and
+        `GNOMON_SEED_EXPANSION=0`, `GNOMON_ADJ_FILTERED_SCAN=0`) turns one
+        design off and keeps every answer; the engine reads them once, when
+        the handle opens, so this -- not the current environment -- is what
+        a receipt records. All `True` is the shipped engine."""
+        return dict(self._store.designs())
+
+    def reach_earliest(self, src: int, t_a: int, t_b: int, as_of_tt: int,
+                       direction: str, offset: int, limit: int) -> dict[str, Any] | None:
+        """`temporal_reachability`'s single-label earliest-arrival
+        search in the engine -- one planned scan of the window's believed
+        rows into a by-source CSR, a label-setting search, and the
+        `(arrival, uid)`-ordered page `[offset, offset + limit)` with the
+        total. `None` inside an open write batch (the engine's scan does not
+        see staged rows; the operator's own path handles that case)."""
+        return self._read_op(lambda s: s.reach_earliest(
+            int(src), int(t_a), int(t_b), clamp_tt(as_of_tt), direction,
+            int(offset), int(limit)))
+
+    def diff_snapshots_kernel(self, t1: int, t2: int, as_of_tt: int,
+                              limit: int) -> dict[str, Any] | None:
+        """`diff_snapshots` without `scope`, in the engine -- two
+        point-state plans, rows common to both retired by a merge, the rest
+        joined on `(src_id, dst_id, rel_type, disc)` / the dense uid, eids
+        only for added and removed rows, strings only for the pages. Content
+        candidates come back with both stored texts for the operator to
+        compare. `None` inside an open write batch."""
+        return self._read_op(lambda s: s.diff_snapshots(
+            int(t1), int(t2), clamp_tt(as_of_tt), int(limit)))
 
     def phase_stats(self) -> dict[str, int]:
         """Per-phase read-path timers: `agg_*` for the aggregate path's own
@@ -1059,6 +1178,17 @@ class NativeAdapter(StorageAdapter):
         when available and otherwise falls back to its portable scan.
         """
         return self._read_op(lambda s: s.resolve_entities(query, clamp_tt(as_of_tt)))
+
+    def resolve_entities_page(self, query: str, as_of_tt: int, label: str | None,
+                              offset: int, limit: int):
+        """`resolve_entities` with the operator's label filter, order and
+        pagination done in the engine: `(rows_total, page)`, the
+        page being `(uid, score, label, props)` tuples for rows
+        `[offset, offset + limit)` of the `(score, uid)` order. Present only
+        on this backend; `ops_snapshot.resolve_entities` prefers it.
+        """
+        return self._read_op(lambda s: s.resolve_entities_page(
+            query, clamp_tt(as_of_tt), label, offset, limit))
 
     def lookup_name(self, query: str, mode: str, as_of_tt: int = OPEN_END,
                     limit: int | None = None):
@@ -1461,7 +1591,13 @@ class NativeAdapter(StorageAdapter):
 #: Values of `GNOMON_TCSR`. Anything unrecognised is treated as unset, for the
 #: same reason `GNOMON_SCAN_THREADS` is: a measurement knob must never make a
 #: read fail.
-TCSR_BACKENDS = ("python", "rust")
+#:
+#: `scan` is the ablation of the per-segment index: the adapter takes
+#: the `rust` path, and the engine, which reads the same variable once when
+#: the handle opens (`designs()["adjacency_index"]`), finds each traversal
+#: call's adjacency by scanning the segments' endpoint columns instead of
+#: loading an index. Answers are identical; only the work differs.
+TCSR_BACKENDS = ("python", "rust", "scan")
 
 #: What an unset (or unrecognised) `GNOMON_TCSR` means. `rust` now; it was
 #: `python` for the whole 0.8.x shadow period. One name, so a test or a script
@@ -1484,9 +1620,11 @@ SHIM_ROW_BUDGET = 1_000_000
 
 
 def tcsr_backend() -> str:
-    """`"python"` only when `GNOMON_TCSR` says so, else `"rust"` (the default
-    by default). Read per build, not per process, so one process can run both
-    sides of the A/B against one store.
+    """`"python"` or `"scan"` only when `GNOMON_TCSR` says so, else `"rust"`
+    (the default). Read per build, not per process, so one process
+    can run both sides of the A/B against one store. `"scan"` routes exactly
+    as `"rust"` does here; whether the engine then uses its index is fixed
+    when the handle opens and reported by `NativeAdapter.designs()`.
 
     Every consumer that wants to *record* which index answered must call this
     rather than read the environment variable: an unset variable is the

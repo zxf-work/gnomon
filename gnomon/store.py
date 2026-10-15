@@ -596,7 +596,11 @@ class Store:
             self._chain = extend_chain(self._chain, record)
         self.adapter.begin()
         try:
-            self.adapter.apply_ops(ops, tt)
+            if getattr(self.adapter, "accepts_raw_record", False):
+                # the record just logged, for the raw-record fast path
+                self.adapter.apply_ops(ops, tt, raw=record)
+            else:
+                self.adapter.apply_ops(ops, tt)
         except GnomonError:
             self.adapter.rollback()
             raise

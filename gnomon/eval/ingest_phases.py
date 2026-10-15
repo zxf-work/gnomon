@@ -349,6 +349,7 @@ _BODY = {
     "compact_incremental": "py_compact_incremental_ns",
     "compact": "py_compact_ns",
     "gc": "py_gc_ns",
+    "stage_ingest_events_raw": "py_ingest_raw_ns",
 }
 
 _WRITE_SLOTS = ("column_fill", "encode", "string_heap", "header_checksum",
@@ -416,8 +417,22 @@ def compose(py: dict[str, int], r: dict[str, int],
                             g("probe_count_answer_ns"))
     put("probe.count_reconcile", p_cnt_rec)
     put("probe.count_lookup", p_cnt_ans)
-    put("probe.other", g("py_believed_any_ns") - p_locate - p_mat - p_staged
-        - p_scan - p_cnt_rec - p_cnt_ans)
+    # the probe runs from `believed_any` and, on the raw-record fast path, from
+    # inside `stage_ingest_events_raw`, whose body counts it separately
+    put("probe.other", g("py_believed_any_ns") + g("ingest_raw_probe_ns") - p_locate
+        - p_mat - p_staged - p_scan - p_cnt_rec - p_cnt_ans)
+
+    # -- the raw-record ingest fast path --------------------------------------
+    r_parts = {
+        "ingest_raw.parse_check": g("ingest_raw_parse_ns"),
+        "ingest_raw.identity_hashing": g("ingest_raw_identity_ns"),
+        "ingest_raw.stage_rows": g("ingest_raw_stage_ns"),
+    }
+    for k, v in r_parts.items():
+        put(k, v)
+    put("staging.dictionary_insert", g("ingest_raw_ensure_ns"))
+    put("ingest_raw.other", g("py_ingest_raw_ns") - sum(r_parts.values())
+        - g("ingest_raw_ensure_ns") - g("ingest_raw_probe_ns"))
 
     # -- correction resolution -----------------------------------------------
     c_locate, c_fold = g("correct.locate_ns"), g("correct.fold_ns")
@@ -520,6 +535,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("eventlog.", "event-log append"),
     ("python.", "Python row build and batch conversion"),
     ("pyo3.", "PyO3 call boundary"),
+    ("ingest_raw.", "raw-record ingest (engine row build)"),
     ("engine.", "engine (timers compiled out)"),
     ("staging.", "staging (dictionary, row build)"),
     ("probe.", "endpoint existence probe"),

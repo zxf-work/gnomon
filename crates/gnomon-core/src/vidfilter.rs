@@ -934,6 +934,11 @@ pub fn filter_dir(root: &Path) -> PathBuf {
 }
 
 /// Is the seal-time build enabled? `GNOMON_VIDFILTER=0` turns it off — the
+/// build only: filters already on disk are still consulted.
+/// `GNOMON_VIDFILTER=ignore`, the ablation of the filter itself, which a
+/// handle reads at open (`Designs::identity_filter`): no filter is
+/// consulted, so it can be ablated on a store that has them. The
+/// original wording:
 /// switch the build-time gate compares against.
 ///
 /// **Default on, against the project's "indexes are built lazily at first

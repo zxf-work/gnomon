@@ -31,6 +31,14 @@ from gnomon.temporal.guardrails import point_read_estimate, scan_estimate
 
 MAX_HOPS = 3
 
+#: The largest reached-node set the seed-driven snapshot
+#: expands; past it `snapshot_subgraph` takes the whole-snapshot path. It is
+#: the engine's cap on an incidence filter answered from adjacency postings
+#: (`ADJ_FILTER_MAX_IDS`), so every filtered scan the expansion makes can
+#: take them; a frontier that large is no longer "a few nodes", and one
+#: instant scan is the cheaper plan.
+SEED_EXPANSION_MAX_IDS = 1024
+
 
 # --------------------------------------------------------------------------- #
 # shared snapshot helpers                                                      #
@@ -66,6 +74,78 @@ def bfs_node_set(edges: dict[str, np.ndarray], seed_ids: np.ndarray,
             dist[i] = h
         frontier = np.asarray(new, dtype=np.int64)
     return dist
+
+
+def _seed_expansion(adapter: StorageAdapter) -> bool:
+    """Can this adapter answer a snapshot by expanding from its seeds?
+
+    Only the native engine: its filtered scans walk the per-segment
+    adjacency index (fix B), and it reads a node's validity at an instant by
+    identity (`nodes_valid_at`). The switch `GNOMON_SEED_EXPANSION=0` is read
+    when the handle opens and reported by `designs()`. Not inside an open
+    write batch: point reads see staged versions, which scans do not.
+    """
+    designs = getattr(adapter, "designs", None)
+    if designs is None or not hasattr(adapter, "nodes_valid_at"):
+        return False
+    if not designs().get("seed_expansion", True):
+        return False
+    in_batch = getattr(getattr(adapter, "_store", None), "in_batch", None)
+    return not (in_batch is not None and in_batch())
+
+
+def _expand_from_seeds(adapter: StorageAdapter, seed_ids: np.ndarray, t: int,
+                       as_of: int, hops: int, rel_types: list[str] | None):
+    """`bfs_node_set` over G(t) and the induced edges, from
+    the seeds outwards rather than over the whole instant.
+
+    Each hop is one scan filtered to the frontier (`touching_ids`), which
+    the engine answers from each segment's adjacency postings, with the same
+    belief, valid-time and relation predicate as the instant scan; a reached
+    node joins only if it has a node version valid at `t` (identity point
+    reads, `nodes_valid_at`). The induced edges are one scan with both
+    endpoints in the reached set (`touching_both`), every column, in the
+    scan's `(vt_s, vid)` order -- the rows the whole-instant scan would keep.
+
+    Returns `(dist, edges, node_info)`, or `None` when the reached set
+    outgrows `SEED_EXPANSION_MAX_IDS`; the caller then runs the
+    whole-snapshot path.
+    """
+    cols = ("src_id", "dst_id")
+    seeds = sorted({int(i) for i in seed_ids})
+    # The first call is a scan, as on the whole-snapshot path, so a store
+    # that cannot answer this belief time refuses it the same way.
+    e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t, vt_max=t + 1,
+                               rel_types=rel_types, columns=cols,
+                               touching_ids=seeds)
+    info = adapter.nodes_valid_at(seeds, t, as_of)
+    checked = set(seeds)
+    dist: dict[int, int] = {int(i): 0 for i in seed_ids if int(i) in info}
+    frontier = np.asarray(sorted(dist), dtype=np.int64)
+    for h in range(1, hops + 1):
+        if frontier.size == 0:
+            break
+        if h > 1:
+            e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t, vt_max=t + 1,
+                                       rel_types=rel_types, columns=cols,
+                                       touching_ids=frontier.tolist())
+        src, dst = e["src_id"], e["dst_id"]
+        m = np.isin(src, frontier) | np.isin(dst, frontier)
+        touched = np.unique(np.concatenate([src[m], dst[m]]))
+        cand = [int(i) for i in touched if int(i) not in dist]
+        if len(dist) + len(cand) > SEED_EXPANSION_MAX_IDS:
+            return None
+        ask = [i for i in cand if i not in checked]
+        checked.update(ask)
+        info.update(adapter.nodes_valid_at(ask, t, as_of))
+        new = [i for i in cand if i in info]
+        for i in new:
+            dist[i] = h
+        frontier = np.asarray(new, dtype=np.int64)
+    edges = adapter.edges_columnar(as_of_tt=as_of, vt_min=t, vt_max=t + 1,
+                                   rel_types=rel_types, touching_ids=sorted(dist),
+                                   touching_both=True)
+    return dist, edges, info
 
 
 def _edge_rows(adapter: StorageAdapter, edges: dict[str, np.ndarray],
@@ -153,16 +233,30 @@ def _check_hops(args: dict[str, Any]) -> None:
 def snapshot_subgraph(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     t, as_of = args["t_valid"], args["as_of_tt"]
     seed_ids = adapter.dense_ids(args["seeds"])
-    edges = edges_at(adapter, t, as_of, args["rel_types"])
-    nodes = nodes_at(adapter, t, as_of)
-    dist = bfs_node_set(edges, seed_ids, nodes["uid_id"], args["hops"])
-    in_set = np.isin(edges["src_id"], list(dist)) & np.isin(edges["dst_id"], list(dist))
-    idx = np.flatnonzero(in_set)  # already ordered by (vt_s, vid)
-    node_pos = {int(i): k for k, i in enumerate(nodes["uid_id"].tolist())}
-    node_rows = sorted(
-        ({"uid": nodes["uid"][node_pos[i]], "label": nodes["label"][node_pos[i]],
-          "hop": h} for i, h in dist.items()),
-        key=lambda r: (r["hop"], r["uid"]))
+    expanded = None
+    if _seed_expansion(adapter):
+        expanded = _expand_from_seeds(adapter, seed_ids, t, as_of, args["hops"],
+                                      args["rel_types"])
+    if expanded is not None:
+        # the induced edges are exactly the scan's rows
+        dist, edges, info = expanded
+        idx = np.arange(len(edges["src_id"]))
+        node_rows = sorted(
+            ({"uid": info[i][0], "label": info[i][1], "hop": h} for i, h in dist.items()),
+            key=lambda r: (r["hop"], r["uid"]))
+    else:
+        # the whole snapshot at t: other backends, `GNOMON_SEED_EXPANSION=0`,
+        # and a reached set past `SEED_EXPANSION_MAX_IDS`
+        edges = edges_at(adapter, t, as_of, args["rel_types"])
+        nodes = nodes_at(adapter, t, as_of)
+        dist = bfs_node_set(edges, seed_ids, nodes["uid_id"], args["hops"])
+        in_set = np.isin(edges["src_id"], list(dist)) & np.isin(edges["dst_id"], list(dist))
+        idx = np.flatnonzero(in_set)  # already ordered by (vt_s, vid)
+        node_pos = {int(i): k for k, i in enumerate(nodes["uid_id"].tolist())}
+        node_rows = sorted(
+            ({"uid": nodes["uid"][node_pos[i]], "label": nodes["label"][node_pos[i]],
+              "hop": h} for i, h in dist.items()),
+            key=lambda r: (r["hop"], r["uid"]))
     out = paginate(_edge_rows(adapter, edges, idx), args["limit"], args["cursor"])
     out["nodes"] = node_rows[: args["limit"]]
     out["nodes_total"] = len(node_rows)
@@ -196,13 +290,44 @@ SCOPE = {
 _DIFF_EDGE_COLS = ("eid", "vid", "src_id", "dst_id", "rel_type")
 
 
-def _point_state(adapter: StorageAdapter, t: int, as_of: int):
+#: With the rows' physical addresses, where the adapter can read props by
+#: address: the changed-props check then reads the few candidate
+#: rows directly instead of sweeping every edge row for their vids.
+_DIFF_EDGE_ADDR_COLS = _DIFF_EDGE_COLS + ("seg_id", "seg_row")
+
+
+def _point_state(adapter: StorageAdapter, t: int, as_of: int,
+                 edge_columns: tuple[str, ...] = _DIFF_EDGE_COLS):
     """(node columnar, edge columnar) valid at t, plus identity->index maps."""
     nodes = nodes_at(adapter, t, as_of)
-    edges = edges_at(adapter, t, as_of, columns=_DIFF_EDGE_COLS)
+    edges = edges_at(adapter, t, as_of, columns=edge_columns)
     node_map = {u: i for i, u in enumerate(nodes["uid"].tolist())}
     edge_map = {e: i for i, e in enumerate(edges["eid"].tolist())}
     return nodes, edges, node_map, edge_map
+
+
+def _edge_props_by_address(adapter: StorageAdapter, cand_e, e1, emap1, e2, emap2):
+    """`{vid: props}` for the candidate edge versions, read at the addresses
+    the two point-state scans returned — the map `props_for_vids`
+    builds by sweeping every edge row, built from the candidate rows alone.
+    `None` (take the sweep) when an address is not a committed segment row:
+    a row staged in an open batch has no segment to read it from."""
+    vids: list[str] = []
+    seg_ids: list[int] = []
+    seg_rows: list[int] = []
+    seen: set[str] = set()
+    for e, va, vb in cand_e:
+        for vid, edges, i in ((va, e1, emap1[e]), (vb, e2, emap2[e])):
+            if vid in seen:
+                continue
+            seen.add(vid)
+            sid, row = int(edges["seg_id"][i]), int(edges["seg_row"][i])
+            if sid < 0 or row < 0:
+                return None
+            vids.append(vid)
+            seg_ids.append(sid)
+            seg_rows.append(row)
+    return dict(zip(vids, adapter.props_at("edge", seg_ids, seg_rows)))
 
 
 @operator(
@@ -225,8 +350,14 @@ def _point_state(adapter: StorageAdapter, t: int, as_of: int):
 )
 def diff_snapshots(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     t1, t2, as_of, limit = args["t1"], args["t2"], args["as_of_tt"], args["limit"]
-    n1, e1, nmap1, emap1 = _point_state(adapter, t1, as_of)
-    n2, e2, nmap2, emap2 = _point_state(adapter, t2, as_of)
+    if args["scope"] is None and _diff_kernel(adapter):
+        got = adapter.diff_snapshots_kernel(t1, t2, as_of, limit)
+        if got is not None:
+            return _diff_from_kernel(got, limit)
+    by_address = callable(getattr(adapter, "props_at", None))
+    ecols = _DIFF_EDGE_ADDR_COLS if by_address else _DIFF_EDGE_COLS
+    n1, e1, nmap1, emap1 = _point_state(adapter, t1, as_of, ecols)
+    n2, e2, nmap2, emap2 = _point_state(adapter, t2, as_of, ecols)
 
     allowed: set[str] | None = None
     if args["scope"] is not None:
@@ -267,8 +398,12 @@ def diff_snapshots(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
     common_edges = [e for e in emap1 if e in emap2 and edge_ok(e1, emap1[e])]
     cand_e = [(e, e1["vid"][emap1[e]], e2["vid"][emap2[e]]) for e in common_edges
               if e1["vid"][emap1[e]] != e2["vid"][emap2[e]]]
-    props_e = adapter.props_for_vids(
-        "edge", sorted({v for _, a, b in cand_e for v in (a, b)}))
+    props_e = None
+    if by_address and cand_e:
+        props_e = _edge_props_by_address(adapter, cand_e, e1, emap1, e2, emap2)
+    if props_e is None:
+        props_e = adapter.props_for_vids(
+            "edge", sorted({v for _, a, b in cand_e for v in (a, b)}))
     for e, va, vb in sorted(cand_e):
         if props_e.get(va) != props_e.get(vb):
             changed.append({"kind": "edge", "id": e,
@@ -287,6 +422,50 @@ def diff_snapshots(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
         "edges_added_total": len(edges_added),
         "edges_removed": [edge_desc(e1, emap1, e) for e in edges_removed[:limit]],
         "edges_removed_total": len(edges_removed),
+        "props_changed": changed[:limit], "props_changed_total": len(changed),
+    }
+    out["truncated"] = any(
+        out[f"{k}_total"] > limit
+        for k in ("nodes_added", "nodes_removed", "edges_added", "edges_removed",
+                  "props_changed"))
+    return out
+
+
+def _diff_kernel(adapter: StorageAdapter) -> bool:
+    """Does this adapter carry the engine's snapshot diff? Only the
+    native engine, with `GNOMON_DIFF_KERNEL` not set to `python` (read at open,
+    reported by `designs()`). `scope` keeps the path below."""
+    designs = getattr(adapter, "designs", None)
+    if designs is None or not hasattr(adapter, "diff_snapshots_kernel"):
+        return False
+    return bool(designs().get("diff_kernel", False))
+
+
+def _diff_from_kernel(got: dict[str, Any], limit: int) -> dict[str, Any]:
+    """The operator's answer from the engine's: the four identity lists come
+    back paged and ordered; the content candidates come back whole, with the
+    stored text of both versions, and are decided here exactly as the path
+    below decides them -- `props_for_vids` parses the same stored text with
+    `json.loads`, so a candidate is a change iff the parsed values (or, for
+    a node, the labels) differ."""
+    changed: list[dict[str, Any]] = []
+    for uid, _va, _vb, la, lb, pa_text, pb_text in got["node_cands"]:
+        pa, pb = json.loads(pa_text), json.loads(pb_text)
+        if pa != pb or la != lb:
+            changed.append({"kind": "node", "id": uid,
+                            "from": {"label": la, "props": pa},
+                            "to": {"label": lb, "props": pb}})
+    for eid, _va, _vb, pa_text, pb_text in got["edge_cands"]:
+        pa, pb = json.loads(pa_text), json.loads(pb_text)
+        if pa != pb:
+            changed.append({"kind": "edge", "id": eid,
+                            "from": {"props": pa},
+                            "to": {"props": pb}})
+    out = {
+        "nodes_added": got["nodes_added"], "nodes_added_total": got["nodes_added_total"],
+        "nodes_removed": got["nodes_removed"], "nodes_removed_total": got["nodes_removed_total"],
+        "edges_added": got["edges_added"], "edges_added_total": got["edges_added_total"],
+        "edges_removed": got["edges_removed"], "edges_removed_total": got["edges_removed_total"],
         "props_changed": changed[:limit], "props_changed_total": len(changed),
     }
     out["truncated"] = any(
@@ -387,6 +566,32 @@ def neighborhood_evolution(adapter: StorageAdapter, args: dict[str, Any]) -> dic
 )
 def resolve_entities(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     q = args["query"]
+    page_kernel = getattr(adapter, "resolve_entities_page", None)
+    if page_kernel is not None:
+        # engine-side, paged: the label filter, the (match, uid)
+        # order and the slice happen in the engine, so props are parsed for
+        # the page's rows only. The cursor is read exactly as `paginate`
+        # reads it; a negative offset (Python slicing from the end) keeps the
+        # row-list path below rather than being re-derived here.
+        cursor = args["cursor"]
+        try:
+            offset = int(cursor) if cursor else 0
+        except ValueError:
+            raise InvalidArgError(f"bad cursor: {cursor!r}") from None
+        if 0 <= offset < 1 << 62:
+            total, page = page_kernel(q, args["as_of_tt"], args["label"],
+                                      offset, args["limit"])
+            rows = [{"uid": uid, "label": label,
+                     "name": json.loads(props_text).get("name"),
+                     "match": int(score)}
+                    for uid, score, label, props_text in page]
+            truncated = offset + len(rows) < total
+            return {
+                "rows": rows,
+                "rows_total": total,
+                "truncated": truncated,
+                "cursor": str(offset + len(rows)) if truncated else None,
+            }
     kernel = getattr(adapter, "resolve_entities", None)
     if kernel is not None:
         # engine-side: matches over the promoted name column, no JSON per row

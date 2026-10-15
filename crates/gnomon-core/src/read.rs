@@ -30,6 +30,32 @@ use crate::store::{segment_id_of, NativeStore, OpenMode};
 use crate::visibility::{CloseIndex, Sidecar};
 use crate::{believed_at, OPEN_END};
 
+/// `(rows_total, page)` of [`NativeStore::resolve_entities_page`]; a page
+/// row is `(uid, score, label, props)`, as `resolve_entities` returns it.
+pub type ResolvePage = (usize, Vec<(String, u8, String, String)>);
+
+/// `hay.to_lowercase().contains(needle_lower)`, where `needle_lower` is
+/// already lowercased — without allocating when both are ASCII, where
+/// Unicode lowercasing is exactly ASCII lowercasing. Anything non-ASCII
+/// takes the allocating form, so the answer never depends on the shortcut.
+/// `buf` is scratch, reused across calls.
+pub(crate) fn lower_contains(hay: &str, needle_lower: &str, buf: &mut Vec<u8>) -> bool {
+    if !(hay.is_ascii() && needle_lower.is_ascii()) {
+        return hay.to_lowercase().contains(needle_lower);
+    }
+    let n = needle_lower.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    let h = hay.as_bytes();
+    if n.len() > h.len() {
+        return false;
+    }
+    buf.clear();
+    buf.extend(h.iter().map(u8::to_ascii_lowercase));
+    buf.windows(n.len()).any(|w| w == n)
+}
+
 /// The effective transaction-time end of one stored row: the close run's
 /// `tt_e` when this generation records one, else the folded sidecar's.
 ///
@@ -259,6 +285,60 @@ impl NativeStore {
                     edge_eid(&src_uid, &dst_uid, rel_type, disc_s).to_hex(),
                     rel_type.clone(),
                 ));
+            }
+        }
+        Ok(out
+            .into_iter()
+            .map(|o| o.expect("every requested address was filled"))
+            .collect())
+    }
+
+    /// Canonical-JSON props of explicit `(segment id, row)` addresses, in
+    /// input order.
+    ///
+    /// The address-based companion of [`props_for_vids`](Self::props_for_vids).
+    /// A version id is a hash, so segments have no order to search one by and
+    /// `props_for_vids` sweeps every row of the kind — all 10M edge rows for
+    /// the 16 vids `diff_snapshots` asks about. A caller that already holds
+    /// the rows' addresses (a scan projecting `seg_id`/`seg_row`) reads the
+    /// props of exactly those rows instead: one segment open and one string
+    /// lookup per address. Addresses are meaningful only against the
+    /// generation that produced them; segment ids the current generation
+    /// does not name, and rows past a segment's end, are refused.
+    pub fn props_at(&self, kind: RowKind, seg_ids: &[u64], seg_rows: &[u32]) -> Result<Vec<String>> {
+        if seg_ids.len() != seg_rows.len() {
+            return Err(EngineError::invariant(
+                "props_at: seg_ids and seg_rows differ in length",
+            ));
+        }
+        let files: HashMap<u64, String> = match kind {
+            RowKind::Edge => self.edge_files(),
+            RowKind::Node => self.node_files(),
+        }
+        .into_iter()
+        .map(|(file, id)| (id, file))
+        .collect();
+        // group by segment so each is opened (and verified) once
+        let mut by_seg: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (i, &sid) in seg_ids.iter().enumerate() {
+            by_seg.entry(sid).or_default().push(i);
+        }
+        let mut out: Vec<Option<String>> = vec![None; seg_ids.len()];
+        for (sid, idxs) in by_seg {
+            let file = files.get(&sid).ok_or_else(|| {
+                EngineError::invariant(format!(
+                    "segment id {sid} is not in the current generation"
+                ))
+            })?;
+            let seg = self.open_segment(file)?;
+            let strings = seg.strings()?;
+            let props = seg.u32_column("props_ref")?;
+            for i in idxs {
+                let r = seg_rows[i] as usize;
+                let p = props.get(r).ok_or_else(|| {
+                    EngineError::invariant(format!("row {r} is out of bounds for segment {sid}"))
+                })?;
+                out[i] = Some(strings.get(*p)?.to_string());
             }
         }
         Ok(out
@@ -811,11 +891,14 @@ impl NativeStore {
         for entry in self.manifest().segments_of(kind) {
             let seg_id = crate::store::segment_id_of(&entry.file);
             let Some(file) = by_id.get(&seg_id) else { continue };
-            if let Some(k) = key.as_ref() {
+            // `GNOMON_SEGMENT_PRUNE=0` searches every segment, which
+            // is the `vt_s = None` path and finds the same row
+            if let Some(k) = key.as_ref().filter(|_| self.designs().segment_prune) {
                 let lo = (entry.key_lo.0, entry.key_lo.1.as_str());
                 let hi = (entry.key_hi.0, entry.key_hi.1.as_str());
                 let probe = (k.0, k.1.as_str());
                 if probe < lo || probe > hi {
+                    crate::vistouch::pruned(1);
                     continue;
                 }
             }
@@ -975,7 +1058,9 @@ impl NativeStore {
         uids: &[String],
         as_of_tt: i64,
     ) -> Result<HashSet<String>> {
-        let how = if Self::is_current_belief(as_of_tt) {
+        // `GNOMON_EXISTENCE_PROBE=walk` answers current belief by the
+        // walk too, and never builds the count
+        let how = if Self::is_current_belief(as_of_tt) && self.designs().existence_count {
             ExistenceProbe::Count
         } else {
             ExistenceProbe::Walk
@@ -1210,6 +1295,7 @@ impl NativeStore {
                 .collect();
             ScanSet::new(targets)
                 .with_closes(closes)
+                .with_designs(self.designs())
                 .select(&ScanRequest {
                     as_of_tt,
                     // no valid-time window: resolution is over every believed
@@ -1286,6 +1372,239 @@ impl NativeStore {
             .collect();
         out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         Ok(out)
+    }
+
+    /// One page of entity resolution: exactly the rows
+    /// [`resolve_entities`](Self::resolve_entities) returns, restricted to
+    /// entities whose canonical label equals `label` (when given), ordered by
+    /// `(score, uid)`, then sliced to `[offset, offset + limit)`. Returns
+    /// `(rows_total, page)`, `rows_total` counted after the label filter —
+    /// the operator's own pagination, moved below the binding so only the
+    /// page's strings are ever built.
+    ///
+    /// Same rows, same rules, different bookkeeping:
+    ///
+    /// * State is a flat slot per dense uid id instead of a `String`-keyed
+    ///   map whose entries copied the label and props of every believed row.
+    ///   A slot holds the canonical `(vt_s, vid)` and the *address* of the
+    ///   row that set it; the `key >= best` replacement rule and the visiting
+    ///   order (segments, then rows, then the staged batch) are
+    ///   `resolve_entities`'s, so the same row wins every tie.
+    /// * A uid is scored once (exact / substring), not once per row. A row's
+    ///   name is looked at only while its entity has no uid match and no name
+    ///   match yet — the score is a minimum, and a uid match (0 or 1) always
+    ///   beats a name match (2).
+    /// * Case-insensitive matching allocates nothing when the text and the
+    ///   query are both ASCII (where `to_lowercase` is byte-wise); anything
+    ///   else takes `to_lowercase().contains()`, unchanged.
+    /// * Labels and props are read only for matched entities; strings are
+    ///   built only for the page.
+    pub fn resolve_entities_page(
+        &self,
+        query: &str,
+        as_of_tt: i64,
+        label: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ResolvePage> {
+        use crate::scan::{ScanRequest, ScanSet, ScanTarget};
+
+        const NONE: u8 = u8::MAX;
+        const STAGED: u32 = u32::MAX;
+        #[derive(Clone, Copy)]
+        struct Slot {
+            vt_s: i64,
+            vid: Id96,
+            /// selection index, or `STAGED` (then `row` indexes the batch)
+            sel: u32,
+            row: u32,
+            uid_score: u8,
+            seen: bool,
+            name_hit: bool,
+        }
+        const EMPTY: Slot = Slot {
+            vt_s: 0,
+            vid: Id96 { hi: 0, lo: 0 },
+            sel: 0,
+            row: 0,
+            uid_score: NONE,
+            seen: false,
+            name_hit: false,
+        };
+
+        self.assert_full_belief(as_of_tt)?;
+        let ql = query.to_lowercase();
+        let closes = self.close_index()?;
+        let dict = self.dict();
+        let mut slots = vec![EMPTY; dict.len() as usize];
+        let mut buf: Vec<u8> = Vec::new();
+        let uid_str = |id: u32| -> Result<&str> {
+            dict.uid(id).ok_or_else(|| {
+                EngineError::invariant(format!("dense id {id} is not in the dictionary"))
+            })
+        };
+        // first sight of an entity: score its uid once
+        let first = |slot: &mut Slot, id: u32, buf: &mut Vec<u8>| -> Result<()> {
+            let uid = uid_str(id)?;
+            slot.uid_score = if uid == query {
+                0
+            } else if lower_contains(uid, &ql, buf) {
+                1
+            } else {
+                NONE
+            };
+            slot.seen = true;
+            Ok(())
+        };
+        let n_slots = slots.len();
+        let slot_of = |id: u32| -> Result<usize> {
+            let i = id as usize;
+            if i >= n_slots {
+                // the dictionary only grows; an id past it is not in it
+                return Err(EngineError::invariant(format!(
+                    "dense id {id} is not in the dictionary"
+                )));
+            }
+            Ok(i)
+        };
+
+        let files = self.node_files();
+        let mut segs = Vec::with_capacity(files.len());
+        for (file, seg_id) in &files {
+            segs.push((self.open_segment(file)?, *seg_id));
+        }
+        let (selections, _stats) = {
+            let targets: Vec<ScanTarget<'_, crate::segment::MmapSource>> = segs
+                .iter()
+                .map(|(segment, id)| ScanTarget {
+                    segment,
+                    lane: segment.header().lane,
+                    id: *id,
+                })
+                .collect();
+            ScanSet::new(targets)
+                .with_closes(closes)
+                .with_designs(self.designs())
+                .select(&ScanRequest {
+                    as_of_tt,
+                    ..ScanRequest::default()
+                })?
+        };
+
+        for (si, sel) in selections.iter().enumerate() {
+            let (seg, _) = &segs[sel.segment];
+            let strings = seg.strings()?;
+            let vt_s = seg.i64_column("vt_s")?;
+            let uid_id = seg.u32_column("uid_id")?;
+            let vid_hi = seg.u64_column("vid64")?;
+            let vid_lo = seg.u32_column("vid_lo32")?;
+            let name_ref = seg.u32_column("name_ref").ok();
+            for &row in &sel.rows {
+                let i = row as usize;
+                let id = uid_id[i];
+                let k = slot_of(id)?;
+                let s = &mut slots[k];
+                let vid = Id96 { hi: vid_hi[i], lo: vid_lo[i] };
+                if !s.seen {
+                    first(s, id, &mut buf)?;
+                    s.vt_s = vt_s[i];
+                    s.vid = vid;
+                    s.sel = si as u32;
+                    s.row = row;
+                } else if (vt_s[i], vid) >= (s.vt_s, s.vid) {
+                    s.vt_s = vt_s[i];
+                    s.vid = vid;
+                    s.sel = si as u32;
+                    s.row = row;
+                }
+                if s.uid_score == NONE && !s.name_hit {
+                    if let Some(col) = name_ref {
+                        if let Some(n) = strings.get_opt(col[i])? {
+                            s.name_hit = !n.is_empty() && lower_contains(n, &ql, &mut buf);
+                        }
+                    }
+                }
+            }
+        }
+
+        // rows staged in an open batch: a batch must read its own writes
+        let staged = self.staged_nodes();
+        let staged_closes = self.staged_closes();
+        for (ri, r) in staged.iter().enumerate() {
+            let tt_e = staged_closes.get(&r.vid).copied().unwrap_or(OPEN_END);
+            if !believed_at(r.tt_s, tt_e, as_of_tt) {
+                continue;
+            }
+            let k = slot_of(r.uid_id)?;
+            let s = &mut slots[k];
+            if !s.seen {
+                first(s, r.uid_id, &mut buf)?;
+                s.vt_s = r.vt_s;
+                s.vid = r.vid;
+                s.sel = STAGED;
+                s.row = ri as u32;
+            } else if (r.vt_s, r.vid) >= (s.vt_s, s.vid) {
+                s.vt_s = r.vt_s;
+                s.vid = r.vid;
+                s.sel = STAGED;
+                s.row = ri as u32;
+            }
+            if s.uid_score == NONE && !s.name_hit {
+                if let Some(n) = crate::segment::name_of(&r.props) {
+                    s.name_hit = !n.is_empty() && lower_contains(&n, &ql, &mut buf);
+                }
+            }
+        }
+
+        // the canonical row's label and props, by address
+        let mut views = Vec::with_capacity(selections.len());
+        for sel in &selections {
+            let (seg, _) = &segs[sel.segment];
+            views.push((
+                seg.strings()?,
+                seg.u32_column("label_ref")?,
+                seg.u32_column("props_ref")?,
+            ));
+        }
+        let canonical = |s: &Slot| -> Result<(&str, &str)> {
+            if s.sel == STAGED {
+                let r = &staged[s.row as usize];
+                Ok((r.label.as_str(), r.props.as_str()))
+            } else {
+                let (strings, label_ref, props_ref) = &views[s.sel as usize];
+                let i = s.row as usize;
+                Ok((strings.get(label_ref[i])?, strings.get(props_ref[i])?))
+            }
+        };
+
+        // matched entities, label-filtered, ordered by (score, uid)
+        let mut matched: Vec<(u8, &str, u32)> = Vec::new();
+        for (id, s) in slots.iter().enumerate() {
+            if !s.seen {
+                continue;
+            }
+            let score = if s.uid_score != NONE {
+                s.uid_score
+            } else if s.name_hit {
+                2
+            } else {
+                continue; // tracked for state, never matched
+            };
+            if let Some(want) = label {
+                if canonical(s)?.0 != want {
+                    continue;
+                }
+            }
+            matched.push((score, uid_str(id as u32)?, id as u32));
+        }
+        matched.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        let total = matched.len();
+        let mut page = Vec::with_capacity(limit.min(total.saturating_sub(offset)));
+        for &(score, uid, id) in matched.iter().skip(offset).take(limit) {
+            let (lab, props) = canonical(&slots[id as usize])?;
+            page.push((uid.to_string(), score, lab.to_string(), props.to_string()));
+        }
+        Ok((total, page))
     }
 
     /// Sorted-name-index lookup: exact or prefix match
@@ -1568,6 +1887,60 @@ impl NativeStore {
         Ok(acc)
     }
 
+    /// The statistics summary `stats()` serves, cached per manifest
+    /// generation.
+    ///
+    /// `stats_accum` hands out a *clone* of the accumulator, whose
+    /// per-source out-degree map has one entry per distinct source (100k at
+    /// 10M rows), and the caller then took that map's maximum: 0.26 ms on
+    /// every operator call, for a value that changes only with the store.
+    /// This derives the summary from the cached accumulator in place — no
+    /// clone — and keeps it until the generation moves or the accumulator
+    /// changes (commit fold, rewriting compaction), which clear it.
+    ///
+    /// Values are exactly `stats_accum`'s: when the accumulator is cached
+    /// the summary is derived from it; when it is not, `stats_accum` builds
+    /// it, and a summary is only kept if the accumulator was kept too (an
+    /// open batch's not-cached snapshot is never memoized).
+    pub fn stats_summary(&self) -> Result<std::sync::Arc<crate::store::StatsSummary>> {
+        let gen = self.generation();
+        {
+            let cell = self
+                .stats_summary_cell()
+                .lock()
+                .expect("stats summary mutex poisoned");
+            if let Some((g, s)) = cell.as_ref() {
+                if *g == gen {
+                    return Ok(s.clone());
+                }
+            }
+        }
+        let derived = {
+            let cell = self.stats_cell().lock().expect("stats mutex poisoned");
+            cell.as_ref().map(crate::store::StatsSummary::of)
+        };
+        let (summary, keep) = match derived {
+            Some(s) => (s, true),
+            None => {
+                let acc = self.stats_accum()?;
+                let kept = self
+                    .stats_cell()
+                    .lock()
+                    .expect("stats mutex poisoned")
+                    .is_some();
+                (crate::store::StatsSummary::of(&acc), kept)
+            }
+        };
+        let summary = std::sync::Arc::new(summary);
+        if keep {
+            *self
+                .stats_summary_cell()
+                .lock()
+                .expect("stats summary mutex poisoned") = Some((gen, summary.clone()));
+        }
+        Ok(summary)
+    }
+
     /// Canonical-JSON props for specific version ids, returned verbatim.
     /// Props for a handful of version ids.
     ///
@@ -1707,7 +2080,10 @@ impl NativeStore {
                         .iter()
                         .map(|t| names.iter().any(|n| n == t))
                         .collect();
-                    if !mask.iter().any(|&b| b) {
+                    // `GNOMON_SEGMENT_PRUNE=0` keeps the segment; the
+                    // per-row relation test below then rejects every row
+                    if self.designs().segment_prune && !mask.iter().any(|&b| b) {
+                        crate::vistouch::pruned(1);
                         continue;
                     }
                     Some(mask)
@@ -1719,7 +2095,12 @@ impl NativeStore {
             // so it is skipped from the header, as `diff_belief` and the scan
             // planner already skip it. `vt_e_max` is the largest `vt_e`
             // including the elided `vt_s + 1`.
-            if h.vt_min >= f.t_b || h.vt_e_max <= f.t_a {
+            //
+            // this prune belongs to window-first, so
+            // `GNOMON_WINDOW_FIRST=0` drops it as well as `GNOMON_SEGMENT_PRUNE=0`.
+            let wf = self.designs().window_first;
+            if self.designs().segment_prune && wf && (h.vt_min >= f.t_b || h.vt_e_max <= f.t_a) {
+                crate::vistouch::pruned(1);
                 continue;
             }
             let vt_s = seg.i64_column("vt_s")?;
@@ -1737,7 +2118,13 @@ impl NativeStore {
             // the per-row window test below still decides every row: the cut
             // moves cost only. An earlier version of this loop visited every believed
             // row of every segment and skipped the ones outside the window.
-            let (w_lo, w_hi) = crate::beliefdiff::window_rows(vt_s, h.vt_e_elided, f.t_a, f.t_b);
+            //
+            // `GNOMON_WINDOW_FIRST=0` visits every row.
+            let (w_lo, w_hi) = if wf {
+                crate::beliefdiff::window_rows(vt_s, h.vt_e_elided, f.t_a, f.t_b)
+            } else {
+                (0, vt_s.len())
+            };
             if w_lo >= w_hi {
                 continue;
             }
@@ -1761,8 +2148,11 @@ impl NativeStore {
             // the same value reproduces the same verdict row for row.
             let as_of = f.as_of;
             let n = vt_s.len();
-            let view =
-                crate::visibility::close_view_range(seg.sidecar(), &closes, seg_id, w_lo, w_hi, n);
+            let view = if self.designs().range_visibility {
+                crate::visibility::close_view_range(seg.sidecar(), &closes, seg_id, w_lo, w_hi, n)
+            } else {
+                crate::visibility::CloseView::None
+            };
             let bounds = seg.tt_s_bounds();
             // The one place the two spellings of the predicate part company.
             // A row nobody has corrected has `tt_e == OPEN_END`, and it is
@@ -1777,17 +2167,42 @@ impl NativeStore {
             // free of the oddity. `version_page_agrees_with_the_materialized_listing`
             // pins both sides.
             let open_rows_superseded = OPEN_END <= as_of;
-            let ranges = match (f.belief, open_rows_superseded) {
-                (Belief::All, _) | (Belief::Superseded, true) => {
-                    crate::scan::believed_ranges_any_in(&tt_s_v, bounds, as_of, n, w_lo, w_hi)
+            let ranges = if self.designs().range_visibility {
+                match (f.belief, open_rows_superseded) {
+                    (Belief::All, _) | (Belief::Superseded, true) => {
+                        crate::scan::believed_ranges_any_in(&tt_s_v, bounds, as_of, n, w_lo, w_hi)
+                    }
+                    (Belief::Current, true) => Vec::new(),
+                    (Belief::Current, false) => crate::scan::believed_ranges_closed_in(
+                        &tt_s_v, bounds, as_of, n, w_lo, w_hi, &view,
+                    ),
+                    (Belief::Superseded, false) => crate::scan::believed_ranges_superseded_in(
+                        &tt_s_v, bounds, as_of, n, w_lo, w_hi, &view,
+                    ),
                 }
-                (Belief::Current, true) => Vec::new(),
-                (Belief::Current, false) => crate::scan::believed_ranges_closed_in(
-                    &tt_s_v, bounds, as_of, n, w_lo, w_hi, &view,
-                ),
-                (Belief::Superseded, false) => crate::scan::believed_ranges_superseded_in(
-                    &tt_s_v, bounds, as_of, n, w_lo, w_hi, &view,
-                ),
+            } else {
+                // `GNOMON_RANGE_VISIBILITY=0`: the window's rows tested
+                // one by one; the unclamped `OPEN_END` keeps its special case
+                use crate::visibility::RowBelief;
+                let mode = match (f.belief, open_rows_superseded) {
+                    (Belief::All, _) | (Belief::Superseded, true) => Some(RowBelief::Written),
+                    (Belief::Current, true) => None,
+                    (Belief::Current, false) => Some(RowBelief::Current),
+                    (Belief::Superseded, false) => Some(RowBelief::Superseded),
+                };
+                match mode {
+                    None => Vec::new(),
+                    Some(m) => crate::visibility::believed_ranges_per_row(
+                        &tt_s_v,
+                        seg.sidecar(),
+                        &closes,
+                        seg_id,
+                        as_of,
+                        &[(w_lo, w_hi)],
+                        n,
+                        m,
+                    )?,
+                }
             };
             for (a, b) in ranges {
                 for i in a..b {
@@ -2177,6 +2592,7 @@ impl NativeStore {
                 .collect();
             ScanSet::new(targets)
                 .with_closes(closes)
+                .with_designs(self.designs())
                 .select(&ScanRequest {
                     as_of_tt,
                     vt_min,
@@ -2895,6 +3311,54 @@ mod tests {
         assert_eq!(acc.rel_type_counts, want.rel_type_counts);
         assert_eq!(acc.out_degree, want.out_degree);
         s.rollback().unwrap();
+    }
+
+    #[test]
+    fn stats_summary_tracks_the_accumulator_across_generations() {
+        // the per-generation summary must equal a summary of what
+        // `stats_accum` reports at every point — first build, after a commit
+        // fold, inside a batch (whose snapshot is never memoized), after a
+        // rollback, and after a content-changing compaction.
+        use crate::store::StatsSummary;
+        let (_root, mut s, _) = seeded("stats-summary");
+        let check = |s: &NativeStore| {
+            let want = StatsSummary::of(&s.stats_accum().unwrap());
+            assert_eq!(*s.stats_summary().unwrap(), want);
+            // a second read is served from the cache and is the same value
+            assert_eq!(*s.stats_summary().unwrap(), want);
+            want
+        };
+        let g0 = check(&s);
+        assert_eq!(g0.max_out_degree, 1);
+
+        s.begin(200).unwrap();
+        let a = s.ensure_entity("n1", "Node").unwrap();
+        let b = s.ensure_entity("n2", "Node").unwrap();
+        s.stage_edge(edge(a, b, "n1", "n2", 30, 200, 2)).unwrap();
+        s.stage_edge(edge(a, a, "n1", "n1", 40, 200, 3)).unwrap();
+        // inside the batch the cached (pre-batch) accumulator is what is
+        // reported, exactly as before
+        assert_eq!(*s.stats_summary().unwrap(), g0);
+        s.commit(EventLogRef::default()).unwrap();
+        let g1 = check(&s);
+        assert_eq!(g1.n_edge_versions, g0.n_edge_versions + 2);
+        assert_eq!(g1.max_out_degree, 3);
+
+        // an uncached accumulator built inside a batch includes staged rows
+        // and must not be memoized past the rollback
+        *s.stats_cell().lock().unwrap() = None;
+        *s.stats_summary_cell().lock().unwrap() = None;
+        s.begin(300).unwrap();
+        let c = s.ensure_entity("n3", "Node").unwrap();
+        s.stage_edge(edge(c, a, "n3", "n1", 50, 300, 4)).unwrap();
+        let in_batch = s.stats_summary().unwrap();
+        assert_eq!(in_batch.n_edge_versions, g1.n_edge_versions + 1);
+        assert!(s.stats_summary_cell().lock().unwrap().is_none());
+        s.rollback().unwrap();
+        assert_eq!(check(&s), g1);
+
+        s.compact_current_only().unwrap();
+        check(&s);
     }
 
     #[test]
@@ -3959,5 +4423,173 @@ mod existence_probe_oracle_tests {
         assert_eq!(s.node_belief_stats().unwrap().counted_rows, 1);
         drop(s);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// `resolve_entities_page` against the row-at-a-time
+/// `resolve_entities` it replaces on the operator path — same rows, same
+/// canonical label/props, same order, label filter and slicing applied the
+/// way the operator applies them — over randomized histories with renames,
+/// corrections, same-batch carves, open batches, compactions, non-string and
+/// non-ASCII names.
+#[cfg(test)]
+mod resolve_page_oracle_tests {
+    use super::*;
+    use crate::derive::version_vid;
+    use crate::manifest::EventLogRef;
+    use crate::row::NodeRow;
+    use std::path::PathBuf;
+
+    fn tmp_root(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("gnomon-resolvepage-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    const UIDS: &[&str] = &[
+        "u1", "u2", "u10", "u11", "U12", "alice-1", "ALICE-2", "bob", "Ünï-σας", "İd", "x",
+        "carol", "dave", "u100", "ΣΑΣ-uid",
+    ];
+    const PROPS: &[&str] = &[
+        r#"{"name":"Alice"}"#,
+        r#"{"name":"ALICE smith"}"#,
+        r#"{"name":""}"#,
+        r#"{"name":5}"#,
+        r#"{}"#,
+        r#"{"name":"İstanbul"}"#,
+        r#"{"name":"ΣΑΣ"}"#,
+        r#"{"name":"u1 office","x":1}"#,
+        r#"{"name":"Bob"}"#,
+    ];
+    const LABELS: &[&str] = &["Node", "Person"];
+    const QUERIES: &[&str] = &[
+        "u1", "U1", "a", "alice", "ALICE", "σας", "ς", "i̇", "İ", "x", "zzz", "1", "ice s",
+    ];
+
+    fn node(s: &mut NativeStore, rng: &mut Rng, tt: i64, vt_s: i64) -> Id96 {
+        let uid = UIDS[rng.below(UIDS.len() as u64) as usize];
+        let label = LABELS[rng.below(2) as usize];
+        let id = s.ensure_entity(uid, label).unwrap();
+        let vid = version_vid(uid, tt, vt_s);
+        s.stage_node(NodeRow {
+            vid,
+            uid_id: id,
+            label: label.into(),
+            vt_s,
+            vt_e: OPEN_END,
+            tt_s: tt,
+            props: PROPS[rng.below(PROPS.len() as u64) as usize].into(),
+            source: "ingest".into(),
+            provenance_ref: None,
+        })
+        .unwrap();
+        vid
+    }
+
+    fn check(s: &NativeStore, as_of: i64) {
+        for q in QUERIES {
+            let all = s.resolve_entities(q, as_of);
+            for label in [None, Some("Node"), Some("Person")] {
+                for (offset, limit) in [(0, 100), (0, 1), (1, 2), (3, 3), (50, 10)] {
+                    let page = s.resolve_entities_page(q, as_of, label, offset, limit);
+                    match (&all, page) {
+                        (Ok(all), Ok((total, page))) => {
+                            let want: Vec<_> = all
+                                .iter()
+                                .filter(|r| label.is_none_or(|l| r.2 == l))
+                                .cloned()
+                                .collect();
+                            assert_eq!(total, want.len(), "total q={q} label={label:?}");
+                            let slice: Vec<_> =
+                                want.into_iter().skip(offset).take(limit).collect();
+                            assert_eq!(page, slice, "page q={q} label={label:?} {offset}+{limit}");
+                        }
+                        (Err(_), Err(_)) => {}
+                        (a, b) => panic!("one errs: {:?} vs {:?}", a.is_ok(), b.is_ok()),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn page_matches_the_row_at_a_time_kernel() {
+        for seed in 0..6u64 {
+            let root = tmp_root(&format!("s{seed}"));
+            let mut s = NativeStore::open(&root).unwrap();
+            let mut rng = Rng(seed);
+            let mut vt = 0i64;
+            let mut committed: Vec<Id96> = Vec::new();
+            for b in 0..40 {
+                let tt = 1_000 + 10 * b as i64;
+                s.begin(tt).unwrap();
+                let mut staged = Vec::new();
+                for _ in 0..1 + rng.below(5) {
+                    vt += 1 + rng.below(3) as i64;
+                    staged.push(node(&mut s, &mut rng, tt, vt));
+                }
+                if rng.below(3) == 0 && !committed.is_empty() {
+                    let vid = committed[rng.below(committed.len() as u64) as usize];
+                    let _ = s.close_version(RowKind::Node, vid, tt);
+                }
+                if rng.below(5) == 0 {
+                    let vid = staged[rng.below(staged.len() as u64) as usize];
+                    let _ = s.close_version(RowKind::Node, vid, tt);
+                }
+                // an open batch reads its own writes
+                check(&s, OPEN_END);
+                if rng.below(8) == 0 {
+                    s.rollback().unwrap();
+                } else {
+                    s.commit(EventLogRef::default()).unwrap();
+                    committed.extend(staged);
+                }
+                check(&s, OPEN_END);
+                check(&s, tt - 10 * rng.below(4) as i64);
+                match rng.below(10) {
+                    0 => {
+                        s.compact_incremental(None).unwrap();
+                    }
+                    1 => {
+                        s.compact().unwrap();
+                    }
+                    _ => {}
+                }
+            }
+            check(&s, OPEN_END);
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn lower_contains_agrees_with_to_lowercase() {
+        let hays = ["Alice", "ALICE smith", "", "İstanbul", "ΣΑΣ", "Ünï-σας", "abc", "a"];
+        let needles = ["", "a", "alice", "ice s", "σας", "ς", "i̇", "abcd", "ü"];
+        let mut buf = Vec::new();
+        for h in hays {
+            for n in needles {
+                let n = n.to_lowercase();
+                assert_eq!(
+                    lower_contains(h, &n, &mut buf),
+                    h.to_lowercase().contains(&n),
+                    "{h:?} / {n:?}"
+                );
+            }
+        }
     }
 }

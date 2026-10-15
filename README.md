@@ -173,12 +173,12 @@ gnomon store restore --dest bak --store restored # replay a backup and verify it
 | document | contents |
 |---|---|
 | [docs/data-model.md](docs/data-model.md) | valid time and belief time, versions, assert / retract / correct, current vs as-of reads, a worked example |
-| [docs/architecture.md](docs/architecture.md) | store layout, commit protocol, segments and time encoding, close runs, manifest generations, compaction / settle / gc, per-segment indexes, identity filter, digests |
+| [docs/architecture.md](docs/architecture.md) | store layout, commit protocol and bulk ingest, segments, window cuts and time encoding, close runs, range-native operators, manifest generations, compaction / settle / gc, per-segment indexes, identity filter, the worker pool, digests |
 | [docs/operators.md](docs/operators.md) | every operator: what it answers, its parameters, which clock it ranges over |
 | [docs/install.md](docs/install.md) | toolchain, building the engine and the Python package, wheels, build features |
 | [docs/testing.md](docs/testing.md) | the Rust and Python test suites |
 | [docs/benchmarks.md](docs/benchmarks.md) | the synthetic generator, ingest timing with per-phase breakdown, the query-registry runner, small and large runs |
-| [docs/configuration.md](docs/configuration.md) | environment variables that tune the engine |
+| [docs/configuration.md](docs/configuration.md) | environment variables that tune the engine, and the design switches that turn one engine design off at a time |
 | [docs/limitations.md](docs/limitations.md) | scope and known open items |
 
 ## Repository layout
