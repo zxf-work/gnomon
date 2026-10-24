@@ -35,7 +35,7 @@ claim and the wrong instrument".
 **Four mechanisms keep this from being flaky, mirroring
 `tests/test_compacted_layout_scaling.py`:**
 
-1. **A fixture-reality control.** The unbounded arm runs in every
+1. **A fixture-reality control.** The unbounded configuration runs in every
    invocation and must show the postings growing essentially proportionally
    with the store across the size step. A gate whose control has never
    reproduced the defect is an assertion about nothing — and here the control
@@ -44,17 +44,17 @@ claim and the wrong instrument".
 2. **A ratio between two sizes measured the same way, on the same host, in
    the same run.** No threshold below is a number remembered from another
    machine.
-3. **A subprocess per arm, with the peak read through the
+3. **A subprocess per configuration, with the peak read through the
    `clear_refs`+`VmHWM` (Linux) or `ru_maxrss` (macOS) probe of
    `tests/test_incremental_compaction_memory.py`,** baselined after imports.
-   A peak high-water mark never falls, so two arms in one process would have
+   A peak high-water mark never falls, so two configurations in one process would have
    the second inherit the first's. Where neither mechanism can measure this
    section's peak the test **skips with that reason**, and a zero delta is an
    error rather than a pass.
-4. **Deterministic cross-checks beside the ratio**: the bounded arm's
+4. **Deterministic cross-checks beside the ratio**: the bounded configuration's
    resident bytes must be *under its budget* at both sizes, its eviction and
    re-fold counters must be non-zero (so the bound is proven to have fired
-   rather than merely not been reached), and the two arms must agree on a
+   rather than merely not been reached), and the two configurations must agree on a
    digest of every version's `(vid, tt_e)` — a bound that dropped rows would
    otherwise pass every memory check in this file.
 
@@ -64,7 +64,7 @@ for more than realism. An identity is a hash, so no manifest range can prune
 an identity lookup and every such read consults every live segment; under a
 *binding* budget each one re-folds whatever was evicted, i.e. O(store) per
 read. The engine's default budget is sized so that never happens below
-~1.4 × 10⁹ rows (`defaults::POSTINGS_MAX_BYTES`), and this file's bounded arm
+~1.4 × 10⁹ rows (`defaults::POSTINGS_MAX_BYTES`), and this file's bounded configuration
 binds deliberately — with few enough identity reads that the re-folds cost
 seconds rather than the hours a correction-per-row fixture would.
 
@@ -81,10 +81,25 @@ measured **1.00x** across the 4x size step (242,560 B at both sizes) and the
 "budget actually fired" check both failed, not because the bound
 broke but because the thing it bounds stopped growing. The bound is still
 real on the unfiltered path (a store built with `GNOMON_VIDFILTER=0`, or one
-whose filters are missing or unreadable), so the four-arm gate runs there.
+whose filters are missing or unreadable), so the four-configuration gate runs there.
 `test_with_the_filter_unbounded_postings_stay_flat_across_the_size_step`
 then turns the finding into a guard of its own: with the filter on and *no*
 budget, the postings must stay flat across the same step.
+
+**The corrections read the whole valid-time line.** The write
+path's windowed point read now skips every segment whose valid-time extent
+misses the window it reads (the manifest's `vt_min`/`vt_e_max`, as scan
+pruning does): an identity is still a hash no manifest range can prune, but
+a correction's *window* can be. With each correction reading its own one-tick
+window the read folded only the segments that tick spans, and the unbounded
+control measured **1.00x** (242,560 B at both sizes) -- the identity filter's
+finding a second time. So each correction now states its new props
+over `[0, OPEN)`: it still supersedes exactly the one event version, writes
+one row, and keeps `rows == n + CORRECTIONS`, but its read spans every
+segment, which is the shape this gate needs. Pinning `GNOMON_SEGMENT_PRUNE=0`
+instead was tried and rejected: it also unprunes the probe's own scans, whose
+mapped segment pages then grow the peak-RSS check with the store (48 MB flat
+with pruning, 59 -> 103 MB without, bounded configuration, 100k -> 400k).
 """
 
 from __future__ import annotations
@@ -106,7 +121,7 @@ import pytest
 # probe), N_SMALL = 100,000 -> N_BIG = 400,000, a 4x
 # size step, `BOUNDED_BYTES` = 256 KiB:
 #
-#   arm          postings bytes           peak RSS delta        wall
+#   configuration          postings bytes           peak RSS delta        wall
 #                100k       400k   ratio  100k    400k  ratio
 #   unbounded  1,212,980  4,851,380  4.00  14.7MB 27.9MB 1.90   2.9s / 10.8s
 #   bounded      242,620    242,560  1.00  13.8MB 23.7MB 1.72   3.3s / 12.4s
@@ -116,7 +131,7 @@ import pytest
 # flat. Neither is a timing, so neither moves with host or load; the only way
 # they change is if the engine changes.
 
-#: The bounded arm's postings may grow by at most this factor across a 4x
+#: The bounded configuration's postings may grow by at most this factor across a 4x
 #: size step. 1.00x measured. 1.5 leaves room for the entry-granularity
 #: wobble a byte budget has by construction (the eviction unit is a whole
 #: segment, so the resident total lands just under the budget rather than on
@@ -130,7 +145,7 @@ MAX_BOUNDED_GROWTH = 1.5
 #: fixture whose per-row posting count shifts slightly with segment layout.
 MIN_CONTROL_GROWTH = 3.0
 
-#: Secondary, looser: the bounded arm's *peak RSS* across the same step. 1.72x
+#: Secondary, looser: the bounded configuration's *peak RSS* across the same step. 1.72x
 #: measured. 3.0 sits 1.7x above it and still a clear distance below the 4.0
 #: a term that grew with the store would produce. See the module docstring
 #: for why this is the secondary signal and not the primary one.
@@ -144,10 +159,10 @@ N_BIG = 400_000
 ROWS_PER_BATCH = 2_000
 #: Corrections after the bulk load, **fixed, not scaled with n**: this is the
 #: campaign's shape (`scripts/build_synth_store.py::_phase_ranges` runs a few
-#: hundred at every scale) and it is what keeps the bounded arm's O(store)
+#: hundred at every scale) and it is what keeps the bounded configuration's O(store)
 #: re-folds affordable. See the module docstring.
 CORRECTIONS = 10
-#: The bounded arm's budget. 256 KiB holds ~20,000 rows of postings, so it
+#: The bounded configuration's budget. 256 KiB holds ~20,000 rows of postings, so it
 #: binds at both sizes and by a wider margin at the larger one -- which is
 #: the point: a bound that only binds at N_BIG could be satisfied by a
 #: fixture that simply stopped growing.
@@ -158,7 +173,7 @@ BOUNDED_BYTES = 256 * 1024
 #: `root` arrives as **argv**, not through `str.format`, so nothing in this
 #: source has to escape a brace.
 _PROBE = r"""
-# Build one arm and report its peak RSS, its postings receipt and a digest of
+# Build one configuration and report its peak RSS, its postings receipt and a digest of
 # what the store answers. Run as a subprocess by tests/test_postings_bound.py,
 # never imported.
 import json, resource, sys, tempfile
@@ -223,6 +238,9 @@ def bulk(vts):
         for v in vts]}]
 
 
+OPEN = 2 ** 62  # the store's open end (gnomon.core.model.OPEN_END)
+
+
 def correction(v):
     # a correction reads the identity's open versions and then closes them:
     # the read is what folds segments, the close is what the range prune
@@ -230,7 +248,7 @@ def correction(v):
     return [{"op": "correct",
              "ref": {"kind": "edge", "src": _src(v), "dst": _dst(v),
                      "rel_type": "R", "disc": "#%d" % v},
-             "props": {"v": v, "pad": "y" * 64}, "vt_s": v, "vt_e": v + 1}]
+             "props": {"v": v, "pad": "y" * 64}, "vt_s": 0, "vt_e": OPEN}]
 
 
 def main():
@@ -286,14 +304,14 @@ def probe(tmp_path_factory) -> Path:
 
 
 def _measure(probe: Path, arm: str, n_rows: int, *, vidfilter: bool = False) -> dict:
-    """One arm, one size, in its own process.
+    """One configuration, one size, in its own process.
 
     The budget is set through **`GNOMON_POSTINGS_BYTES`** rather than through
     `set_postings_budget()`, so this gate exercises the environment knob an
     operator actually turns -- a handle-level override could pass while the
     env var was mis-parsed or never read.
 
-    `vidfilter=False` (the default, and every arm of the four-arm gate) sets
+    `vidfilter=False` (the default, and every configuration of the four-configuration gate) sets
     `GNOMON_VIDFILTER=0`, which disables both the seal-time filter build and
     the lazy rebuild inside a fold -- deleting filter files alone would not
     do it, because the lazy step writes one during the first fold.
@@ -361,7 +379,7 @@ def test_the_unbounded_arm_is_really_the_defect_here(measured):
 
     Measured with the engine's own `resident_bytes` rather than with peak
     RSS, for the reason `test_incremental_compaction_memory.py` gives at
-    length: a peak-RSS ratio for the same arm and the same code varied
+    length: a peak-RSS ratio for the same configuration and the same code varied
     8.46x / 4.75x / 4.75x / 4.26x across three hosts and four runs, while an
     exact counter does not move.
     """
@@ -383,7 +401,7 @@ def test_the_unbounded_arm_is_really_the_defect_here(measured):
     # a fold count that never reached the row count would mean the fixture's
     # corrections are not touching the store the way a build's do
     assert big["edge"]["rows_folded"] >= N_BIG, (
-        f"the unbounded arm folded only {big['edge']['rows_folded']:,} rows "
+        f"the unbounded configuration folded only {big['edge']['rows_folded']:,} rows "
         f"of a {N_BIG:,}-row store: the correction's identity read is not "
         f"reaching every segment, so this fixture is not the 30M build's shape"
     )
@@ -414,20 +432,20 @@ def test_bounded_postings_do_not_grow_with_the_store(measured):
 
 
 def test_the_budget_actually_fired_rather_than_simply_not_being_reached(measured):
-    """A bound that never binds proves nothing. Both bounded arms must show
+    """A bound that never binds proves nothing. Both bounded configurations must show
     evictions *and* re-folds: segments dropped to stay under the budget, and
     later probes folding them again — the round trip that makes
     "correctness never depends on residency" a measurement."""
     for n in (N_SMALL, N_BIG):
         st = measured[("bounded", n)]["edge"]
         assert st["evictions"] > 0 and st["rebuilds"] > 0, (
-            f"at n={n:,} the bounded arm recorded {st['evictions']} evictions "
+            f"at n={n:,} the bounded configuration recorded {st['evictions']} evictions "
             f"and {st['rebuilds']} re-folds: the {BOUNDED_BYTES:,}-byte budget "
             f"never bound, so nothing below is tested"
         )
         unbounded = measured[("unbounded", n)]["edge"]
         assert unbounded["evictions"] == 0 and unbounded["rebuilds"] == 0, (
-            f"at n={n:,} the *unbounded* arm evicted {unbounded['evictions']} "
+            f"at n={n:,} the *unbounded* configuration evicted {unbounded['evictions']} "
             f"times — GNOMON_POSTINGS_BYTES=0 must mean unbounded"
         )
 
@@ -463,8 +481,8 @@ def test_the_bounded_and_unbounded_arms_answer_identically(measured):
         bounded = measured[("bounded", n)]
         unbounded = measured[("unbounded", n)]
         assert bounded["rows"] == unbounded["rows"], (
-            f"at n={n:,} the bounded arm returned {bounded['rows']:,} versions "
-            f"against the unbounded arm's {unbounded['rows']:,}"
+            f"at n={n:,} the bounded configuration returned {bounded['rows']:,} versions "
+            f"against the unbounded configuration's {unbounded['rows']:,}"
         )
         assert bounded["digest"] == unbounded["digest"], (
             f"at n={n:,} a {BOUNDED_BYTES:,}-byte postings budget changed what "
@@ -480,7 +498,7 @@ def test_the_bounded_and_unbounded_arms_answer_identically(measured):
 
 @pytest.fixture(scope="module")
 def measured_filtered(probe) -> dict:
-    """The unbounded arm at both sizes with the identity filter **on** (the
+    """The unbounded configuration at both sizes with the identity filter **on** (the
     engine default): two more subprocess builds."""
     return {n: _measure(probe, "unbounded", n, vidfilter=True)
             for n in (N_SMALL, N_BIG)}
@@ -511,16 +529,16 @@ def test_with_the_filter_unbounded_postings_stay_flat_across_the_size_step(
     # store that simply built no filters would be the wrong reason
     for n, arm in measured_filtered.items():
         assert arm["edge"]["filter_probes"] > 0, (
-            f"at n={n:,} the filtered arm made no filter probes: the store has "
+            f"at n={n:,} the filtered configuration made no filter probes: the store has "
             f"no filters, so a flat postings line proves nothing about them"
         )
         assert arm["edge"]["rows_folded"] < n, (
-            f"at n={n:,} the filtered arm still folded "
+            f"at n={n:,} the filtered configuration still folded "
             f"{arm['edge']['rows_folded']:,} rows -- the whole store"
         )
     # and it changes cost, never answers
     for n in (N_SMALL, N_BIG):
         assert measured_filtered[n]["digest"] == measured[("unbounded", n)]["digest"], (
             f"at n={n:,} the identity filter changed what the store answers: "
-            f"the (vid, tt_e) digest differs from the unfiltered arm's"
+            f"the (vid, tt_e) digest differs from the unfiltered configuration's"
         )

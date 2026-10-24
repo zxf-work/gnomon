@@ -34,7 +34,7 @@ def _batches() -> list[list[dict]]:
         [{"op": "ingest_events", "events": plain}],
         [{"op": "ingest_events", "events": shapes, "offset": 100, "source": "loader",
           "provenance_ref": "p1", "node_label": "Thing"}],
-        # Python path: event props, an explicit nodes array, a null source
+        # event props (on the fast path too), an explicit nodes array
         [{"op": "ingest_events",
           "events": [{"src": "n1", "dst": "n3", "rel_type": "R", "vt_s": 20, "props": {"w": 1}}]}],
         [{"op": "ingest_events", "events": [{"src": "m1", "dst": "m2", "rel_type": "R", "vt_s": 30}],
@@ -87,10 +87,10 @@ def test_fast_path_writes_what_the_python_row_build_writes(tmp_path, monkeypatch
     ops = lambda b: [json.loads(x)["ops"] for x in b.splitlines()[1:]]  # noqa: E731
     assert ops(on["log"]) == ops(off["log"])
     if on["counters"]:          # timers compiled in
-        # 40 + 5 + 1 + 1 + 1 + 5 edges took the fast path; the props and the
-        # nodes batches fell back
-        assert on["counters"]["ingest_raw_edge_rows"] == 53
-        assert on["counters"]["ingest_raw_fallbacks"] == 2
+        # 40 + 5 + 1 + 1 + 1 + 1 + 1 + 5 edges took the fast path, the props
+        # and the nodes batches among them
+        assert on["counters"]["ingest_raw_edge_rows"] == 55
+        assert on["counters"]["ingest_raw_fallbacks"] == 0
         assert off["counters"]["ingest_raw_edge_rows"] == 0
 
 
@@ -108,7 +108,7 @@ def test_replay_with_and_without_the_fast_path(tmp_path, monkeypatch):
         got[on] = (a.content_digest(), a.store_digest(), dict(a._store.ingest_phase_stats()))
     assert got[True][:2] == got[False][:2] == (src["content"], src["store"])
     if got[True][2]:
-        assert got[True][2]["ingest_raw_edge_rows"] == 53
+        assert got[True][2]["ingest_raw_edge_rows"] == 55
         assert got[False][2]["ingest_raw_edge_rows"] == 0
 
 
@@ -118,7 +118,7 @@ def test_an_unaccepted_record_changes_nothing(tmp_path):
     a._ensure_batch(1000)
     before = a.num_entities()
     for rec in (b'{"ops":[{"op":"ingest_events","events":[{"src":"x","dst":"y","rel_type":"R","vt_s":1.5}]}]}',
-                b'{"ops":[{"op":"ingest_events","events":[{"src":"x","dst":"y","rel_type":"R","vt_s":1,"props":{}}]}]}',
+                b'{"ops":[{"op":"ingest_events","events":[{"src":"x","dst":"y","rel_type":"R","vt_s":1,"props":{"w":1.5}}]}]}',
                 b'{"ops":[{"op":"ingest_events","events":[{"src":"x","src":"z","dst":"y","rel_type":"R","vt_s":1}]}]}',
                 b'{"ops":[{"op":"ingest_events","source":null,"events":[]}]}',
                 b'{"ops":[{"op":"ingest_events","events":[{"src":"x","dst":"y","rel_type":"R","vt_s":1,"disc":null}]}]}',

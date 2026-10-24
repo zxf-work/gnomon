@@ -18,6 +18,6 @@ sha2 = "0.11.0"
 [features]
 # Per-phase ingest timers (`ingest_phase.rs`). On by default; the build with
 # `--no-default-features` compiles every timer to nothing and is the control
-# arm the timers' overhead is measured against.
+# configuration the timers' overhead is measured against.
 default = ["ingest-timers"]
 ingest-timers = []

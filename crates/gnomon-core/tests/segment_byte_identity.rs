@@ -41,7 +41,7 @@ const GOLDEN_FILTERS: &str = "c36b577b93fe84b1a742e01231a117f06ae268b60e62e1ea60
 
 fn tmp_root(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w22-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-segbytes-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     p
 }

@@ -27,7 +27,7 @@ from gnomon.temporal.algebra import (
     paginate,
     required,
 )
-from gnomon.temporal.guardrails import scan_estimate
+from gnomon.temporal.guardrails import coeff_scale, rel_rows, scan_estimate, touching_read_ms
 
 MAX_BUCKETS = 2_000
 METRICS = ["node_count", "edge_event_count", "active_edge_count",
@@ -345,6 +345,14 @@ def _co_active_validators(args: dict[str, Any]) -> None:
 #: Columns the join itself needs. `vid` is only for the self-pair check, and
 #: is cheap; `eid` is a hash per row and is deferred until a pair survives.
 JOIN_COLS = ("src_id", "dst_id", "vt_s", "vt_e", "vid")
+#: The scan addresses a page's identities are fetched by, where the
+#: backend projects them (the native engine's `TCSR_COLS`).
+ADDRESS_COLS = ("seg_id", "seg_row")
+
+
+def _addresses(adapter: StorageAdapter) -> bool:
+    return (hasattr(adapter, "edge_idents_at")
+            and all(c in getattr(adapter, "TCSR_COLS", ()) for c in ADDRESS_COLS))
 
 
 def _select(adapter: StorageAdapter, spec: dict[str, Any], as_of: int,
@@ -366,6 +374,31 @@ def _select(adapter: StorageAdapter, spec: dict[str, Any], as_of: int,
     return {k: v[m] for k, v in e.items()}
 
 
+#: A whole-relation side of co_active: its read and the interval join over it,
+#: per edge version (~400 ms/M on K1M, K10M and FinBench SF1).
+CO_SIDE_MS_PER_M = 800.0
+CO_ROW_MS = 0.02
+
+
+def _co_active_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Each side is one read: a side naming an endpoint reads the
+    versions touching it, any other reads its relation (every edge version
+    without a rel_type); then the page. `scan_estimate` priced every version
+    of the store for both, 80 to 1,700 times the time of a point-anchored
+    call, and below the time of a whole-relation one."""
+    rows, ms = 0, 0.0
+    for side in (args["a_spec"], args["b_spec"]):
+        if side.get("src") or side.get("dst"):
+            rows += 2 * int(stats.get("max_out_degree") or 0)
+            ms += touching_read_ms(stats)
+        else:
+            n = rel_rows(stats, side.get("rel_type"))
+            rows += n
+            ms += n * CO_SIDE_MS_PER_M / 1e6
+    ms += int(args.get("limit") or 0) * CO_ROW_MS
+    return {"rows_scanned_est": rows, "expansions_est": 0, "time_est_ms": int(ms * coeff_scale()) + 1}
+
+
 @operator(
     "co_active",
     {
@@ -381,7 +414,7 @@ def _select(adapter: StorageAdapter, spec: dict[str, Any], as_of: int,
     "overlaps: a.s < b.s < a.e < b.e; during: b.s < a.s AND a.e < b.e; "
     "meets: a.e = b.s; before: 0 < b.s - a.e <= gap. Pairs with a.vid = b.vid "
     "are excluded.",
-    cost_fn=scan_estimate,
+    cost_fn=_co_active_cost,
     validators=[_co_active_validators],
 )
 def co_active(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
@@ -389,8 +422,9 @@ def co_active(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     # join on the cheap projection: an unrestricted selection is the whole
     # store, and deriving an eid for every version of it dominated the
     # operator even when the answer was empty
-    a = _select(adapter, args["a_spec"], as_of, columns=JOIN_COLS)
-    b = _select(adapter, args["b_spec"], as_of, columns=JOIN_COLS)
+    cols = JOIN_COLS + (ADDRESS_COLS if _addresses(adapter) else ())
+    a = _select(adapter, args["a_spec"], as_of, columns=cols)
+    b = _select(adapter, args["b_spec"], as_of, columns=cols)
     rel = args["allen_relation"]["relation"]
     gap = args["allen_relation"].get("gap")
 
@@ -410,6 +444,17 @@ def co_active(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
         lo = np.zeros(len(a_s), dtype=np.int64)
         hi = np.searchsorted(b_starts, a_s, side="left")
 
+    from gnomon import _engine
+
+    try:
+        offset = int(args["cursor"]) if args["cursor"] else 0
+    except ValueError:
+        raise InvalidArgError(f"bad cursor: {args['cursor']!r}") from None
+    if offset >= 0:
+        return _co_active_page(adapter, args, a, b, lo, hi, rel, offset)
+
+    # a negative cursor keeps Python's slice semantics through `paginate`,
+    # over the enumerated pairs, under the cap
     if int((hi - lo).clip(min=0).sum()) > PAIR_CAP:
         raise CostError("co_active candidate pairs exceed cap",
                         estimate={"expansions_est": int((hi - lo).clip(min=0).sum())},
@@ -420,8 +465,6 @@ def co_active(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     # loop was ~5.3 s at 1M events); the engine kernel does it. The self-pair
     # check stays here because it only has to look at surviving pairs, which
     # PAIR_CAP already bounds — so the kernel needs no identities at all.
-    from gnomon import _engine
-
     pairs = _engine.interval_pairs(
         [int(v) for v in np.asarray(lo).ravel()],
         [int(v) for v in np.asarray(hi).clip(min=0).ravel()],
@@ -454,3 +497,66 @@ def co_active(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     # both selections arrive in (vt_s, vid) order and the kernel preserves it,
     # so the contract's ordering already holds
     return paginate(rows, args["limit"], args["cursor"])
+
+
+def _co_active_page(adapter: StorageAdapter, args: dict[str, Any], a, b,
+                    lo: np.ndarray, hi: np.ndarray, rel: str,
+                    offset: int) -> dict[str, Any]:
+    """The join's size and its page `[offset, offset + limit)` from the
+    engine's sweep (`_engine.interval_page`), with no candidate pair
+    materialised and no cap; `paginate`'s exact shape.
+
+    Self pairs (`a.vid = b.vid`, the same version on both sides) carry the
+    same `vt_s` and `vt_e`, so under `overlaps` (b.s > a.s) and `during`
+    (b.s < a.s) no candidate range holds one, and under `meets`
+    (b.s = a.e) or `before` (b.s > a.e) only an `a` row with `vt_e <= vt_s`
+    can meet itself: those rows' self pairs are the excluded list. Strings
+    and identities are built for the page's rows only."""
+    from gnomon import _engine
+
+    a_s, a_e, b_e = (np.asarray(x, dtype=np.int64) for x in (a["vt_s"], a["vt_e"], b["vt_e"]))
+    exclude: list[tuple[int, int]] = []
+    if rel in ("meets", "before"):
+        degenerate = np.flatnonzero(a_e <= a_s)
+        if len(degenerate):
+            b_at = {v: j for j, v in enumerate(b["vid"])}
+            exclude = [(int(i), b_at[a["vid"][i]]) for i in degenerate
+                       if a["vid"][i] in b_at]
+    lo = np.ascontiguousarray(np.asarray(lo, dtype=np.int64).ravel())
+    hi = np.ascontiguousarray(np.asarray(hi, dtype=np.int64).ravel())
+    total, pairs = _engine.interval_page(
+        lo, hi, np.ascontiguousarray(a_e), np.ascontiguousarray(b_e),
+        rel in ("overlaps", "during"), exclude, offset, args["limit"])
+    truncated = offset + len(pairs) < total
+    out = {"rows": [], "rows_total": int(total), "truncated": truncated,
+           "cursor": str(offset + len(pairs)) if truncated else None}
+    if not pairs:
+        return out
+    ia = sorted({i for i, _ in pairs})
+    ib = sorted({j for _, j in pairs})
+    da = _describe(adapter, args["a_spec"], args["as_of_tt"], a, ia)
+    db = _describe(adapter, args["b_spec"], args["as_of_tt"], b, ib)
+    out["rows"] = [{"a": da[i], "b": db[j]} for i, j in pairs]
+    return out
+
+
+def _describe(adapter: StorageAdapter, spec: dict[str, Any], as_of: int,
+              cols: dict[str, np.ndarray], rows: list[int]) -> dict[int, dict[str, Any]]:
+    """The contract's edge descriptions of selection rows `rows`: identities
+    from the scan addresses where the selection carries them (the native
+    engine), otherwise from the full projection of the same selection."""
+    if "seg_id" in cols and hasattr(adapter, "edge_idents_at"):
+        eids, rels = adapter.edge_idents_at(cols["seg_id"][rows], cols["seg_row"][rows])
+        eid = dict(zip(rows, eids))
+        rel = dict(zip(rows, rels))
+    else:
+        full = _select(adapter, spec, as_of)
+        eid = {i: full["eid"][i] for i in rows}
+        rel = {i: full["rel_type"][i] for i in rows}
+    ids = sorted({int(cols[c][i]) for i in rows for c in ("src_id", "dst_id")})
+    uid = dict(zip(ids, adapter.uids_for(ids)))
+    return {i: {"eid": eid[i], "vid": cols["vid"][i],
+                "src": uid[int(cols["src_id"][i])], "dst": uid[int(cols["dst_id"][i])],
+                "rel_type": rel[i],
+                "vt_s": int(cols["vt_s"][i]), "vt_e": int(cols["vt_e"][i])}
+            for i in rows}

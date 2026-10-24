@@ -63,6 +63,11 @@ when it was true and when it was believed, so:
   time-respecting paths and reachability, motif counting, grouped
   aggregation, burst detection, interval joins — each schema-validated,
   paginated, deterministic, and evaluable at any belief time.
+* **Engine-level operators**: typed pattern matching (`match`, compiled to
+  one plan that the engine's range-native executor runs), general paths
+  (`paths`: hop and weight distances, optimal, k-best and time-respecting
+  paths), aggregates over the state at each instant (`state_series`), the
+  belief diff (`diff_belief`), a per-identity belief log and an exact `sum`.
 * **Two digests:** a store digest for exact identity and a content digest
   that two independent loads of the same data agree on (computable in
   bounded memory).
@@ -123,6 +128,25 @@ fixed = call_operator(store.adapter, "version_history",
                       {"kind": "node", "window": {"t_a": 0, "t_b": 1000},
                        "belief": "superseded"})
 print("superseded node versions:", fixed["rows_total"])
+
+# a pattern: whom does alice reach over one or two KNOWS edges at time 500?
+reach = call_operator(store.adapter, "match", {
+    "pattern": {"nodes": [{"var": "a", "uids": ["alice"]}, {"var": "b"}],
+                "steps": [{"from": "a", "to": "b", "rel_type": "KNOWS",
+                           "hops": {"min": 1, "max": 2}}]},
+    "return": {"rows": [{"as": "who", "expr": {"col": "b.uid"}}],
+               "order_by": [{"expr": {"col": "who"}}]},
+    "scope": {"vt": {"instant": 500}}})
+print("alice reaches at 500:", [r["who"] for r in reach["rows"]])
+
+# a hop distance, and every belief change since t1
+dist = call_operator(store.adapter, "paths", {
+    "sources": {"uids": ["alice"]}, "targets": {"uids": ["carol"]}, "t_valid": 500})
+print("hops alice -> carol:", [(r["dst"], r["distance"]) for r in dist["rows"]])
+diff = call_operator(store.adapter, "diff_belief",
+                     {"t1": t1, "t2": OPEN_END, "window": {"t_a": 0, "t_b": 1000}})
+print("belief changes since t1:", diff["added_total"], "added,",
+      diff["retracted_total"], "retracted")
 store.close()
 ```
 
@@ -133,11 +157,17 @@ current beliefs:       [(0, 300, 'Lyon'), (300, 'open', 'Paris')]
 as believed at t1:     [(0, 'open', 'Lyon')]
 2 hops from alice at 500: ['alice', 'bob', 'carol']
 superseded node versions: 1
+alice reaches at 500: ['bob', 'carol']
+hops alice -> carol: [('carol', 2)]
+belief changes since t1: 6 added, 1 retracted
 ```
 
 The correction did not overwrite anything: the version believed at `t1`
 (Lyon from 0 onwards) is still in the store, closed in belief time, and
-answers every question asked "as of `t1`". The store is an ordinary
+answers every question asked "as of `t1`". The belief diff reports it as
+the one retraction since `t1`, against the six versions written since: the
+two the correction wrote, the two edges, and the two endpoint nodes the
+edges created. The store is an ordinary
 directory and can be inspected with the CLI:
 
 ```bash
@@ -173,8 +203,8 @@ gnomon store restore --dest bak --store restored # replay a backup and verify it
 | document | contents |
 |---|---|
 | [docs/data-model.md](docs/data-model.md) | valid time and belief time, versions, assert / retract / correct, current vs as-of reads, a worked example |
-| [docs/architecture.md](docs/architecture.md) | store layout, commit protocol and bulk ingest, segments, window cuts and time encoding, close runs, range-native operators, manifest generations, compaction / settle / gc, per-segment indexes, identity filter, the worker pool, digests |
-| [docs/operators.md](docs/operators.md) | every operator: what it answers, its parameters, which clock it ranges over |
+| [docs/architecture.md](docs/architecture.md) | store layout, commit protocol and bulk ingest, segments, window cuts and time encoding, close runs, range-native operators and path kernels, pattern matching and the plan IR, the small-commit path, manifest generations, compaction / settle / gc, per-segment indexes, identity filter, the worker pool, digests |
+| [docs/operators.md](docs/operators.md) | every operator, base and engine-level: what it answers, its parameters, which clock it ranges over; `match` patterns and the shared-instant rule |
 | [docs/install.md](docs/install.md) | toolchain, building the engine and the Python package, wheels, build features |
 | [docs/testing.md](docs/testing.md) | the Rust and Python test suites |
 | [docs/benchmarks.md](docs/benchmarks.md) | the synthetic generator, ingest timing with per-phase breakdown, the query-registry runner, small and large runs |
@@ -187,7 +217,9 @@ gnomon store restore --dest bak --store restored # replay a backup and verify it
 crates/gnomon-core/   the engine (Rust, no Python dependency)
 crates/gnomon-py/     PyO3 binding, built as gnomon._engine
 gnomon/               Python package: Store, storage interface, native adapter,
-                      DuckDB reference backend, operators, CLI
+                      DuckDB reference backend, operators, the plan IR and its
+                      reference evaluator (gnomon/plan), shaped workload
+                      generators (gnomon/data), CLI
 scripts/              benchmark drivers: synthetic store builder, query-registry
                       harness, event-log freezer, receipt checker
 benchmarks/schema/    JSON Schema for benchmark receipts

@@ -367,7 +367,7 @@ def test_the_compact_flag_covers_the_name_index_too(tmp_path, monkeypatch):
     cache: `build_indexes()["tcsr"]["built"]` and `build_name_indexes()` both
     report how many segments needed (re)building, so zero from both is the
     statement that a first query of either kind finds its index already on
-    disk. The fixture-is-real half is the arm above it: the same store, the
+    disk. The fixture-is-real half is the configuration above it: the same store, the
     same compaction, with the flag off, where both counters are non-zero.
     """
     from gnomon.core.model import OPEN_END
@@ -387,7 +387,7 @@ def test_the_compact_flag_covers_the_name_index_too(tmp_path, monkeypatch):
     _rust(monkeypatch, a)
     assert a.lookup_name("n0", "exact", OPEN_END), "fixture is real: n0 resolves"
 
-    # the arm the flag exists to avoid: compact without it, and both kinds
+    # the configuration the flag exists to avoid: compact without it, and both kinds
     # of first query have to build.
     a.compact()
     cold_tcsr, cold_name = counters(a.path)

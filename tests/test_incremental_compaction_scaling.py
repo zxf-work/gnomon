@@ -49,7 +49,7 @@ import pytest
 # compaction including the end-of-build fold:
 #
 #             n = 8,000                    n = 64,000
-#   arm       rewritten  per stored row    rewritten  per stored row   growth
+#   configuration       rewritten  per stored row    rewritten  per stored row   growth
 #   control      28,000      3.50           1,120,000     17.50         5.00x
 #   treatment     8,000      1.00             128,000      2.00         2.00x
 #

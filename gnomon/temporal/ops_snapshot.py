@@ -23,11 +23,18 @@ from gnomon.temporal.algebra import (
     TIMESTAMP,
     UID,
     UID_LIST,
+    WINDOW,
+    check_window,
     operator,
     paginate,
     required,
 )
-from gnomon.temporal.guardrails import point_read_estimate, scan_estimate
+from gnomon.temporal.guardrails import (
+    coeff_scale,
+    point_read_estimate,
+    scan_estimate,
+    touching_read_ms,
+)
 
 MAX_HOPS = 3
 
@@ -164,6 +171,37 @@ def _edge_rows(adapter: StorageAdapter, edges: dict[str, np.ndarray],
 # entity_history                                                            #
 # --------------------------------------------------------------------------- #
 
+def _engine_entity_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Engine-level arguments (the point-in-time read): `t_valid`, an
+    instant, or `window`, a valid-time window. The answer is then the
+    believed versions whose valid interval contains the instant or overlaps
+    the window, found by the engine's windowed point read
+    (`believed_*_versions_overlapping`, `pointread.rs`) instead of by
+    materialising the whole believed history. Neither has a default, and
+    neither is in the base schema (algebra.OperatorSpec)."""
+    schema["properties"]["t_valid"] = {
+        **TIMESTAMP, "description": "only the versions valid at this instant"}
+    schema["properties"]["window"] = {
+        **WINDOW, "description": "only the versions whose valid interval "
+                                "overlaps this half-open window"}
+    return schema
+
+
+def _entity_window(args: dict[str, Any]) -> tuple[int, int] | None:
+    """`[lo, hi)` the engine-level `t_valid`/`window` select, or `None`."""
+    if args.get("t_valid") is not None:
+        return int(args["t_valid"]), int(args["t_valid"]) + 1
+    if args.get("window") is not None:
+        return int(args["window"]["t_a"]), int(args["window"]["t_b"])
+    return None
+
+
+def _entity_validators(args: dict[str, Any]) -> None:
+    if args.get("t_valid") is not None and args.get("window") is not None:
+        raise InvalidArgError("entity_history takes t_valid or window, not both")
+    check_window(args)
+
+
 @operator(
     "entity_history",
     {
@@ -176,14 +214,23 @@ def _edge_rows(adapter: StorageAdapter, edges: dict[str, np.ndarray],
     "Ordered version list of a node (optionally with incident edge versions): "
     "all versions of `uid` believed at `as_of_tt`, ordered by vt_s.",
     cost_fn=point_read_estimate,
+    validators=[_entity_validators],
     output_fields=("rows", "rows_total", "truncated", "cursor",
                    "edges", "edges_truncated"),
+    engine_schema=_engine_entity_schema,
 )
 def entity_history(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     uid = args["uid"]
     as_of = args["as_of_tt"]
     adapter.dense_ids([uid])  # raises E_NOT_FOUND for unknown uid
-    versions = adapter.believed_node_versions(uid, as_of_tt=as_of)
+    span = _entity_window(args)
+    if span is None:
+        versions = adapter.believed_node_versions(uid, as_of_tt=as_of)
+    else:
+        # the full history filtered to the span, without materialising it:
+        # the same rows, in the same (vt_s, vid) order
+        versions = adapter.believed_node_versions_overlapping(
+            uid, span[0], span[1], as_of_tt=as_of)
     rows = [v.to_json() for v in sorted(versions, key=lambda v: (v.vt_s, v.vid))]
     for r in rows:
         # bi-temporal immutability: a version believed at as_of_tt has its
@@ -194,7 +241,12 @@ def entity_history(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
     out = paginate(rows, args["limit"], args["cursor"])
     if args["include_edges"]:
         uid_id = int(adapter.dense_ids([uid])[0])
-        edges = adapter.edges_columnar(as_of_tt=as_of, touching_ids=[uid_id])
+        if span is None:
+            edges = adapter.edges_columnar(as_of_tt=as_of, touching_ids=[uid_id])
+        else:
+            # incident edge versions overlapping the same span
+            edges = adapter.edges_columnar(as_of_tt=as_of, touching_ids=[uid_id],
+                                           vt_min=span[0], vt_max=span[1])
         n_incident = len(edges["src_id"])
         idx = np.arange(min(n_incident, args["limit"]))
         out["edges"] = _edge_rows(adapter, edges, idx)
@@ -237,6 +289,24 @@ def snapshot_subgraph(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str
     if _seed_expansion(adapter):
         expanded = _expand_from_seeds(adapter, seed_ids, t, as_of, args["hops"],
                                       args["rel_types"])
+    if expanded is None and _seed_expansion(adapter) and \
+            hasattr(adapter, "snapshot_kernel") and \
+            adapter.designs().get("match_kernel", False):
+        # a reached set past `SEED_EXPANSION_MAX_IDS`: the engine's batched
+        # frontier (the pattern executor's) rather than the whole instant.
+        # Below the cap the scan expansion stays first, since on a store with
+        # retractions its filtered scans are the cheaper per-vertex read.
+        # `GNOMON_MATCH_KERNEL=python` keeps the whole-snapshot fallback.
+        got = adapter.snapshot_kernel(seed_ids, t, as_of, args["hops"], args["rel_types"])
+        if got is not None:
+            node_rows = sorted(({"uid": u, "label": lab, "hop": h} for u, lab, h in got["nodes"]),
+                               key=lambda r: (r["hop"], r["uid"]))
+            out = paginate(got["edges"], args["limit"], args["cursor"])
+            out["nodes"] = node_rows[: args["limit"]]
+            out["nodes_total"] = len(node_rows)
+            out["nodes_truncated"] = len(node_rows) > args["limit"]
+            out["truncated"] = out["truncated"] or out["nodes_truncated"]
+            return out
     if expanded is not None:
         # the induced edges are exactly the scan's rows
         dist, edges, info = expanded
@@ -246,7 +316,8 @@ def snapshot_subgraph(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str
             key=lambda r: (r["hop"], r["uid"]))
     else:
         # the whole snapshot at t: other backends, `GNOMON_SEED_EXPANSION=0`,
-        # and a reached set past `SEED_EXPANSION_MAX_IDS`
+        # and a reached set past `SEED_EXPANSION_MAX_IDS` with no engine
+        # frontier to take it
         edges = edges_at(adapter, t, as_of, args["rel_types"])
         nodes = nodes_at(adapter, t, as_of)
         dist = bfs_node_set(edges, seed_ids, nodes["uid_id"], args["hops"])
@@ -487,6 +558,15 @@ def _check_t1_t2(args: dict[str, Any]) -> None:
         raise InvalidArgError("neighborhood_evolution requires t1 < t2")
 
 
+def _evolution_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Three reads of the edge versions touching `uid` (the neighbourhoods at
+    t1 and at t2, the degree series), not a scan of the store: priced as
+    touching reads (`scan_estimate` was 560 to 4,250 times the time)."""
+    rows = 3 * 2 * int(stats.get("max_out_degree") or 0)
+    return {"rows_scanned_est": rows, "expansions_est": 0,
+            "time_est_ms": int(3 * touching_read_ms(stats) * coeff_scale()) + 1}
+
+
 @operator(
     "neighborhood_evolution",
     {
@@ -500,7 +580,7 @@ def _check_t1_t2(args: dict[str, Any]) -> None:
     },
     "Neighbors of `uid` gained/lost between G(t1) and G(t2) (undirected), plus "
     "an incident-active-edge-count series sampled at bucket starts in [t1, t2).",
-    cost_fn=scan_estimate,
+    cost_fn=_evolution_cost,
     validators=[_check_t1_t2],
     output_fields=("neighbors_gained", "neighbors_gained_total",
                    "neighbors_lost", "neighbors_lost_total",

@@ -90,8 +90,9 @@ pub(crate) fn parallel_min_rows() -> u64 {
 /// million rows, roughly four times the segments this store writes today.
 ///
 /// So the default is the search that is faster now, and the model path is
-/// there for the segment sizes that would flip it. `examples/w16a_micro.rs`
-/// is kept precisely so that a later change to the seal target can flip
+/// there for the segment sizes that would flip it. A micro-benchmark of the
+/// two searches is kept precisely so that a later change to the seal target
+/// can flip
 /// this default **on evidence** rather than on the argument that the model
 /// ought to win.
 ///
@@ -182,7 +183,7 @@ fn open_ranges_below(open: &[(u32, u32)], lo: usize) -> &[(u32, u32)] {
 /// (segments for select, clusters for materialize), `rows` the stage's work
 /// proxy (candidate rows for select, selected rows for materialize).
 ///
-/// Recalibrated 2026-08-01: the old gates were segment-count-only, and
+/// Recalibrated: the old gates were segment-count-only, and
 /// parallel select measured *slower* than
 /// serial at every width 2–16 on a 1M-row store while paying 4.3× at 10M —
 /// so the deciding term is rows, with the unit minimum kept only so there
@@ -249,6 +250,18 @@ pub struct ScanRequest {
     pub touching_both: bool,
     /// Stop after this many rows. Applied after ordering.
     pub limit: Option<usize>,
+    /// Event requests only: rows must also have `vt_s >= vt_s_min`.
+    ///
+    /// An aggregate over events (`aggregate_events`: `t_a <= vt_s < t_b`)
+    /// asks the overlap question `vt_e > t_a` and then discards every row
+    /// that starts before `t_a`. Those rows are found by the `vt_e` cut,
+    /// which only bounds closed rows through the staircase and so, past the
+    /// first long-lived row of a segment, examines everything from there to
+    /// `t_b`: the cost of a ten-tick window grew with its distance from the
+    /// segment's start. `vt_s` is sorted, so `vt_s >= vt_s_min` is a prefix
+    /// cut by binary search. `None` (the default) keeps every request as it
+    /// was.
+    pub vt_s_min: Option<i64>,
     /// Columns to materialize. `None` means all of them.
     ///
     /// This is a real pushdown, not a filter on the way out: building a
@@ -952,7 +965,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                     stats.blocks_considered += st.running_max.len() as u64;
                 }
             }
-            let lo = match (req.vt_min, &stair) {
+            let mut lo = match (req.vt_min, &stair) {
                 (Some(t), _) if h.vt_e_elided => vt_s.partition_point_lt(t),
                 (Some(t), Some(st)) => {
                     let b = st.running_max.partition_point(|&m| m <= t);
@@ -968,11 +981,31 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // Open-ended rows below the cut are not pruned by it: their
             // `vt_e` is the sentinel, so they overlap every window their
             // `vt_s` reaches, and the cut never spoke for them.
-            let open_below: &[(u32, u32)] = if lo > 0 {
+            let mut open_below: &[(u32, u32)] = if lo > 0 {
                 open_ranges_below(stair.as_ref().map_or(&h.open_rows[..], |st| st.open_rows), lo)
             } else {
                 &[]
             };
+            // An event request starts at its first `vt_s >= vt_s_min`: below
+            // it nothing is wanted, open-ended or not. Open-ended rows at or
+            // after that point but below the staircase cut are kept, clipped.
+            let clipped_open: Vec<(u32, u32)>;
+            if let Some(t) = req.vt_s_min {
+                let p = vt_s.partition_point_lt(t);
+                if p >= lo {
+                    lo = p;
+                    open_below = &[];
+                } else {
+                    clipped_open = open_below
+                        .iter()
+                        .filter_map(|&(s, e)| {
+                            let s = s.max(p as u32);
+                            (s < e).then_some((s, e))
+                        })
+                        .collect();
+                    open_below = &clipped_open;
+                }
+            }
             if lo >= hi && open_below.is_empty() {
                 continue;
             }
@@ -1014,10 +1047,66 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // — a single close used to set `needs_row_test` and so convert
             // the whole segment's scan from a range extend into a row loop.
             let n = vt_s.len();
+            // An incidence filter's postings, taken before the belief
+            // work rather than after it. A touching read of one vertex keeps
+            // a handful of rows, but its belief ranges were computed over the
+            // whole request domain first -- every close of every segment, and
+            // on long-lived data the open-ended rows below the cut exceed
+            // `WINDOW_FIRST_MAX_RANGES`, so over the whole segment: 3-7 ms a
+            // read on FinBench SF1's 718k closes, against 0.1 ms on K10M.
+            // With the postings in hand the belief domain is their rows inside
+            // the request domain. Belief is decided per row, so the believed
+            // rows are exactly those the old path kept after intersecting its
+            // ranges with the same postings. The budget is the request
+            // domain's size, at least the believed rows the later stage would
+            // have offered, so a refusal here is a refusal there too.
+            // Only on the shipped belief path: with `GNOMON_WINDOW_FIRST=0`,
+            // `GNOMON_RANGE_VISIBILITY=0` or `GNOMON_ADJ_FILTERED_SCAN=0` (no
+            // postings) the planner runs exactly its earlier code, so those
+            // ablation configurations measure what they measured when signed.
+            //
+            // The belief work then runs once per posting range, so postings
+            // first pays only where they are a few ranges
+            // (`POSTINGS_FIRST_MAX_RANGES`): an incidence filter over many
+            // nodes (count_temporal_motifs' node filter: ~20k posting rows a
+            // call on K10M-d10) is cheaper the old way, one pass over the
+            // domain. Then the postings already read are kept, and the later
+            // stage applies the old decision to them at the old budget
+            // (`walked < rows`), which is what `postings(.., rows)` decides:
+            // the old plan, the old work and the old counters.
+            let mut posted: Option<(crate::scan::Postings, Vec<(usize, usize)>)> = None;
+            let mut deferred: Option<crate::scan::Postings> = None;
+            let mut postings_refused = false;
+            if self.designs.window_first && self.designs.range_visibility {
+                if let (Some(src), Some(ids)) = (self.postings, req.touching_ids.as_deref()) {
+                    let dom = request_domain(open_below, lo, hi);
+                    let cand: usize = dom.iter().map(|(a, b)| b - a).sum();
+                    match src.postings(idx, ids, req.touching_both, cand)? {
+                        // more posting rows than a few ranges' worth: the old
+                        // order, without building the posting domain to find out
+                        Some(p) if p.rows.len() > POSTINGS_FIRST_MAX_ROWS => deferred = Some(p),
+                        Some(p) => {
+                            let posting_domain = intersect_rows(&p.rows, &dom).0;
+                            if posting_domain.len() <= POSTINGS_FIRST_MAX_RANGES {
+                                stats.adj_rows_walked += p.walked;
+                                stats.adj_segments += 1;
+                                crate::phase::add(crate::phase::Phase::SelAdjRows, p.walked);
+                                crate::phase::add(crate::phase::Phase::SelAdjSegments, 1);
+                                posted = Some((p, posting_domain));
+                            } else {
+                                deferred = Some(p);
+                            }
+                        }
+                        None => postings_refused = true,
+                    }
+                }
+            }
             // a whole-extent request never builds the domain at all
             // `GNOMON_WINDOW_FIRST=0` never builds the domain either: the
             // whole-segment path
-            let domain: Option<Vec<(usize, usize)>> = if !self.designs.window_first
+            let domain: Option<Vec<(usize, usize)>> = if let Some((_, d)) = &posted {
+                Some(d.clone())
+            } else if !self.designs.window_first
                 || (open_below.is_empty() && is_whole(lo, hi, n))
             {
                 None
@@ -1131,16 +1220,25 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
                         _ => clipped.push((a, b)),
                     }
                 };
+                // both lists are ascending and disjoint: one merge walk, the
+                // open-ended runs that end at or before a range's start never
+                // meet a later range (ranges ascend), and a run that starts at
+                // or after the clip top meets nothing in this range
+                let mut first_open = 0usize;
                 for (rs, re) in ranges {
                     // the open-ended rows this range holds *below* the cut,
                     // which the cut does not speak for -- emitted first so
                     // `clipped` stays ascending and disjoint, which is the
                     // contract `select_range` consumes
-                    for &(os, oe) in open_below {
-                        let (a, b) = (
-                            (os as usize).max(rs),
-                            (oe as usize).min(re).min(lo).min(hi),
-                        );
+                    let top = re.min(lo).min(hi);
+                    while first_open < open_below.len() && open_below[first_open].1 as usize <= rs {
+                        first_open += 1;
+                    }
+                    for &(os, oe) in &open_below[first_open..] {
+                        if os as usize >= top {
+                            break;
+                        }
+                        let (a, b) = ((os as usize).max(rs), (oe as usize).min(top));
                         push(a, b, &mut clipped);
                     }
                     let (a, b) = (rs.max(lo), re.min(hi));
@@ -1161,20 +1259,41 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             // them and nothing else. Every test still runs on every row it
             // sees (valid time, relation, incidence): the postings only
             // decide which rows are looked at, never which are selected.
-            let (clipped, rows) = match (self.postings, req.touching_ids.as_deref()) {
-                (Some(src), Some(ids)) => {
-                    match src.postings(idx, ids, req.touching_both, rows)? {
-                        Some(p) => {
-                            stats.adj_rows_walked += p.walked;
-                            stats.adj_segments += 1;
-                            crate::phase::add(crate::phase::Phase::SelAdjRows, p.walked);
-                            crate::phase::add(crate::phase::Phase::SelAdjSegments, 1);
-                            intersect_rows(&p.rows, &clipped)
-                        }
-                        None => (clipped, rows),
-                    }
+            let (clipped, rows) = if let Some((p, _)) = &posted {
+                // Taken (and counted) above; the ranges already lie
+                // inside the posting rows, which the intersection keeps
+                intersect_rows(&p.rows, &clipped)
+            } else if postings_refused {
+                // refused above at a larger budget: refused here as well
+                (clipped, rows)
+            } else if let Some(p) = deferred.take() {
+                // read above, used as the old stage would: `postings(.., rows)`
+                // refuses exactly when the walk reaches `rows`
+                if (p.walked as usize) < rows {
+                    stats.adj_rows_walked += p.walked;
+                    stats.adj_segments += 1;
+                    crate::phase::add(crate::phase::Phase::SelAdjRows, p.walked);
+                    crate::phase::add(crate::phase::Phase::SelAdjSegments, 1);
+                    intersect_rows(&p.rows, &clipped)
+                } else {
+                    (clipped, rows)
                 }
-                _ => (clipped, rows),
+            } else {
+                match (self.postings, req.touching_ids.as_deref()) {
+                    (Some(src), Some(ids)) => {
+                        match src.postings(idx, ids, req.touching_both, rows)? {
+                            Some(p) => {
+                                stats.adj_rows_walked += p.walked;
+                                stats.adj_segments += 1;
+                                crate::phase::add(crate::phase::Phase::SelAdjRows, p.walked);
+                                crate::phase::add(crate::phase::Phase::SelAdjSegments, 1);
+                                intersect_rows(&p.rows, &clipped)
+                            }
+                            None => (clipped, rows),
+                        }
+                    }
+                    _ => (clipped, rows),
+                }
             };
             if rows == 0 {
                 continue;
@@ -1192,6 +1311,24 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
             });
         }
         Ok((out, stats))
+    }
+
+    /// The rows of plan `p` incident to `ids` (sorted) -- whose
+    /// `src_id`, and unless `src_only` whose `dst_id`, is among them -- as
+    /// ascending row ranges inside the plan's believed, window-clipped
+    /// ranges, read from the adjacency postings. `None` when this set
+    /// carries no postings or the segment has none. No row test is applied:
+    /// the caller decides incidence and the time test per row.
+    pub(crate) fn plan_incident_rows(
+        &self,
+        p: &SegPlan<'_>,
+        ids: &[u32],
+        src_only: bool,
+    ) -> Result<Option<Vec<(usize, usize)>>> {
+        let Some(src) = self.postings else { return Ok(None) };
+        Ok(src
+            .postings(p.idx, ids, src_only, usize::MAX)?
+            .map(|got| intersect_rows(&got.rows, &p.ranges).0))
     }
 
     /// Stage R: one unit's rows. The predicate chain and the
@@ -2071,6 +2208,14 @@ pub(crate) fn is_whole(lo: usize, hi: usize, rows: usize) -> bool {
 /// whole segment and clips, as the whole-segment path does. Only the planner's open-ended
 /// rows below the window cut can produce more than one range.
 const WINDOW_FIRST_MAX_RANGES: usize = 64;
+
+/// A touching read's postings come before the belief work when they
+/// make at most this many ranges of the request domain (each range is one
+/// `close_view_in` and one believed-range pass); past it, the old order.
+const POSTINGS_FIRST_MAX_RANGES: usize = 256;
+/// ...and a segment's postings of more rows than this are not looked at for
+/// it: the posting domain would cost more to build than the old order saves.
+const POSTINGS_FIRST_MAX_ROWS: usize = 4_096;
 
 /// The rows a scan request can use in one segment: the open-ended rows below
 /// the window cut (each clipped below `min(lo, hi)`, exactly as the planner's
@@ -3152,10 +3297,52 @@ mod tests {
         }
     }
 
+    /// An event request (`vt_s_min`) selects exactly the overlap rows
+    /// that start at or after it, open-ended rows below the staircase cut
+    /// included, and examines no row that starts before it.
+    #[test]
+    fn event_cut_selects_the_overlap_rows_that_start_in_the_window() {
+        let dir = tmp("event-cut-scan");
+        let mut rows: Vec<EdgeRow> = (0..97u32)
+            .map(|i| edge(1_000 + i as i64 * 3, i, 10, "SENT", i % 11, (i + 5) % 11))
+            .collect();
+        rows.sort_by_key(|r| r.sort_key());
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.vt_e = if i % 13 == 0 {
+                OPEN_END
+            } else {
+                r.vt_s + if i % 5 == 0 { 5_000 } else { 50 }
+            };
+        }
+        let path = dir.join("0.tgs");
+        write_edge_segment(
+            &path,
+            &rows,
+            &SegmentSpec { lane: Lane::Interval, vt_e_block_rows: 8, ..Default::default() },
+        )
+        .unwrap();
+        let seg = Segment::open(&path, MemorySource::load(&path).unwrap(), true).unwrap();
+        let set = ScanSet::from_pairs(vec![(&seg, Lane::Interval)]);
+        let vt = seg.i64_column("vt_s").unwrap();
+        for (t_a, t_b) in [(0i64, 2_000), (1_050, 1_080), (1_150, 1_160), (1_200, 1_400),
+                           (1_288, 1_291), (5_000, 6_000)] {
+            let overlap = ScanRequest { vt_min: Some(t_a), vt_max: Some(t_b), ..ScanRequest::current() };
+            let event = ScanRequest { vt_s_min: Some(t_a), ..overlap.clone() };
+            let (a, _) = set.select(&overlap).unwrap();
+            let (b, sb) = set.select(&event).unwrap();
+            let want: Vec<u32> = a.iter().flat_map(|s| s.rows.iter().copied())
+                .filter(|&r| vt[r as usize] >= t_a).collect();
+            let got: Vec<u32> = b.iter().flat_map(|s| s.rows.iter().copied()).collect();
+            assert_eq!(got, want, "window [{t_a}, {t_b})");
+            let starting = rows.iter().filter(|r| r.vt_s >= t_a && r.vt_s < t_b).count() as u64;
+            assert!(sb.rows_examined <= starting, "window [{t_a}, {t_b}): examined {}", sb.rows_examined);
+        }
+    }
+
     /// An event-lane segment that stores `vt_e`, with the
     /// staircase derived at open. For a sweep of windows the derived cut
     /// lets through exactly `expected()`'s rows -- the brute per-row filter
-    /// -- and the same rows as the switch-off arm, never examines more rows
+    /// -- and the same rows as the switch-off configuration, never examines more rows
     /// than it, and does skip blocks. Open-ended rows below the cut come
     /// back through the derived open-row ranges.
     #[test]
@@ -4026,7 +4213,7 @@ mod tests {
     ///   same rows give byte-identical `any`, `current` and `superseded`.
     #[test]
     fn superseded_partition_holds_on_a_dictionary_coded_segment() {
-        let dir = tmp("w18-dict-partition");
+        let dir = tmp("dictpart-dict-partition");
         type Shape = (&'static str, u32, fn(u32) -> i64);
         let shapes: Vec<Shape> = vec![
             ("alternating", 300, |i| 10 + (i % 3) as i64 * 10),

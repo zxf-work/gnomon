@@ -438,7 +438,7 @@ def test_named_node_prepass_does_not_leave_a_segment_per_node(tmp_path: Path):
     writes one batch and one manifest each and costs O(N^2) in both time and
     bytes", measured there at 8,435 nodes producing 8,436 manifests and
     15 GB. The pre-pass also runs outside `Builder._tick`, so while it runs
-    **no arm's compaction policy is consulted at all**: not the trigger under
+    **no configuration's compaction policy is consulted at all**: not the trigger under
     `--compact-every 0`, not the op counter under a positive cadence.
 
     A 30M segment census caught the consequence — the first compaction in

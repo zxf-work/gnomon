@@ -140,8 +140,7 @@ class StorageAdapter(ABC):
         positionally. It is a locating hint and never an answer: an adapter
         that does not need it ignores it, and omitting it finds the same
         rows. The native engine uses it to prune segments on the manifest's
-        key ranges instead of holding a store-wide vid postings map
-       .
+        key ranges instead of holding a store-wide vid postings map.
         """
 
     @abstractmethod
@@ -177,6 +176,46 @@ class StorageAdapter(ABC):
         NOT change the result. Callers must pass exactly the src/dst the eid
         was derived from (`edge_eid(src, dst, rel_type, disc)`); behavior
         with wrong hints is undefined."""
+
+    def believed_node_versions_overlapping(self, uid: str, vt_s: int, vt_e: int,
+                                           as_of_tt: int = OPEN_END) -> list[NodeVersion]:
+        """The versions of `uid` believed at `as_of_tt` whose valid time
+        overlaps `[vt_s, vt_e)`, in `believed_node_versions` order.
+
+        This is the question every write op asks (the versions an assert,
+        correct or retract carves). The default filters the whole believed
+        history; the native engine overrides it with a point read that seeks
+        to the window instead (`crates/gnomon-core/src/pointread.rs`),
+        which is what keeps a key with a long valid-time history from costing
+        that history on every write. Same answer either way."""
+        return [v for v in self.believed_node_versions(uid, as_of_tt)
+                if v.vt_s < vt_e and vt_s < v.vt_e]
+
+    def believed_edge_versions_overlapping(self, eid: str, vt_s: int, vt_e: int,
+                                           as_of_tt: int = OPEN_END, *,
+                                           src: str | None = None,
+                                           dst: str | None = None) -> list[EdgeVersion]:
+        """Edge counterpart of `believed_node_versions_overlapping`; `src`
+        and `dst` are the same performance hints `believed_edge_versions`
+        takes."""
+        return [v for v in self.believed_edge_versions(eid, as_of_tt, src=src, dst=dst)
+                if v.vt_s < vt_e and vt_s < v.vt_e]
+
+    def identity_versions(self, kind: str, key: str) -> list[NodeVersion] | list[EdgeVersion]:
+        """Every version of ONE identity ever written (a node's uid, or an
+        edge's eid), whatever its belief, with its stored `tt_e`, ordered by
+        `(tt_s, vid)`: the identity's belief log, which `version_history`
+        reads for a `ref`. Versions closed by a bare retraction are in it.
+
+        The default filters the whole population and is O(store); backends
+        with an identity index override it (DuckDB by its key column, the
+        native engine by its identity postings). Same answer either way."""
+        if kind == "node":
+            out: list = [v for v in self.all_node_versions() if v.uid == key]
+        else:
+            out = [v for v in self.all_edge_versions() if v.eid == key]
+        out.sort(key=lambda v: (v.tt_s, v.vid))
+        return out
 
     @abstractmethod
     def all_node_versions(self) -> Iterable[NodeVersion]:
@@ -484,7 +523,7 @@ class StorageAdapter(ABC):
         uid, label, props = op["uid"], op["label"], op.get("props", {})
         vt = _interval(op["vt_s"], op.get("vt_e", OPEN_END))
         self.ensure_entities([(uid, label)])
-        existing = [v for v in self.believed_node_versions(uid)
+        existing = [v for v in self.believed_node_versions_overlapping(uid, vt.start, vt.end)
                     if Interval(v.vt_s, v.vt_e).overlaps(vt)]
         fragments: list[NodeVersion] = []
         for v in existing:
@@ -508,7 +547,8 @@ class StorageAdapter(ABC):
         vt = _interval(op["vt_s"], op.get("vt_e", OPEN_END))
         eid = edge_eid(src, dst, rel_type, disc)
         self.ensure_entities([(src, op.get("src_label", "")), (dst, op.get("dst_label", ""))])
-        existing = [v for v in self.believed_edge_versions(eid, src=src, dst=dst)
+        existing = [v for v in self.believed_edge_versions_overlapping(
+                        eid, vt.start, vt.end, src=src, dst=dst)
                     if Interval(v.vt_s, v.vt_e).overlaps(vt)]
         fragments: list[EdgeVersion] = []
         for v in existing:
@@ -532,7 +572,8 @@ class StorageAdapter(ABC):
         ref = _ref_from_op(op)
         t = op["t"]
         if ref.kind == "node":
-            hits = [v for v in self.believed_node_versions(ref.identity) if v.valid_at(t)]
+            hits = [v for v in self.believed_node_versions_overlapping(ref.identity, t, t + 1)
+                    if v.valid_at(t)]
             if not hits:
                 raise NotFoundError(f"no believed node version of {ref.identity} valid at {t}")
             self._supersede_nodes(hits, tt)
@@ -542,7 +583,8 @@ class StorageAdapter(ABC):
                     for v in hits if v.vt_s < t]
             self.insert_node_versions(repl)
         else:
-            hits = [v for v in self.believed_edge_versions(ref.identity, src=ref.src, dst=ref.dst)
+            hits = [v for v in self.believed_edge_versions_overlapping(
+                        ref.identity, t, t + 1, src=ref.src, dst=ref.dst)
                     if v.valid_at(t)]
             if not hits:
                 raise NotFoundError(f"no believed edge version of {ref.identity} valid at {t}")
@@ -559,7 +601,7 @@ class StorageAdapter(ABC):
         new_props: Props = op["props"]
         vt = _interval(op["vt_s"], op.get("vt_e", OPEN_END))
         if ref.kind == "node":
-            versions = self.believed_node_versions(ref.identity)
+            versions = self.believed_node_versions_overlapping(ref.identity, vt.start, vt.end)
             hits = [v for v in versions if Interval(v.vt_s, v.vt_e).overlaps(vt)]
             if not hits:
                 raise NotFoundError(f"no believed node version of {ref.identity} overlaps vt")
@@ -589,7 +631,8 @@ class StorageAdapter(ABC):
                                     provenance_ref=op.get("provenance_ref")))
             self.insert_node_versions(rows)
         else:
-            versions = self.believed_edge_versions(ref.identity, src=ref.src, dst=ref.dst)
+            versions = self.believed_edge_versions_overlapping(ref.identity, vt.start, vt.end,
+                                                               src=ref.src, dst=ref.dst)
             hits = [v for v in versions if Interval(v.vt_s, v.vt_e).overlaps(vt)]
             if not hits:
                 raise NotFoundError(f"no believed edge version of {ref.identity} overlaps vt")

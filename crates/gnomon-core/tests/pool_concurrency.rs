@@ -59,7 +59,7 @@ fn build(root: &std::path::Path) -> NativeStore {
 #[test]
 fn concurrent_callers_on_one_handle_get_the_serial_answer() {
     let mut root = std::env::temp_dir();
-    root.push(format!("gnomon-w33-pool-{}", std::process::id()));
+    root.push(format!("gnomon-workers-pool-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let s = build(&root);
     let agg = AggregateRequest {

@@ -141,7 +141,7 @@ pub fn read_close_run(path: &Path) -> Result<Vec<CloseRecord>> {
 /// stopped believing. Layering rather than merging keeps the
 /// committed index shared and untouched: the overlay is the size of the open
 /// batch, not of the store's correction history.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct CloseIndex {
     by_row: HashMap<(u64, u32), i64>,
     /// The same closes, projected per segment and sorted by row — **this
@@ -238,6 +238,129 @@ impl CloseIndex {
             Ok(i) => v[i].1 = tt_e,
             Err(i) => v.insert(i, (row, tt_e)),
         }
+    }
+
+    /// The close this index's *own* layer records for `(segment, row)`, when
+    /// it layers over a base — the open batch's pending closes — and `None`
+    /// for a committed index or a row the layer does not close. A reader
+    /// holding the committed answer for a row (the traversal's cached
+    /// effective-`tt_e` column) consults this first, which is exactly
+    /// [`CloseIndex::tt_e`]'s precedence.
+    #[inline]
+    pub fn pending_tt_e(&self, segment: u64, row: u32) -> Option<i64> {
+        self.base.as_ref()?;
+        self.by_row.get(&(segment, row)).copied()
+    }
+
+    /// [`CloseIndex::close_row`] for many records at once, with exactly the
+    /// result of calling it on each in order (a later record of a row wins).
+    ///
+    /// `close_row` keeps a segment's closes sorted by inserting in place,
+    /// which is right for an open batch's overlay and wrong for the committed
+    /// index: extending that with a close run of k records into segments that
+    /// already hold n closes moved O(k n) bytes, once per commit, so a store's
+    /// commit grew with its correction history (0.24 -> 1.46 s over five
+    /// SF1 correction transactions). Here each segment's new records are
+    /// sorted once and merged in O(n + k).
+    pub fn close_rows(&mut self, records: impl IntoIterator<Item = (u64, u32, i64)>) {
+        let mut per: HashMap<u64, Vec<(u32, i64)>> = HashMap::new();
+        for (segment, row, tt_e) in records {
+            self.by_row.insert((segment, row), tt_e);
+            self.segments.insert(segment);
+            per.entry(segment).or_default().push((row, tt_e));
+        }
+        for (segment, mut add) in per {
+            // stable: the records of one row keep their order, and the last wins
+            add.sort_by_key(|&(r, _)| r);
+            let mut new: Vec<(u32, i64)> = Vec::with_capacity(add.len());
+            for (r, t) in add {
+                match new.last_mut() {
+                    Some(l) if l.0 == r => l.1 = t,
+                    _ => new.push((r, t)),
+                }
+            }
+            let v = self.by_segment.entry(segment).or_default();
+            if v.is_empty() {
+                *v = new;
+                continue;
+            }
+            let old = std::mem::take(v);
+            let mut out = Vec::with_capacity(old.len() + new.len());
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < old.len() && j < new.len() {
+                match old[i].0.cmp(&new[j].0) {
+                    std::cmp::Ordering::Less => {
+                        out.push(old[i]);
+                        i += 1;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        out.push(new[j]);
+                        j += 1;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        out.push(new[j]);
+                        i += 1;
+                        j += 1;
+                    }
+                }
+            }
+            out.extend_from_slice(&old[i..]);
+            out.extend_from_slice(&new[j..]);
+            *v = out;
+        }
+    }
+
+    /// [`CloseIndex::remove_row`] for many rows at once, with exactly the
+    /// result of calling it on each; returns how many were present. One
+    /// filtering pass per segment instead of a `Vec::remove` per row, which
+    /// made dropping a dead segment's n closes O(n^2) (compaction's
+    /// close-run merge).
+    pub fn remove_rows(&mut self, rows: impl IntoIterator<Item = (u64, u32)>) -> usize {
+        let mut per: HashMap<u64, Vec<u32>> = HashMap::new();
+        let mut n = 0usize;
+        for (segment, row) in rows {
+            if self.by_row.remove(&(segment, row)).is_some() {
+                per.entry(segment).or_default().push(row);
+                n += 1;
+            }
+        }
+        for (segment, mut gone) in per {
+            gone.sort_unstable();
+            if let Some(v) = self.by_segment.get_mut(&segment) {
+                v.retain(|(r, _)| gone.binary_search(r).is_err());
+                if v.is_empty() {
+                    self.by_segment.remove(&segment);
+                    self.segments.remove(&segment);
+                }
+            }
+        }
+        n
+    }
+
+    /// Forget one close of this layer — the inverse of [`CloseIndex::close_row`]
+    /// for a record that was the only close of its row.
+    ///
+    /// Exists for the close-run merge (`compact.rs`): a merge drops the
+    /// records that name dead segments, and the committed index of the
+    /// merged generation is exactly the previous one minus those records, so
+    /// it is edited in O(dropped) rather than rebuilt from every run. A row is
+    /// closed at most once — closing reaches only believed rows — so removing
+    /// by address removes exactly the dropped record. Returns whether the row
+    /// was present.
+    pub fn remove_row(&mut self, segment: u64, row: u32) -> bool {
+        if self.by_row.remove(&(segment, row)).is_none() {
+            return false;
+        }
+        if let Some(v) = self.by_segment.get_mut(&segment) {
+            if let Ok(i) = v.binary_search_by_key(&row, |(r, _)| *r) {
+                v.remove(i);
+            }
+            if v.is_empty() {
+                self.by_segment.remove(&segment);
+                self.segments.remove(&segment);
+            }
+        }
+        true
     }
 
     /// The closes this index makes visible for one segment, sorted by row,
@@ -743,6 +866,46 @@ mod tests {
         let idx = CloseIndex::from_records([rec(1, 4, 100), rec(1, 4, 250)]);
         assert_eq!(idx.tt_e(1, 4), 250);
         assert_eq!(idx.len(), 1);
+    }
+
+    /// The bulk forms build exactly the index the one-at-a-time calls
+    /// build. Pseudo-random rounds of close runs (rows closed twice inside a
+    /// run and across runs, over segments that already hold closes) and of
+    /// removals (present, absent and repeated rows), compared by `PartialEq`
+    /// over `by_row`, `by_segment` and `segments` after every round.
+    #[test]
+    fn bulk_closes_and_removals_build_the_sequential_index() {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut seq = CloseIndex::default();
+        let mut bulk = CloseIndex::default();
+        for round in 0..300 {
+            let n = (next() % 400) as usize;
+            if round % 3 == 2 {
+                let rows: Vec<(u64, u32)> =
+                    (0..n).map(|_| (next() % 7, (next() % 900) as u32)).collect();
+                let mut present = 0usize;
+                for &(s, r) in &rows {
+                    present += seq.remove_row(s, r) as usize;
+                }
+                assert_eq!(bulk.remove_rows(rows), present, "round {round}");
+            } else {
+                let recs: Vec<(u64, u32, i64)> = (0..n)
+                    .map(|_| (next() % 7, (next() % 900) as u32, (next() % 50) as i64))
+                    .collect();
+                for &(s, r, t) in &recs {
+                    seq.close_row(s, r, t);
+                }
+                bulk.close_rows(recs);
+            }
+            assert_eq!(bulk, seq, "round {round}");
+        }
+        assert!(seq.len() > 100, "the run kept a populated index");
     }
 
     #[test]

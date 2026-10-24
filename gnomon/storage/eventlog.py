@@ -585,7 +585,7 @@ def replay(eventlog_path: str | Path, adapter: Any, *,
     cluster is eligible, rewrites that one tier with `compact_incremental()`.
 
     Without either flag **replay never compacts at all**, so a replayed store
-    holds one segment per applied batch, for every arm, forever. That is not
+    holds one segment per applied batch, for every configuration, forever. That is not
     a hypothetical: the segment-count/latency design note
     censused a 1M replayed store at **283 live segments over 282 generations
     with 0 compactions**, and the same shape at 30M is tens of thousands —

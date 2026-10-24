@@ -386,6 +386,189 @@ impl RadixHeap {
     }
 }
 
+/// The earliest arrivals by growing a frontier from the source instead of
+/// building the window's CSR: each round fetches the window's
+/// believed edges incident to the newly reached nodes from the window's
+/// plan (its believed, window-clipped ranges) through the adjacency postings,
+/// keeps the arcs leaving them, and reruns the label-setting search over
+/// the arcs gathered so far. When a round reaches nothing new, every
+/// reached node's arcs are known, and the search over them is the search
+/// over the whole window restricted to what the source can reach -- the
+/// same least fixed point, so the same answer. A source with no arc in
+/// the window costs one filtered scan.
+///
+/// `None` once the search outgrows [`FRONTIER_MAX_NODES`] expanded nodes,
+/// [`FRONTIER_MAX_ARCS`] arcs or [`FRONTIER_MAX_ROUNDS`] rounds: then the
+/// CSR, built once over the window, is the cheaper path, and the caller
+/// takes it.
+#[allow(clippy::too_many_arguments)]
+fn reach_frontier<S: crate::segment::SegmentSource>(
+    set: &crate::scan::ScanSet<'_, S>,
+    plans: &[crate::scan::SegPlan<'_>],
+    src: u32,
+    t_a: i64,
+    t_b: i64,
+    dir: ReachDir,
+    n: usize,
+    arc_budget: usize,
+) -> Result<Option<Vec<i64>>> {
+    use std::collections::{HashMap, HashSet};
+    if (src as usize) >= n {
+        return Ok(Some(vec![OPEN_END; n]));
+    }
+    let mut adj: HashMap<u32, Vec<Arc>> = HashMap::new();
+    let mut expanded: HashSet<u32> = HashSet::new();
+    let mut frontier: Vec<u32> = vec![src];
+    let mut arcs_total = 0usize;
+    let mut arr: HashMap<u32, i64> = HashMap::new();
+    let (max_nodes, max_arcs) = frontier_budget();
+    let max_arcs = max_arcs.min(arc_budget);
+    // `Out` needs only the rows leaving the frontier; the others both ends
+    let src_only = dir == ReachDir::Out;
+    for _round in 0..FRONTIER_MAX_ROUNDS {
+        if frontier.is_empty() {
+            let mut out = vec![OPEN_END; n];
+            for (&v, &a) in &arr {
+                out[v as usize] = a;
+            }
+            out[src as usize] = t_a;
+            return Ok(Some(out));
+        }
+        if expanded.len() + frontier.len() > max_nodes {
+            return Ok(None);
+        }
+        frontier.sort_unstable();
+        let fset: HashSet<u32> = frontier.iter().copied().collect();
+        let t = std::time::Instant::now();
+        for p in plans {
+            // the plan's believed, window-clipped rows incident to the
+            // frontier, through the adjacency postings; a segment without
+            // postings would mean scanning it every round: take the CSR
+            let Some(ranges) = set.plan_incident_rows(p, &frontier, src_only)? else {
+                return Ok(None);
+            };
+            if ranges.is_empty() {
+                continue;
+            }
+            let seg = set.segment(p.idx);
+            let s = seg.u32_column("src_id")?;
+            let d = seg.u32_column("dst_id")?;
+            let vs = seg.i64_column("vt_s")?;
+            for (a, b) in ranges {
+                for i in a..b {
+                    let (vs, ve) = (vs[i], p.vt_e.map_or(vs[i] + 1, |c| c[i]));
+                    if ve <= t_a {
+                        continue; // never traversable: tau >= t_a (as the CSR's source skips)
+                    }
+                    let mut add = |key: u32, to: u32| {
+                        if fset.contains(&key) {
+                            adj.entry(key).or_default().push(Arc { vt_s: vs, vt_e: ve, to });
+                            arcs_total += 1;
+                        }
+                    };
+                    match dir {
+                        ReachDir::Out => add(s[i], d[i]),
+                        ReachDir::In => add(d[i], s[i]),
+                        ReachDir::Both => {
+                            add(s[i], d[i]);
+                            add(d[i], s[i]);
+                        }
+                    }
+                }
+            }
+        }
+        crate::phase::since(crate::phase::Phase::ReachEdges, t);
+        if arcs_total > max_arcs {
+            return Ok(None);
+        }
+        // a source that leaves on many arcs reaches far: its search outgrows
+        // the budget after another round or two, each of them paid for
+        // nothing, so it takes the CSR now
+        if expanded.is_empty() && arcs_total > FRONTIER_FIRST_ARCS {
+            return Ok(None);
+        }
+        expanded.extend(frontier.drain(..));
+        arr = earliest_sparse(&adj, src, t_a, t_b);
+        frontier = arr.keys().copied().filter(|v| !expanded.contains(v)).collect();
+    }
+    Ok(None)
+}
+
+/// The frontier budget: past any of these the window's CSR is cheaper than
+/// another filtered scan per round. Arcs are also capped at one per
+/// [`FRONTIER_ROWS_PER_ARC`] rows the window holds (at least
+/// [`FRONTIER_MIN_ARCS`]): a fetched arc costs several times what one row
+/// costs the CSR build, so an abandoned frontier stays a small fraction of
+/// the build it falls back to.
+const FRONTIER_ROWS_PER_ARC: usize = 64;
+const FRONTIER_MIN_ARCS: usize = 256;
+const FRONTIER_MAX_NODES: usize = 128;
+const FRONTIER_MAX_ARCS: usize = 1 << 16;
+const FRONTIER_MAX_ROUNDS: usize = 12;
+/// Arcs leaving the source past which the frontier gives up after its first
+/// round (`reach_frontier`).
+const FRONTIER_FIRST_ARCS: usize = 4;
+
+/// The budget in force: the constants above, or `GNOMON_REACH_FRONTIER_BUDGET=
+/// nodes,arcs` (read once per process; for measuring the trade-off).
+fn frontier_budget() -> (usize, usize) {
+    static B: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+    *B.get_or_init(|| {
+        std::env::var("GNOMON_REACH_FRONTIER_BUDGET")
+            .ok()
+            .and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+            })
+            .unwrap_or((FRONTIER_MAX_NODES, FRONTIER_MAX_ARCS))
+    })
+}
+
+/// `GNOMON_REACH_FRONTIER=0` builds the window's CSR for every search, as
+/// before the frontier search existed (the paired control); read once per
+/// process.
+fn frontier_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNOMON_REACH_FRONTIER").map_or(true, |v| v.trim() != "0"))
+}
+
+/// [`Csr::earliest`] over a sparse arc map: the same label-setting search,
+/// the same traversal rule, over the arcs the frontier has gathered.
+fn earliest_sparse(
+    adj: &std::collections::HashMap<u32, Vec<Arc>>,
+    src: u32,
+    t_a: i64,
+    t_b: i64,
+) -> std::collections::HashMap<u32, i64> {
+    // A binary heap, not the radix heap of the CSR search: this search is
+    // small, and a second caller of `RadixHeap` changed how the compiler
+    // inlined it into `Csr::earliest`, the hot loop of every search the
+    // frontier hands over (that loop measured 8-11 % slower).
+    use std::cmp::Reverse;
+    let mut arr: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
+    arr.insert(src, t_a);
+    let mut heap = std::collections::BinaryHeap::new();
+    heap.push(Reverse((t_a, src)));
+    while let Some(Reverse((a, u))) = heap.pop() {
+        if a > arr[&u] {
+            continue;
+        }
+        let Some(run) = adj.get(&u) else { continue };
+        for e in run {
+            let tau = a.max(e.vt_s);
+            if tau >= e.vt_e || tau >= t_b {
+                continue;
+            }
+            let best = arr.get(&e.to).copied().unwrap_or(OPEN_END);
+            if tau < best {
+                arr.insert(e.to, tau);
+                heap.push(Reverse((tau, e.to)));
+            }
+        }
+    }
+    arr
+}
+
 /// The planner's believed, window-clipped ranges as an edge source: no
 /// intermediate copy of the window's edges is ever made. Interval rows that
 /// end by `t_a` are skipped (`tau >= t_a` always, so `vt_e <= t_a` is never
@@ -449,6 +632,23 @@ impl NativeStore {
         offset: usize,
         limit: usize,
     ) -> Result<Option<ReachOut>> {
+        self.reach_earliest_via(src, t_a, t_b, as_of_tt, dir, offset, limit, frontier_enabled())
+    }
+
+    /// [`Self::reach_earliest`] with the frontier start on or off:
+    /// off builds the window's CSR first, as before; both give one answer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reach_earliest_via(
+        &self,
+        src: u32,
+        t_a: i64,
+        t_b: i64,
+        as_of_tt: i64,
+        dir: ReachDir,
+        offset: usize,
+        limit: usize,
+        frontier: bool,
+    ) -> Result<Option<ReachOut>> {
         use crate::phase::{since, Phase};
         if self.in_batch() {
             return Ok(None);
@@ -460,9 +660,33 @@ impl NativeStore {
             vt_max: Some(t_b),
             ..Default::default()
         };
-        let arr = self.with_edge_scan(&req, |set, _| {
+        // the frontier's scans need the adjacency postings, which the scan
+        // set carries when it is built for an incidence filter; the CSR's
+        // plan below never reads them (it names no incidence)
+        let outer = if frontier {
+            ScanRequest {
+                touching_ids: Some(vec![src]),
+                ..req.clone()
+            }
+        } else {
+            req.clone()
+        };
+        let arr = self.with_edge_scan(&outer, |set, _| {
             let t = std::time::Instant::now();
             let (plans, _) = set.plan_believed(&req)?;
+            // Grow from the source first, within a budget scaled to the
+            // window: a search that outgrows it pays for the window's CSR
+            // after all, having spent at most a small fraction of it
+            if frontier {
+                let rows: usize = plans.iter().map(|p| p.rows).sum();
+                let budget = (rows / FRONTIER_ROWS_PER_ARC).max(FRONTIER_MIN_ARCS);
+                let t = std::time::Instant::now();
+                let small = reach_frontier(set, &plans, src, t_a, t_b, dir, n, budget)?;
+                since(Phase::ReachSearch, t);
+                if let Some(arr) = small {
+                    return Ok(arr);
+                }
+            }
             let mut source = PlannedEdges {
                 cols: Vec::with_capacity(plans.len()),
                 pieces: Vec::new(),
@@ -837,9 +1061,13 @@ mod tests {
                 want.sort();
                 assert!(want.len() > 10, "the probe must reach something ({})", want.len());
                 let total = want.len();
-                for (offset, limit) in [(0, usize::MAX), (0, 1), (0, 7), (5, 3), (total - 1, 10), (total, 5), (total + 3, 5)] {
+                // both starts: the frontier, and the window's CSR
+                for (frontier, (offset, limit)) in [false, true].into_iter().flat_map(|f| {
+                    [(0, usize::MAX), (0, 1), (0, 7), (5, 3), (total - 1, 10), (total, 5),
+                     (total + 3, 5)].map(|p| (f, p))
+                }) {
                     let got = s
-                        .reach_earliest(src, t_a, t_b, as_of, dir, offset, limit)
+                        .reach_earliest_via(src, t_a, t_b, as_of, dir, offset, limit, frontier)
                         .unwrap()
                         .expect("no open batch");
                     let page: Vec<(i64, String)> =

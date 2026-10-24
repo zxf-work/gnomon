@@ -160,9 +160,9 @@ def test_a_corrected_store_resolves_over_only_the_believed_rows(tmp_path):
 
     stored, folded, all_current = _census(tmp_path / "corr")
     # fixture-is-real: a gate on "the superseded rows are skipped"
-    # is an assertion about nothing if the arm superseded nothing
+    # is an assertion about nothing if the configuration superseded nothing
     assert folded > 0 and not all_current, (
-        f"the corrected arm folded {folded} closes and all_current="
+        f"the corrected configuration folded {folded} closes and all_current="
         f"{all_current}: it has no superseded rows to skip"
     )
     believed = stored - folded
@@ -192,11 +192,11 @@ def test_a_corrected_store_resolves_over_only_the_believed_rows(tmp_path):
 
 
 def test_a_clean_store_examines_every_row_and_that_is_correct(tmp_path):
-    """The other side of the same claim, and the reason the c=0 arm of the
+    """The other side of the same claim, and the reason the c=0 configuration of the
     A/B is pre-registered at 1.0 rather than at a speed-up: when nothing has
     been superseded there is nothing to skip, and the converted path must
     examine the whole store just as the sweep did. A gate that only checked
-    the corrected arm could be passed by a filter that drops rows."""
+    the corrected configuration could be passed by a filter that drops rows."""
     clean = _build(tmp_path / "clean")
     stored, folded, all_current = _census(tmp_path / "clean")
     assert (folded, all_current) == (0, True)

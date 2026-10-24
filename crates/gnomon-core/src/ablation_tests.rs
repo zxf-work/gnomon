@@ -29,7 +29,8 @@ fn tmp(name: &str) -> std::path::PathBuf {
 // ---------------------------------------------------------------------- //
 
 /// Switches whose "off" value is `python` (the operator's NumPy path).
-const KERNEL_SWITCHES: [&str; 2] = ["GNOMON_REACH_KERNEL", "GNOMON_DIFF_KERNEL"];
+const KERNEL_SWITCHES: [&str; 4] =
+    ["GNOMON_REACH_KERNEL", "GNOMON_DIFF_KERNEL", "GNOMON_MATCH_KERNEL", "GNOMON_PATHS_KERNEL"];
 
 #[test]
 fn unset_variables_leave_every_design_on() {
@@ -40,10 +41,16 @@ fn unset_variables_leave_every_design_on() {
     for v in ["", "1", "yes", "on", "garbage", "rust", "python"] {
         // `python` is the one value the kernel switches understand
         // (`GNOMON_REACH_KERNEL=python`), so it is not set on those here;
-        // `1` is the one value `GNOMON_NO_STAIRCASE` understands
+        // `1` is the one value `GNOMON_NO_STAIRCASE` understands, and
+        // the opt-in small-commit switch and its two numeric parameters
+        // understand it too, and so does the read kernels' thread count
         let d = Designs::from_lookup(|k| {
             (!(v == "python" && KERNEL_SWITCHES.contains(&k))
-                && !(v == "1" && k == "GNOMON_NO_STAIRCASE"))
+                && !(v == "1"
+                    && (k == "GNOMON_NO_STAIRCASE"
+                        || k.starts_with("GNOMON_SMALL_COMMIT")
+                        || k == "GNOMON_MATCH_THREADS"
+                        || k == "GNOMON_MATCH_PAR_ROWS")))
                 .then(|| v.to_string())
         });
         assert_eq!(d, Designs::ALL, "value {v:?} turned a design off");
@@ -56,7 +63,7 @@ fn each_variable_turns_off_exactly_its_own_design() {
         Designs::from_lookup(move |q| (q == k).then(|| v.to_string()))
     };
     type Case = (&'static str, &'static str, fn(&mut Designs));
-    let cases: [Case; 17] = [
+    let cases: [Case; 27] = [
         ("GNOMON_RANGE_VISIBILITY", "0", |d| d.range_visibility = false),
         ("GNOMON_RANGE_VISIBILITY", "false", |d| d.range_visibility = false),
         ("GNOMON_WINDOW_FIRST", "0", |d| d.window_first = false),
@@ -77,6 +84,20 @@ fn each_variable_turns_off_exactly_its_own_design() {
         ("GNOMON_DIFF_KERNEL", "python", |d| d.diff_kernel = false),
         // the staircase switch, read at open
         ("GNOMON_NO_STAIRCASE", "1", |d| d.staircase = false),
+        // The traversal's effective-tt_e column
+        ("GNOMON_TT_E_COLUMN", "0", |d| d.tt_e_column = false),
+        // the pattern-match kernel
+        ("GNOMON_MATCH_KERNEL", "python", |d| d.match_kernel = false),
+        ("GNOMON_MATCH_KERNEL", "PYTHON", |d| d.match_kernel = false),
+        // step 3: the read kernels' thread count, a number, at most 64
+        ("GNOMON_MATCH_THREADS", "32", |d| d.match_threads_set = 32),
+        ("GNOMON_MATCH_THREADS", " 2 ", |d| d.match_threads_set = 2),
+        ("GNOMON_MATCH_THREADS", "500", |d| d.match_threads_set = 64),
+        ("GNOMON_MATCH_PAR_ROWS", "64", |d| d.match_par_rows = 64),
+        ("GNOMON_MATCH_PAR_ROWS", " 1000 ", |d| d.match_par_rows = 1000),
+        // The temporal-paths kernel
+        ("GNOMON_PATHS_KERNEL", "python", |d| d.paths_kernel = false),
+        ("GNOMON_PATHS_KERNEL", " Python", |d| d.paths_kernel = false),
     ];
     for (k, v, f) in cases {
         let mut want = Designs::ALL;
@@ -90,7 +111,7 @@ fn each_variable_turns_off_exactly_its_own_design() {
     for v in ["0", "true", " 1", "yes"] {
         assert_eq!(one("GNOMON_NO_STAIRCASE", v), Designs::ALL, "GNOMON_NO_STAIRCASE={v:?}");
     }
-    assert_eq!(Designs::ALL.named().iter().filter(|(_, on)| *on).count(), 13);
+    assert_eq!(Designs::ALL.named().iter().filter(|(_, on)| *on).count(), 17);
 }
 
 #[test]

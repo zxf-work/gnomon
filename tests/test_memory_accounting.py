@@ -45,7 +45,7 @@ length about its own RSS ratio — "the right claim and the wrong instrument".
 **The cost check.** The accessor is meant to be sampled at a progress line
 and at every point op of a build's post-bulk phases, so its cost has to be
 invisible against the work it observes. The gate times the accessor
-*in-process*, inside the arm that pays for it: at this fixture's size the
+*in-process*, inside the configuration that pays for it: at this fixture's size the
 whole build is ~2.3 s and two interpreters differ by tens of milliseconds
 for reasons of their own, which is the same order as the quantity under
 test, so a difference of two walls is the wrong instrument for a
@@ -166,7 +166,7 @@ ROWS_PER_BATCH = 2_000
 #: the ingest path alone reads nothing back and leaves both empty.
 CORRECTIONS = 40
 
-#: The arm runs with an explicit, *binding* segment-cache budget rather than
+#: The configuration runs with an explicit, *binding* segment-cache budget rather than
 #: the host default. Two reasons. The default is unbounded on any host whose
 #: RAM the engine cannot detect (`detected_ram_bytes` reads `/proc/meminfo`
 #: and nothing else), so on macOS the budget assertions would skip and prove

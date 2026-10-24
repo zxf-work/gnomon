@@ -167,10 +167,10 @@ def test_replay_with_the_trigger_bounds_segments_and_keeps_the_digest(tmp_path):
     without changing one byte of what it holds.
 
     **Why it is needed.** Without either flag replay never compacts, so a
-    replayed store holds one segment per applied batch — for every arm, since
+    replayed store holds one segment per applied batch — for every configuration, since
     no cadence is consulted. The segment-count/latency design note
     censused exactly that at 1M: **283 live segments over 282
-    generations with 0 compactions**, on both arms of a comparison that was
+    generations with 0 compactions**, on both configurations of a comparison that was
     looking for a layout difference. At campaign scale the same shape is tens
     of thousands of segments, past `GNOMON_PIN_MAX_SEGMENTS` (16,384), where
     pin-at-open silently degrades to lazy per-segment loading for

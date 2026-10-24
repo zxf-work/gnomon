@@ -67,7 +67,8 @@ SCALE = 1_500
 ALL_VARS = ("GNOMON_RANGE_VISIBILITY", "GNOMON_WINDOW_FIRST", "GNOMON_SEGMENT_PRUNE",
             "GNOMON_TCSR", "GNOMON_VIDFILTER", "GNOMON_EXISTENCE_PROBE",
             "GNOMON_TIME_CODEC", "GNOMON_SEED_EXPANSION", "GNOMON_ADJ_FILTERED_SCAN",
-            "GNOMON_AGG_RANGE_COUNT", "GNOMON_REACH_KERNEL", "GNOMON_DIFF_KERNEL")
+            "GNOMON_AGG_RANGE_COUNT", "GNOMON_REACH_KERNEL", "GNOMON_DIFF_KERNEL",
+            "GNOMON_MATCH_KERNEL")
 
 #: switch name -> (environment, the `designs()` flag it turns off)
 SWITCHES: dict[str, tuple[dict[str, str], str]] = {
@@ -81,6 +82,7 @@ SWITCHES: dict[str, tuple[dict[str, str], str]] = {
     "agg_range_count": ({"GNOMON_AGG_RANGE_COUNT": "0"}, "agg_range_count"),
     "reach_kernel": ({"GNOMON_REACH_KERNEL": "python"}, "reach_kernel"),
     "diff_kernel": ({"GNOMON_DIFF_KERNEL": "python"}, "diff_kernel"),
+    "match_kernel": ({"GNOMON_MATCH_KERNEL": "python"}, "match_kernel"),
 }
 
 
@@ -124,7 +126,7 @@ def stores(tmp_path_factory) -> dict[str, tuple[Path, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         for k in ALL_VARS:
             mp.delenv(k, raising=False)
-        base = tmp_path_factory.mktemp("w29")
+        base = tmp_path_factory.mktemp("ablation")
         data = H.build_dataset(SCALE)
         ref = base / "ref-tiered"
         H.load_store(ref, "native", data.log)
@@ -172,7 +174,7 @@ def _queries(H, data) -> list[tuple[str, Any]]:
         else:
             out.append((q.id, lambda ad, q=q: call_operator(
                 ad, q.op, dict(q.args), skip_cost_check=True)))
-    w10 = H._w10_window(data.t0, data.t1)
+    w10 = H._fixed_window(data.t0, data.t1)
     whole = {"t_a": data.t0, "t_b": data.t1}
     for belief in ("current", "superseded", "all"):
         for label, as_of in (("now", OPEN_END), ("epoch1", data.tt_epoch1)):

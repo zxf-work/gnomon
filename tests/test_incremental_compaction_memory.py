@@ -130,7 +130,7 @@ MAX_SHARE = 0.75
 # A loose ceiling on how much a build's own peak may grow across the 4x size
 # step. This is a sanity bound, **not** a discriminating one: see the
 # fixture-reality discussion below for why an RSS-growth ratio cannot
-# separate the arms reliably. The treatment measured 3.53x.
+# separate the configurations reliably. The treatment measured 3.53x.
 MAX_GROWTH = 5.0
 
 # --- the fixture-reality check ------------------------------------ #
@@ -175,7 +175,7 @@ MIN_CONTROL_RSS_GROWTH = 2.0
 N_SMALL = 20_000
 N_BIG = 80_000
 ROWS_PER_BATCH = 200
-#: The control arm's `--compact-every`, in rows.
+#: The control configuration's `--compact-every`, in rows.
 CADENCE_OPS = 2_000
 
 #: The probe, written to a temp file and run as a subprocess.
@@ -184,7 +184,7 @@ CADENCE_OPS = 2_000
 #: source has to escape a brace — a dict literal in a `.format`-ed template is
 #: a silent syntax error waiting to happen.
 _PROBE = r"""
-# Build one arm and report the peak RSS it reached. Run as a subprocess by
+# Build one configuration and report the peak RSS it reached. Run as a subprocess by
 # tests/test_incremental_compaction_memory.py, never imported.
 import json, resource, sys, tempfile
 from pathlib import Path
@@ -341,7 +341,7 @@ def test_the_control_arm_is_really_the_defect_here(measured):
     Measured with the engine's own `rows_rewritten` counter rather than with
     peak RSS. The claim — the whole-store compactor rewrites `O(store)` rows
     per call, so its total work grows with the build — was never in doubt;
-    the instrument was. A peak-RSS ratio for the same arm, same code, came
+    the instrument was. A peak-RSS ratio for the same configuration, same code, came
     out 8.46x, 4.75x, 4.75x and 4.26x across three hosts and four runs, twice
     of those on the same machine. The counter does not move.
     """
@@ -362,7 +362,7 @@ def test_the_control_arm_is_really_the_defect_here(measured):
     # is not materialising the store at all
     growth = c_big["delta_kb"] / measured[("control", N_SMALL)]["delta_kb"]
     assert growth > MIN_CONTROL_RSS_GROWTH, (
-        f"the control arm's peak RSS grew only {growth:.2f}x from {N_SMALL} "
+        f"the control configuration's peak RSS grew only {growth:.2f}x from {N_SMALL} "
         f"to {N_BIG} rows "
         f"({measured[('control', N_SMALL)]['delta_kb'] / 1024:.0f} MB -> "
         f"{c_big['delta_kb'] / 1024:.0f} MB), under the "

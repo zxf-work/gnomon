@@ -41,6 +41,22 @@ use crate::{defaults, OPEN_END};
 /// full-rebuild path. Half is the design's own figure.
 const CLOSE_RUN_DEAD_FRACTION: f64 = 0.5;
 
+/// Fan-in of the close-run merge: a trailing stretch of this many runs whose
+/// size tiers (`merge::size_tier`, base 8) are all at most `t` is merged into
+/// one run, for the smallest `t` that has one.
+///
+/// Every commit that closes a committed row appends a one-record run, and
+/// before this merge only the dead-fraction rule above ever shortened the
+/// list. Closes against long-lived segments stay live until their segment is
+/// folded at `COMPACTION_CLOSE_FRACTION` of its rows, so the list grew to one
+/// entry per closing commit — tens of thousands — and every compaction
+/// re-sealed, re-checkpointed and re-adopted all of it.
+/// With the merge, every maximal trailing
+/// stretch of runs at tier `<= t` is shorter than this, so the list holds
+/// fewer than `CLOSE_RUN_FAN_IN` runs per tier, and a record is rewritten
+/// about once per tier it climbs.
+const CLOSE_RUN_FAN_IN: usize = 8;
+
 /// What one compaction call did.
 ///
 /// The last four fields exist so that compaction cost is measured rather than
@@ -280,8 +296,13 @@ impl NativeStore {
         }
         next.next_segment_id = next_id;
 
-        // Step 3 — retire close-run records that now name only dead segments.
-        self.retire_close_runs(&mut next, &closes)?;
+        // Step 3 — retire close-run records that now name only dead segments,
+        // or, when that rule does not fire, merge the list's tail.
+        let carried = if self.retire_close_runs(&mut next, &closes)? {
+            None
+        } else {
+            self.merge_close_run_tail(&mut next, closes)?
+        };
 
         splice_t.stop(G::IncSpliceNs);
         // Stats are unchanged: no row was created or destroyed (I1, I5).
@@ -291,7 +312,7 @@ impl NativeStore {
         let segments_after =
             next.edge_lanes.event.len() + next.edge_lanes.interval.len() + next.node_store.len();
         crate::store::crash_point("compact_before_install");
-        self.install(next)?;
+        self.install_carrying(next, carried)?;
         ingest_phase::add(G::IncPublishNs, self.install_ns.0);
         ingest_phase::add(G::IncAdoptNs, self.install_ns.1);
         ingest_phase::add(G::IncVidfilterNs, self.install_ns.2);
@@ -351,6 +372,62 @@ impl NativeStore {
             sha: String::new(),
         }];
         Ok(true)
+    }
+
+    /// Merge the trailing close runs [`plan_close_run_merge`] picks into one,
+    /// dropping the records that name segments `next` no longer lists.
+    ///
+    /// Returns the committed close index of `next`, carried over from
+    /// `closes` (the index of the generation being compacted, whose run list
+    /// `next` still has) rather than rebuilt: the merged run holds exactly
+    /// the replaced runs' records minus the dropped ones, so the new index is
+    /// the old one with those records removed — O(dropped), where a rebuild
+    /// would re-read every run. `None` when nothing was merged, which leaves
+    /// the close cache's ordinary append-only reuse to carry the index.
+    ///
+    /// The merged run is written and fsynced before the manifest that names
+    /// it; the replaced runs stay on disk for older generations until gc. A
+    /// crash in between leaves an unreferenced file, which gc collects like
+    /// any other orphan run.
+    fn merge_close_run_tail(
+        &self,
+        next: &mut crate::manifest::Manifest,
+        closes: std::sync::Arc<CloseIndex>,
+    ) -> Result<Option<std::sync::Arc<CloseIndex>>> {
+        let entries: Vec<u64> = next.close_runs.iter().map(|r| u64::from(r.entries)).collect();
+        let Some(from) = plan_close_run_merge(&entries, CLOSE_RUN_FAN_IN) else {
+            return Ok(None);
+        };
+        let live = merge::live_segment_ids(next);
+        let mut kept: Vec<crate::visibility::CloseRecord> = Vec::new();
+        let mut dropped: Vec<(u64, u32)> = Vec::new();
+        for run in &next.close_runs[from..] {
+            for rec in crate::visibility::read_close_run(&self.root().join(&run.file))? {
+                if live.contains(&rec.segment) {
+                    kept.push(rec);
+                } else {
+                    dropped.push((rec.segment, rec.row));
+                }
+            }
+        }
+        next.close_runs.truncate(from);
+        if !kept.is_empty() {
+            let file = format!("close/{:012}.tgc", next.generation);
+            let n = crate::visibility::write_close_run(&self.root().join(&file), &kept)?;
+            next.close_runs.push(crate::manifest::CloseRunRef {
+                file,
+                entries: n,
+                sha: String::new(),
+            });
+        }
+        crate::store::crash_point("compact_after_close_merge");
+        // The cache holds a second reference to this very index; dropping it
+        // first lets `make_mut` edit in place instead of copying every close.
+        self.forget_close_cache();
+        let mut idx = closes;
+        let target = std::sync::Arc::make_mut(&mut idx);
+        target.remove_rows(dropped);
+        Ok(Some(idx))
     }
 
     /// Rewrite the store's content into fresh segments with every close
@@ -626,6 +703,39 @@ impl NativeStore {
             .dense_id(uid)
             .ok_or_else(|| EngineError::invariant(format!("uid {uid:?} left the dictionary")))
     }
+}
+
+/// Where the close-run merge starts, or `None` when there is nothing to merge.
+///
+/// Simulated on entry counts, cascading: find the smallest tier `t` for which
+/// the maximal trailing stretch of runs at tier `<= t` is at least `fan`
+/// long, collapse that stretch into one run of the summed size, and repeat
+/// until no tier has such a stretch. A cascade always swallows the previous
+/// step's product (it is the last run), so the whole plan is one suffix and
+/// one physical merge. Counts are upper bounds — the merge also drops dead
+/// records — so the real product is never larger than planned.
+pub(crate) fn plan_close_run_merge(entries: &[u64], fan: usize) -> Option<usize> {
+    let fan = fan.max(2);
+    let mut v: Vec<(usize, u64)> = entries.iter().copied().enumerate().collect();
+    let mut start: Option<usize> = None;
+    loop {
+        if v.len() < fan {
+            break;
+        }
+        let tiers: Vec<u32> = v.iter().map(|&(_, e)| merge::size_tier(e, fan as u64)).collect();
+        let max_tier = tiers.iter().copied().max().unwrap_or(0);
+        let stretch = (0..=max_tier)
+            .map(|t| tiers.iter().rev().take_while(|&&x| x <= t).count())
+            .find(|&len| len >= fan);
+        let Some(len) = stretch else { break };
+        let at = v.len() - len;
+        let first = v[at].0;
+        let sum: u64 = v[at..].iter().map(|&(_, e)| e).sum();
+        v.truncate(at);
+        v.push((first, sum));
+        start = Some(start.map_or(first, |s| s.min(first)));
+    }
+    start
 }
 
 #[cfg(test)]
@@ -1685,5 +1795,116 @@ mod tests {
             s.compact_incremental(None).is_err(),
             "must not compact with a batch open"
         );
+    }
+
+    #[test]
+    fn close_run_merge_plan_takes_the_smallest_tier_with_a_full_stretch() {
+        let f = CLOSE_RUN_FAN_IN;
+        assert_eq!(plan_close_run_merge(&[1; 7], f), None, "seven tier-0 runs wait");
+        assert_eq!(plan_close_run_merge(&[1; 8], f), Some(0));
+        assert_eq!(plan_close_run_merge(&[5000, 1, 1, 1, 1, 1, 1, 1, 1], f), Some(1),
+            "a big run ahead of a full tier-0 stretch is left alone");
+        // seven tier-1 runs and a full tier-0 stretch: the tier-0 merge yields an
+        // eighth tier-1 run, and the cascade merges all of them
+        let mut v = vec![8u64; 7];
+        v.extend([1u64; 8]);
+        assert_eq!(plan_close_run_merge(&v, f), Some(0));
+        // a tier-0 run stranded ahead of a tier-1 run is absorbed by the
+        // tier <= 1 stretch once that one is full
+        let mut v = vec![64u64, 1, 8, 8, 8, 8, 8, 8, 8];
+        assert_eq!(plan_close_run_merge(&v, f), Some(1));
+        // seven runs in all is under the fan-in at every tier
+        v.truncate(7);
+        assert_eq!(plan_close_run_merge(&v, f), None);
+        // eight runs in all at tier <= 2 are one stretch: the bound wins
+        v.push(8);
+        assert_eq!(plan_close_run_merge(&v, f), Some(0));
+        assert_eq!(plan_close_run_merge(&[], f), None);
+    }
+
+    #[test]
+    fn close_run_merge_bounds_the_list_under_one_record_appends() {
+        // simulate the merge policy alone (no deaths): appends of 1, a merge
+        // check after every append, as compaction would
+        let f = CLOSE_RUN_FAN_IN;
+        let mut runs: Vec<u64> = Vec::new();
+        let mut longest = 0usize;
+        for _ in 0..200_000 {
+            runs.push(1);
+            if let Some(from) = plan_close_run_merge(&runs, f) {
+                let sum: u64 = runs[from..].iter().sum();
+                runs.truncate(from);
+                runs.push(sum);
+            }
+            longest = longest.max(runs.len());
+        }
+        assert_eq!(runs.iter().sum::<u64>(), 200_000, "no record lost");
+        // every maximal trailing stretch at tier <= t is shorter than f, so
+        // the list is under f runs per tier
+        let tiers = merge::size_tier(200_000, f as u64) as usize + 1;
+        assert!(longest < f * tiers, "list reached {longest} runs (bound {})", f * tiers);
+    }
+
+    /// One long-lived base segment, then single-op batches that each add an
+    /// edge and close a base edge — the shape whose run list used to grow
+    /// without bound — with the incremental trigger consulted after each.
+    #[test]
+    fn close_run_merge_carries_the_exact_close_index_and_bounds_the_list() {
+        let root = tmp_root("close-merge");
+        let mut s = NativeStore::open(&root).unwrap();
+        s.begin(100).unwrap();
+        let a = s.ensure_entity("n1", "Node").unwrap();
+        let b = s.ensure_entity("n2", "Node").unwrap();
+        let mut base = Vec::new();
+        for i in 0..2_000u32 {
+            let r = edge(a, b, "n1", "n2", i as i64, 100, i);
+            base.push(r.clone());
+            s.stage_edge(r).unwrap();
+        }
+        s.commit(EventLogRef::default()).unwrap();
+
+        let rebuilt = |s: &NativeStore| {
+            let mut recs = Vec::new();
+            for run in &s.manifest().close_runs {
+                recs.extend(crate::visibility::read_close_run(&s.root().join(&run.file)).unwrap());
+            }
+            CloseIndex::from_records(recs)
+        };
+        let mut compactions = 0usize;
+        let mut merges = 0usize;
+        let mut longest = 0usize;
+        for k in 0..600u32 {
+            let tt = 200 + k as i64;
+            s.begin(tt).unwrap();
+            let r = edge(a, b, "n1", "n2", 10_000 + k as i64, tt, 10_000 + k);
+            s.stage_edge(r).unwrap();
+            // a Zipf-ish mix: most closes hit the base, some hit recent rows
+            let target = &base[((k * 7) % 2_000) as usize];
+            s.close_version_at(RowKind::Edge, target.vid, Some(target.vt_s), tt).unwrap();
+            s.commit(EventLogRef::default()).unwrap();
+            while s.needs_compaction() {
+                let runs_before = s.manifest().close_runs.len();
+                s.compact_incremental(None).unwrap();
+                compactions += 1;
+                if s.manifest().close_runs.len() < runs_before {
+                    merges += 1;
+                }
+                let carried = s.committed_close_index().unwrap();
+                assert_eq!(*carried, rebuilt(&s), "carried close index differs from a rebuild \
+                    after compaction {compactions} (generation {})", s.generation());
+            }
+            longest = longest.max(s.manifest().close_runs.len());
+        }
+        assert!(compactions > 20 && merges > 5, "the scenario must exercise the merge: \
+            {compactions} compactions, {merges} merges");
+        assert!(longest < 64, "close-run list reached {longest} runs");
+
+        // the logical store, as this handle sees it, is what a fresh open of
+        // the files on disk sees
+        let here = sorted(s.all_edge_versions().unwrap());
+        drop(s);
+        let fresh = NativeStore::open_read_only(&root).unwrap();
+        assert_eq!(sorted(fresh.all_edge_versions().unwrap()), here);
+        assert!(fresh.verify().unwrap().is_healthy());
     }
 }

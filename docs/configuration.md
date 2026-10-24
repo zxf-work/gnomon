@@ -17,6 +17,8 @@ fail.
 | `GNOMON_DIGEST_BYTES` | 2 GiB | the sort buffer of the streaming content digest (`--budget-bytes` overrides per call) |
 | `GNOMON_FOLD_BYTES` | 1/256 of the segment-cache cap | concurrent per-worker partial group tables of a grouped aggregation; it caps the fold width |
 | `GNOMON_CHUNK_RESIDENT_BYTES` | 2 GiB | rows a single seal holds in memory before it flushes |
+| `GNOMON_MATCH_PROPS_BYTES` | 1 GiB | the typed property columns the pattern executor keeps per handle (each distinct stored payload parsed once per key) |
+| `GNOMON_TT_E_COLUMN_BYTES` | 256 MiB | the cached per-row effective-`tt_e` columns traversals decide belief from (8 bytes per row of a segment with closes) |
 
 ## Parallelism
 
@@ -31,6 +33,22 @@ variables are read per call, so a harness can sweep them in one process.
 | `GNOMON_AGG_PARALLEL_MIN_ROWS` | 131,072 | rows below which a grouped aggregation’s own two stages (the row loop of its select and its fold) stay serial; other scans keep `GNOMON_PARALLEL_MIN_ROWS` |
 | `GNOMON_ROWS_PER_UNIT` | derived | rows per parallel work unit (overrides the derived size) |
 | `GNOMON_UNITS_PER_THREAD`, `GNOMON_MIN_ROWS_PER_UNIT` | 4, 65,536 | the inputs to the derived unit size |
+| `GNOMON_MATCH_THREADS` | 0 (the available cores) | threads the pattern and path kernels split a large frontier, join or scan over, 1 to 64; read at open. Every width gives the same rows in the same order |
+| `GNOMON_MATCH_PAR_ROWS` | 131,072 | rows from which those kernels split a row loop over the threads; read at open |
+
+## Commit path
+
+| variable | default | meaning |
+|---|---|---|
+| `GNOMON_SMALL_COMMIT` | off | `1` turns on the small-commit path ([architecture](architecture.md#the-small-commit-path)): a transaction is acknowledged once its event-log record is fsynced, and generations are published in groups. Read at open |
+| `GNOMON_SMALL_COMMIT_N` | 64 | transactions per published generation on that path |
+| `GNOMON_SMALL_COMMIT_MS` | 50 | milliseconds a transaction may wait unpublished on that path |
+
+The small-commit path changes no answer, no event-log byte and no digest;
+it changes only how soon a reader **in another process** sees a commit (by
+at most `GNOMON_SMALL_COMMIT_N` transactions or `GNOMON_SMALL_COMMIT_MS`
+milliseconds). The writing handle always reads its own commits.
+`store.adapter.small_commit()` reports what the open handle runs with.
 
 ## Layout and indexes
 
@@ -73,6 +91,9 @@ together with the environment (see [benchmarks](benchmarks.md#design-switches)).
 | snapshot-diff kernel in the engine | `GNOMON_DIFF_KERNEL=python` | at open | `diff_snapshots` materialises both point states and builds its identity maps in Python |
 | raw-record bulk ingest | `GNOMON_INGEST_RAW=0` | at open | every `ingest_events` op is staged by the Python row build |
 | `vt_e` staircase: the prefix cut below a window’s start, written for interval segments and derived at open for event segments that store `vt_e` | `GNOMON_NO_STAIRCASE=1` | at open | no segment’s staircase is consulted and none is derived; every row of the window’s `vt_s` range gets the per-row `vt_e` test. Only the exact value `1` turns it off |
+| pattern-match executor in the engine | `GNOMON_MATCH_KERNEL=python` | at open | `match` runs its compiled plan in the plan IR's NumPy reference evaluator (`gnomon/plan/eval`) |
+| temporal-paths kernel in the engine | `GNOMON_PATHS_KERNEL=python` | at open | `temporal_paths` enumerates every path depth first in Python, sorts them and keeps `k` |
+| effective-`tt_e` column for traversal belief | `GNOMON_TT_E_COLUMN=0` | at open | traversals decide belief on a segment with closes by the per-row test or the segment's believed ranges, built per call, instead of one comparison per adjacency row against the cached column |
 | time-column encoding: `tt_s` as runs or as a dictionary with per-block bounds, and the adaptive column codecs | `GNOMON_TIME_CODEC=runs` or `=raw` | **write time**, per segment written | `runs`: `tt_s` as a run list at every density. `raw`: `tt_s`, `vt_s` and `vt_e` stored raw; such segments are segment format 2. A store may mix segments written either way, and every build reads all of them |
 
 For the boolean switches, `0` and `false` (any case) turn the design off;
@@ -85,10 +106,22 @@ each design: [architecture](architecture.md).
 |---|---|---|
 | `GNOMON_TIME_COEFF_SCALE` | 1.0 | scales the cost guardrail’s per-operator time coefficients for a faster or slower host |
 
+The coefficients price the portable routes. Where an engine kernel answers a
+call, the operator's cost function prices that kernel's own work instead
+(`gnomon.temporal.guardrails.cost_routes`), so admission refuses what would
+be slow on the route the call actually takes.
+
 ## Diagnostics and testing
 
 | variable | meaning |
 |---|---|
+| `GNOMON_AGG_EXT=python` | `aggregate_events` calls that read properties or restrict to a cohort take the portable path instead of the engine's extended fold (the paired control for that fold) |
+| `GNOMON_PATHS_ROUNDS=0` | bounded path searches read the whole window instead of loading their frontier round by round (paired control) |
+| `GNOMON_REACH_FRONTIER=0`, `GNOMON_REACH_FRONTIER_BUDGET=<nodes>,<arcs>` | reachability builds the window's adjacency array for every search instead of first trying a filtered frontier search; the budget after which the frontier search gives up (read once per process) |
+| `GNOMON_MATCH_FOLD_ROWS` | rows from which a pattern aggregate folds on the worker pool (default 131,072; the tests set it low to hold the parallel fold to the serial one) |
+| `GNOMON_MATCH_TRACE=1` | one line on stderr per node of each plan the engine executes, with its output rows and time (read once per process) |
+| `GNOMON_PLAN_TELEMETRY_TIMING=0` | the reference evaluator skips its per-node timing (row counts are always recorded) |
+| `GNOMON_SYNTH_ENDPOINTS=powerlaw` | the benchmark harness's synthetic dataset draws edge endpoints from a power law (skewed hubs) instead of uniformly |
 | `GNOMON_FOLD_OVERFLOW` | selects the aggregation overflow policy (testing) |
 | `GNOMON_LINFOR_LAZY`, `GNOMON_LINFOR_RANGE` | codec-2 decoding experiments (testing) |
 | `GNOMON_CRASH_POINT=<name>` | kill the process at a named point in the write or recovery path (crash tests) |

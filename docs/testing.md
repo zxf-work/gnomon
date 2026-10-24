@@ -43,9 +43,22 @@ The suite runs against the native engine. It includes:
   one machine (ratios, not absolute times), so they hold on any host;
 * the design switches ([configuration](configuration.md#design-switches)):
   every query of the benchmark registry, plus extra probes, hashes the same
-  with each switch set, and the engine kernels (reachability, snapshot diff,
-  paged entity resolution, bulk ingest from the log record) answer exactly
-  as the general path they stand in for;
+  with each switch set, and the engine kernels (reachability, temporal
+  paths, snapshot diff, paged entity resolution, the pattern executor, bulk
+  ingest and per-operation writes from the log record) answer exactly as the
+  general path they stand in for;
+* the engine-level operators: `match`'s compiled plan against an
+  independent oracle that reads the operator's argument directly (a hand-
+  checked corpus, then random stores and random arguments under every scope
+  and belief mode, the shared-instant rule included), and the engine's plan
+  executor against the reference evaluator on the same plans; `paths`,
+  `state_series`, `diff_belief` and `version_history(ref)` against the
+  oracle on both backends; the exact `sum`; the hub kernels against the
+  enumerations they replace; the plans built on stores from the social-
+  network, financial and TPC-BiH-shaped generators (`gnomon/data`);
+* the commit path: the small-commit path's visibility contract, and crash
+  points along it showing that durability, the event log and the digests
+  are those of the default path;
 * the benchmark scripts' own logic (`scripts/`), at tiny sizes.
 
 To run the same suite against the DuckDB reference implementation of the

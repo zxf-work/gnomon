@@ -21,7 +21,7 @@
 //! in 2.x on space. Those four are the comparators this codec should be
 //! benchmarked against, and `la_vector` and `LeCo` are public code.
 //!
-//! What is deliberately *not* built here, on the design lane's measurement:
+//! What is deliberately *not* built here, on the design's measurement:
 //! a whole-column piecewise-linear approximation (worse than a plain
 //! per-block fit on three of four real segments, and 2.6–5.1× on point
 //! lookup), a per-segment residual width (worse on eleven of fourteen
@@ -74,7 +74,7 @@ use crate::error::{EngineError, Result};
 
 /// Rows per model block.
 ///
-/// 1024, the design lane's measured arm: at 1024 the per-block linear fit
+/// 1024, the design's measured configuration: at 1024 the per-block linear fit
 /// gives 11.7–16.0 bits/row for `vt_s` on scale-divided real data, against
 /// 17.0–21.1 for scaled frame-of-reference and 36.9–43.3 for the codec in
 /// the store today. 4096 is slightly worse on every real column measured

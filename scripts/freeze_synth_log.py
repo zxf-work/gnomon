@@ -70,7 +70,7 @@ def main() -> int:
     gen_s = time.perf_counter() - t0
     shutil.copyfile(data.log, args.out)
 
-    # Round-trip through the reader both arms will use, and record what it
+    # Round-trip through the reader both configurations will use, and record what it
     # derived. If these four ever disagree with the values `build_dataset`
     # held, the freeze is not equivalent to the generated run and the
     # discrepancy belongs in the receipt, not in a silent pass.

@@ -30,6 +30,7 @@ exactly. What stays independent is the loop each one wraps around it.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 #: Comparisons a property predicate may use — `compute`'s vocabulary minus
@@ -81,6 +82,16 @@ def _type_class(v: Any) -> str | None:
     if isinstance(v, str):
         return "string"
     return None
+
+
+def sum_exact(vals: list[Any]) -> int | float:
+    """The exact sum: an integer total when every value is an integer, else
+    `math.fsum`'s correctly rounded total, which no summation order moves.
+    `match`'s `sum_exact` aggregate (the plan IR's `Agg`), stated once more for the
+    operators that sum a property: `aggregate_events` and its oracle."""
+    if all(isinstance(v, int) and not isinstance(v, bool) for v in vals):
+        return sum(vals)
+    return math.fsum(vals)
 
 
 def numeric_value(props: dict[str, Any], key: str) -> Any:

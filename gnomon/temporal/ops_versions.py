@@ -39,18 +39,66 @@ from __future__ import annotations
 from typing import Any
 
 from gnomon.core.errors import InvalidArgError
-from gnomon.core.model import OPEN_END, clamp_tt
+from gnomon.core.model import OPEN_END, clamp_tt, edge_eid
 from gnomon.storage.base import StorageAdapter
 from gnomon.temporal.algebra import (
     AS_OF_TT,
     CURSOR,
     LIMIT,
+    UID,
     WINDOW,
     check_window,
     operator,
     paginate,
     required,
 )
+from gnomon.temporal.guardrails import (
+    ROUTES_KEY,
+    coeff_scale,
+    point_read_estimate,
+    rel_rows,
+)
+
+#: Engine-level (proposal D2 of the operator-coverage study): the belief log
+#: of ONE identity. `{uid}` for a node; `{src, dst, rel_type, disc?}` or
+#: `{eid}` for an edge. Read through the identity postings, so the cost is
+#: the identity's own history, not the store's. Neither property has a
+#: default and neither is in the base schema (algebra.OperatorSpec).
+REF = {
+    "type": "object",
+    "properties": {
+        "uid": UID,
+        "eid": {"type": "string", "minLength": 1},
+        "src": UID,
+        "dst": UID,
+        "rel_type": {"type": "string", "minLength": 1},
+        "disc": {"type": "string"},
+    },
+    "additionalProperties": False,
+    "description": "one identity: {uid} (kind node), or {src, dst, rel_type, "
+                   "disc?} or {eid} (kind edge)",
+}
+INCLUDE_PROPS = {"type": "boolean",
+                 "description": "with `ref`: each row also carries its props"}
+
+
+def _engine_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    schema["properties"]["ref"] = REF
+    schema["properties"]["include_props"] = INCLUDE_PROPS
+    return schema
+
+
+def _ref_key(kind: str, ref: dict[str, Any]) -> str:
+    """The identity a `ref` names: a uid, or an edge's eid."""
+    if kind == "node":
+        if set(ref) != {"uid"}:
+            raise InvalidArgError("a node ref is {uid}")
+        return ref["uid"]
+    if set(ref) == {"eid"}:
+        return ref["eid"]
+    if "uid" in ref or "eid" in ref or not {"src", "dst", "rel_type"} <= set(ref):
+        raise InvalidArgError("an edge ref is {src, dst, rel_type, disc?} or {eid}")
+    return edge_eid(ref["src"], ref["dst"], ref["rel_type"], ref.get("disc", ""))
 
 def _version_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
     """This operator is in a different cost class from the rest of the
@@ -69,8 +117,43 @@ def _version_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]
     for — which puts the refusal at around 5M versions, on the right side of
     a call that would otherwise run for two and a half minutes.
     """
+    if args.get("ref") is not None:
+        # one identity's log, through its postings: a point read
+        return point_read_estimate(args, stats)
+    if (stats.get(ROUTES_KEY) or {}).get("version_page"):
+        return _page_cost(args, stats)
     n = int(stats.get("n_edge_versions", 0)) + int(stats.get("n_node_versions", 0))
     return {"rows_scanned_est": n, "expansions_est": n}
+
+
+#: The engine's bounded page (`NativeAdapter.versions_page`): a sweep of the
+#: kind's stored version keys under the filter, the matches sorted by
+#: `(tt_s, vid)`, and only the page built in Python. Measured on the five
+#: calibration stores: ~165 ms per million matching versions,
+#: ~4 ms per million swept (every version of the kind) and ~9 us per page row.
+VERSION_PAGE_MS_PER_M = 250.0
+VERSION_SWEEP_MS_PER_M = 8.0
+VERSION_PAGE_ROW_MS = 0.015
+VERSION_PAGE_CALL_MS = 2.0
+
+
+def _page_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """`version_history` without `ref` on a backend with its own bounded
+    `versions_page`. The base rate (15,400 ms/M, one Python object per
+    version) is the base's default route; the engine builds the page alone,
+    so it was 800 to 49,000 times its time. The versions the sweep can match
+    are the kind's (an edge call's `rel_types'), every one of them in the
+    worst case: the window and the belief mode filter during the sweep, and
+    no share is taken for them; the sweep itself reads every version of the
+    kind."""
+    if args.get("kind") == "node":
+        n = swept = int(stats.get("n_node_versions", 0))
+    else:
+        n, swept = rel_rows(stats, args.get("rel_types")), int(stats.get("n_edge_versions", 0))
+    page = min(int(args.get("limit") or 0), n)
+    ms = (VERSION_PAGE_CALL_MS + n * VERSION_PAGE_MS_PER_M / 1e6
+          + swept * VERSION_SWEEP_MS_PER_M / 1e6 + page * VERSION_PAGE_ROW_MS) * coeff_scale()
+    return {"rows_scanned_est": n, "expansions_est": 0, "time_est_ms": int(ms)}
 
 
 #: Columns dropped from the version row. `props` is a blob and this
@@ -84,6 +167,12 @@ def _version_validators(args: dict[str, Any]) -> None:
         raise InvalidArgError(
             "'rel_types' is only meaningful with kind 'edge'; node versions "
             "have a label, not a relationship type")
+    if args.get("ref") is not None:
+        _ref_key(args["kind"], args["ref"])
+    elif args.get("include_props"):
+        raise InvalidArgError(
+            "'include_props' needs a 'ref': props on a whole-log scan would "
+            "put a JSON blob on every row of the store")
 
 
 def _cursor_offset(cursor: str | None) -> int:
@@ -138,12 +227,15 @@ def _cursor_offset(cursor: str | None) -> int:
     cost_fn=_version_cost,
     validators=[_version_validators],
     output_fields=("rows", "rows_total", "truncated", "cursor"),
+    engine_schema=_engine_schema,
 )
 def version_history(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     as_of = clamp_tt(args["as_of_tt"])
     t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
     belief, kind = args["belief"], args["kind"]
     rel_types = args["rel_types"]
+    if args.get("ref") is not None:
+        return _identity_log(adapter, args, as_of)
 
     # The page, and the exact size of the population it came out of. The
     # filtering, the ordering and the count all happen below the adapter:
@@ -179,3 +271,35 @@ def version_history(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, 
         for i in range(n)
     ]
     return page
+
+
+def _identity_log(adapter: StorageAdapter, args: dict[str, Any],
+                  as_of: int) -> dict[str, Any]:
+    """`version_history` restricted to one identity: the same rows, the same
+    as-of censoring, the same `(tt_s, vid)` order, over the identity's own
+    versions (`StorageAdapter.identity_versions`) instead of the whole log.
+    Versions ended by a bare retraction are in it like any other closed
+    version: the log is read, not reconstructed from believed states."""
+    kind = args["kind"]
+    t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
+    belief, rel_types = args["belief"], args["rel_types"]
+    names = adapter.VERSION_COLS[kind]
+    rows = []
+    for v in adapter.identity_versions(kind, _ref_key(kind, args["ref"])):
+        if v.tt_s > as_of:
+            continue                    # not written yet, in any mode
+        superseded = v.tt_e <= as_of
+        if (belief == "current" and superseded) or \
+                (belief == "superseded" and not superseded):
+            continue
+        if not (v.vt_s < t_b and t_a < v.vt_e):
+            continue
+        if rel_types is not None and v.rel_type not in rel_types:
+            continue
+        r = {c: getattr(v, c) for c in names}
+        r["tt_e"] = int(v.tt_e) if superseded else OPEN_END
+        if args.get("include_props"):
+            r["props"] = v.props
+        rows.append(r)
+    rows.sort(key=lambda r: (r["tt_s"], r["vid"]))
+    return paginate(rows, args["limit"], args["cursor"])

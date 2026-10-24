@@ -54,7 +54,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 fn tmp_root(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w13-units-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-rowunits-units-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     p
 }
@@ -295,7 +295,7 @@ fn no_row_is_dropped_or_doubled_at_a_unit_boundary() {
 }
 
 #[test]
-fn select_concatenates_the_units_back_into_the_pre_w13_contract() {
+fn select_concatenates_the_units_back_into_the_single_range_contract() {
     let _serial = serial();
     let root = tmp_root("coalesce");
     let store = build(&root);
@@ -423,7 +423,7 @@ fn repeated_runs_are_identical() {
 /// serially.
 ///
 /// No environment knob: the derived unit size alone must do this, or the
-/// A/B's settled arms gain nothing.
+/// A/B's settled configurations gain nothing.
 #[test]
 fn a_single_segment_scan_uses_more_than_one_unit() {
     let _serial = serial();

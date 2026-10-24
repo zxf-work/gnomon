@@ -257,6 +257,21 @@ class DuckDBAdapter(StorageAdapter):
             out.update(r[0] for r in rows)
         return out
 
+    def identity_versions(self, kind: str, key: str) -> list[NodeVersion] | list[EdgeVersion]:
+        # the key column is indexed; same rows and order as the base default
+        if kind == "node":
+            rows = self.conn.execute(
+                f"SELECT {self._NODE_COLS} FROM node_versions WHERE uid = ?",
+                (key,)).fetchall()
+            out: list = [_node_from_row(r) for r in rows]
+        else:
+            rows = self.conn.execute(
+                f"SELECT {self._EDGE_COLS} FROM edge_versions WHERE eid = ?",
+                (key,)).fetchall()
+            out = [_edge_from_row(r) for r in rows]
+        out.sort(key=lambda v: (v.tt_s, v.vid))
+        return out
+
     def all_node_versions(self) -> Iterable[NodeVersion]:
         rows = self.conn.execute(
             f"SELECT {self._NODE_COLS} FROM node_versions").fetchall()
@@ -356,6 +371,12 @@ class DuckDBAdapter(StorageAdapter):
         return {vid: json.loads(props) for vid, props in rows}
 
     # --- stats -------------------------------------------------------------- #
+
+    def match_label_counts(self) -> dict[str, int]:
+        """Node versions written per label (an estimate for the `match`
+        compiler's step order)."""
+        return {str(k): int(v) for k, v in self.conn.execute(
+            "SELECT label, count(*) FROM node_versions GROUP BY label").fetchall()}
 
     def stats(self) -> dict[str, Any]:
         n_nodes, n_edges = (

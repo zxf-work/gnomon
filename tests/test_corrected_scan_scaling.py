@@ -62,7 +62,7 @@ import pytest
 # on one host is a threshold that has never met a different one.
 #
 # N_ROWS=24,000 built in ROWS_PER_BATCH=500 interleaved generations and
-# compacted; corrected arm at CORRECTION_PCT=5 %, which folds 1,200 closes
+# compacted; corrected configuration at CORRECTION_PCT=5 %, which folds 1,200 closes
 # into the one live edge segment's sidecar. Three rounds of REPS interleaved
 # reps per engine per host:
 #
@@ -73,13 +73,13 @@ import pytest
 #   Linux, 20 threads post-fix   0.00417-0.00433   0.00515-0.00521    1.20x-1.23x
 #
 # and the mechanism, independent of the clock and identical on both hosts:
-# `rows_examined` on the corrected arm is 25,200 pre-fix — every stored row,
+# `rows_examined` on the corrected configuration is 25,200 pre-fix — every stored row,
 # because the whole segment fell out of the contiguous extend and into the
-# row loop — against 24,000 post-fix, the same count the clean arm examines
-# on both engines. The corrected arm was never paying for the 5 % extra rows
+# row loop — against 24,000 post-fix, the same count the clean configuration examines
+# on both engines. The corrected configuration was never paying for the 5 % extra rows
 # it stores; it was paying for the fast path it lost.
 #
-# The clean arm does not move: 0.00150-0.00156 post-fix against 0.00139-
+# The clean configuration does not move: 0.00150-0.00156 post-fix against 0.00139-
 # 0.00153 pre-fix on darwin, 0.00417-0.00433 against 0.00428-0.00451 on
 # Linux. That is the property that matters most, since it is every
 # uncorrected store in the system.
@@ -113,7 +113,7 @@ import pytest
 # the limit. The threshold move is a change of gate, not of claim.
 MAX_RATIO = 3.0
 
-# A second bound, catching the one failure a ratio cannot see: both arms
+# A second bound, catching the one failure a ratio cannot see: both configurations
 # getting slow together. Healthy reps span 0.00220-0.00521 us/row across the
 # two hosts and defect reps span 0.01348-0.02410, so the whole usable window
 # for an absolute bound is 2.6x wide. 0.010 sits 1.9x above the slowest
@@ -153,7 +153,7 @@ def _edge_ops(vts, mark: int):
 
 
 def _build(tmp: Path, n_rows: int, corr_pct: float):
-    """One arm of the A/B: the same interleaved store, corrected or not.
+    """One configuration of the A/B: the same interleaved store, corrected or not.
 
     Generation `g` writes `vt = g, g + n_gens, g + 2*n_gens, ...`, so
     `compact()`'s global `(vt_s, vid)` sort visits every generation in
@@ -165,7 +165,7 @@ def _build(tmp: Path, n_rows: int, corr_pct: float):
 
     The corrections re-assert an existing `(src, dst, rel_type, vt)` with new
     props, which is what closes the previous version. `compact()` afterwards
-    folds the resulting close runs into the segment's sidecar, so the arm
+    folds the resulting close runs into the segment's sidecar, so the configuration
     measures the folded representation — the one a long-lived store is in.
     """
     a = _native_adapter(tmp)
@@ -193,7 +193,7 @@ def _folded_closes(store: Path) -> tuple[int, bool]:
     read from the manifest this store currently points at.
 
     `verify()` reports `closes`, but that counts entries in close *run*
-    files, which is zero on both arms once `compact()` has folded them — so
+    files, which is zero on both configurations once `compact()` has folded them — so
     it cannot tell a corrected store from a clean one, which is exactly the
     distinction this file's fixture-is-real assertion needs. The manifest's
     per-segment `n_closed_folded` / `all_current` can (`manifest.rs`).
@@ -219,7 +219,7 @@ def _scan_stats(adapter) -> dict:
     )
 
 
-# --- 1. the fixture is real: the corrected arm really carries folded closes  #
+# --- 1. the fixture is real: the corrected configuration really carries folded closes  #
 
 
 def test_fixture_produces_a_folded_corrected_segment(tmp_path):
@@ -227,7 +227,7 @@ def test_fixture_produces_a_folded_corrected_segment(tmp_path):
     assert clean.verify()["healthy"]
     folded, all_current = _folded_closes(tmp_path / "clean-fx")
     assert (folded, all_current) == (0, True), (
-        f"the clean arm must stay on the all_current fast path: "
+        f"the clean configuration must stay on the all_current fast path: "
         f"n_closed_folded={folded}, all_current={all_current}"
     )
     clean.close()
@@ -280,15 +280,15 @@ def test_the_corrected_arm_answers_with_the_corrected_versions(tmp_path):
 
 
 def _per_row_scan_costs(clean, corr, reps: int) -> tuple[float, float]:
-    """Median wall-clock seconds per returned row for both arms.
+    """Median wall-clock seconds per returned row for both configurations.
 
     Both stores are warmed first — the first scan after opening or compacting
     may build caches (the segment-name map) a cold timing would wrongly
     charge to the scan — and then the reps are **interleaved**, one of each
     per round. The absolute cost here is tens of microseconds, small enough
-    that timing one arm to completion and then the other lets host drift
+    that timing one configuration to completion and then the other lets host drift
     across the two builds land in the ratio; alternating puts that drift in
-    both arms equally. That is an addition to the template's median-of-reps
+    both configurations equally. That is an addition to the template's median-of-reps
     mechanism, not a replacement for it.
     """
     for a in (clean, corr):
@@ -312,12 +312,12 @@ def test_a_corrected_store_scans_at_about_the_cost_of_a_clean_one(tmp_path):
     clean = _build(tmp_path / "clean", n_rows=N_ROWS, corr_pct=0.0)
     corr = _build(tmp_path / "corr", n_rows=N_ROWS, corr_pct=CORRECTION_PCT)
 
-    # fixture-is-real, before anything is timed: the two arms must actually
+    # fixture-is-real, before anything is timed: the two configurations must actually
     # differ in the property under test
     assert _folded_closes(tmp_path / "clean") == (0, True)
     folded, all_current = _folded_closes(tmp_path / "corr")
     assert folded > 0 and not all_current, (
-        f"the timed corrected arm carries no folded closes "
+        f"the timed corrected configuration carries no folded closes "
         f"(n_closed_folded={folded}) — the gate would be vacuous"
     )
     for a in (clean, corr):
@@ -334,9 +334,9 @@ def test_a_corrected_store_scans_at_about_the_cost_of_a_clean_one(tmp_path):
         f"scanning a {CORRECTION_PCT}%-corrected store cost {ratio:.2f}x per "
         f"returned row what scanning the same store uncorrected did (limit "
         f"{MAX_RATIO}x): {clean_per_row * 1e6:.4f}us/row -> "
-        f"{corr_per_row * 1e6:.4f}us/row. Both arms hold the same "
+        f"{corr_per_row * 1e6:.4f}us/row. Both configurations hold the same "
         f"{N_ROWS} current edges in one compacted segment and differ only in "
-        f"that {folded} of the corrected arm's rows carry a folded close, so "
+        f"that {folded} of the corrected configuration's rows carry a folded close, so "
         f"this is not a size difference — it is the contiguous-extend fast "
         f"path being forfeited because the segment has closes in it, which "
         f"is what moving the `as_of < tt_e` half of the belief predicate "
@@ -352,17 +352,17 @@ def test_a_corrected_store_scans_at_about_the_cost_of_a_clean_one(tmp_path):
     )
 
     # The mechanism, measured independently of the clock.
-    # Pre-fix, the corrected arm examined every stored row, including the
+    # Pre-fix, the corrected configuration examined every stored row, including the
     # superseded ones it was about to skip; post-fix those rows are not in a
-    # believed range at all, so the two arms examine the same count.
+    # believed range at all, so the two configurations examine the same count.
     assert corr_stats["rows_examined"] <= clean_stats["rows_examined"], (
-        f"the corrected arm examined {corr_stats['rows_examined']} rows "
-        f"against the clean arm's {clean_stats['rows_examined']}: the closed "
+        f"the corrected configuration examined {corr_stats['rows_examined']} rows "
+        f"against the clean configuration's {clean_stats['rows_examined']}: the closed "
         f"rows are still entering the row loop, i.e. they were not "
         f"subtracted from the verdict ranges"
     )
     assert len(corr_stats["vt_s"]) == len(clean_stats["vt_s"]) == N_ROWS, (
-        "both arms must answer with the same current belief, or the two "
+        "both configurations must answer with the same current belief, or the two "
         "per-row costs are not comparable"
     )
     clean.close()

@@ -35,7 +35,7 @@ use crate::OPEN_END;
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w26-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-winfirst-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -306,7 +306,7 @@ mod store_level {
     fn build(name: &str, n: u32, settle_after: bool) -> (std::path::PathBuf, NativeStore) {
         let root = {
             let mut p = std::env::temp_dir();
-            p.push(format!("gnomon-w26-{name}-{}", std::process::id()));
+            p.push(format!("gnomon-winfirst-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&p);
             p
         };
@@ -475,7 +475,7 @@ mod store_level {
         ]
     }
 
-    /// S2 answer identity: a windowed belief diff is the whole-extent diff
+    /// Answer identity: a windowed belief diff is the whole-extent diff
     /// filtered to the window, row for row and in the same order, with the
     /// totals counted over the filtered population.
     #[test]
@@ -509,7 +509,7 @@ mod store_level {
         }
     }
 
-    /// S3 answer identity: windowed `version_keys` is the whole-extent key
+    /// Answer identity: windowed `version_keys` is the whole-extent key
     /// list filtered to the window, in the same order, in all three belief
     /// modes, including the unclamped `as_of == OPEN_END` special case.
     #[test]

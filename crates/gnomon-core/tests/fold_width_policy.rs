@@ -53,7 +53,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 fn tmp_root(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w14-fold-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-foldwidth-fold-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     p
 }

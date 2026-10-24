@@ -11,7 +11,9 @@
 //! *never expose an undetected inconsistent generation* — roll back to the
 //! last valid generation and replay the log suffix.
 
+pub mod aggprops;
 pub mod aggregate;
+pub mod apply_raw;
 pub mod beliefdiff;
 pub mod codec;
 pub mod compact;
@@ -28,11 +30,14 @@ pub mod interval;
 pub mod linfor;
 pub mod manifest;
 pub mod manifest_chain;
+pub mod matcher;
 pub mod merge;
 pub mod motif;
 pub mod nameidx;
 pub mod node_belief;
+pub mod paths;
 pub mod phase;
+pub mod pointread;
 pub(crate) mod pool;
 pub mod reach;
 pub mod snapdiff;
@@ -47,6 +52,7 @@ pub mod store;
 pub mod tcsr;
 pub mod ttime;
 pub mod vidfilter;
+pub mod winsearch;
 pub mod visibility;
 pub mod vistouch;
 #[cfg(test)]
@@ -82,7 +88,7 @@ pub const FORMAT_VERSION: u32 = 1;
 
 /// On-disk format version for `manifests/<G>.json`.
 ///
-/// * **1** — the pre-2026-09-13 full-manifest-per-generation shape.
+/// * **1** — the original full-manifest-per-generation shape.
 /// * **2** — the tagged checkpoint/delta document of the memo above, with
 ///   `manifest_sha` still the sha of the whole serialized document.
 /// * **3** — the same document shape, with `manifest_sha` a **Merkle root**
@@ -315,7 +321,7 @@ pub mod defaults {
     /// The row threshold of the **grouped aggregate's** own two parallel
     /// stages: the row loop of its select and its fold.
     ///
-    /// [`PARALLEL_SCAN_MIN_ROWS`] was calibrated on 2026-08-01 for the scan
+    /// [`PARALLEL_SCAN_MIN_ROWS`] was calibrated for the scan
     /// stages, when a fan-out spawned threads per call. The fold is a
     /// different kind of work: tens of nanoseconds per row (hash-group
     /// lookup, distinct bitset) against a few per row for a select, and

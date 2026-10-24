@@ -19,9 +19,13 @@
 //! the identical IEEE sequence as the Python fallback's `divmod` form, so
 //! the two paths agree bit-for-bit (`ops_aggregate._mean`).
 
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
+use crate::aggprops::{self, PCmp, PLit, PNum, PVal};
 use crate::error::Result;
+use crate::matcher::ExactSum;
 use crate::row::Lane;
 use crate::scan::{ScanRequest, ScanSet, ScanTarget, Selection};
 use crate::segment::{Segment, SegmentSource};
@@ -57,6 +61,85 @@ pub enum Agg {
     Min(Source),
     Max(Source),
     Mean(Source),
+    /// The exact integer sum of the source (an [`AggValues::Num`] column of
+    /// `i128` totals: ten million epoch-microsecond values overflow `i64`).
+    Sum(Source),
+    /// Over the numeric values of property `keys[i]` of the call's
+    /// [`AggExt`], under the type-fit rule and the exact-arithmetic rule: `min`
+    /// and `max` return the value itself, `sum` is exact over integers and
+    /// correctly rounded (`math.fsum`) once a float takes part, and `mean`
+    /// is the blessed quotient. Each is an [`AggValues::Num`] column.
+    PropMin(usize),
+    PropMax(usize),
+    PropMean(usize),
+    PropSum(usize),
+}
+
+/// A number in an [`AggValues::Num`] column: an integer or a float, as the
+/// operator's portable path would hold it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Number {
+    Int(i128),
+    Float(f64),
+}
+
+/// What an `aggregate_events` call adds to an [`AggregateRequest`] when it
+/// reads properties or restricts to a cohort. Only [`NativeStore::
+/// aggregate_edges_ext`] takes it; the plain entry keeps its fold.
+#[derive(Clone, Debug, Default)]
+pub struct AggExt {
+    /// Property keys the call reads; `Agg::Prop*` and the filter index it.
+    pub keys: Vec<String>,
+    pub filter: Option<PropFilter>,
+    pub cohort: Option<Cohort>,
+    /// `valid_at`: keep only events whose version is valid at this instant
+    /// (`vt_s <= t < vt_e`) -- the events of the window that the state at
+    /// `t` still holds, which is how a read "as of now" sees them.
+    pub valid_at: Option<i64>,
+}
+
+/// `prop_filter`: keep events whose property `keys[key]` compares as stated.
+#[derive(Clone, Debug)]
+pub struct PropFilter {
+    pub key: usize,
+    pub cmp: PCmp,
+    pub lit: PLit,
+}
+
+/// `endpoint_filter`: events whose endpoint in `role` is one of `ids`
+/// (dense ids; an empty list is an empty population).
+#[derive(Clone, Debug)]
+pub struct Cohort {
+    pub ids: Vec<u32>,
+    pub role: CohortRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CohortRole {
+    Src,
+    Dst,
+    Either,
+}
+
+/// [`NativeStore::aggregate_edges_ext`]'s answer: the aggregate, plus per
+/// property key the rows that did not take part (`prop_coercion`), counted
+/// exactly as the portable path counts them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggExtOut {
+    pub out: AggregateOut,
+    pub skipped: Vec<u64>,
+}
+
+/// The kernel's verdict that it cannot reproduce the portable path's
+/// answer exactly (`aggprops` module docs); never crosses the boundary.
+const DECLINE: &str = "aggregate kernel declines this call";
+
+fn decline() -> EngineError {
+    EngineError::invariant(DECLINE)
+}
+
+fn is_decline(e: &EngineError) -> bool {
+    e.to_string().contains(DECLINE)
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +160,7 @@ pub struct AggregateRequest {
 pub enum AggValues {
     Int(Vec<Option<i64>>),
     Float(Vec<Option<f64>>),
+    Num(Vec<Option<Number>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +258,13 @@ fn set_bit(w: &mut Vec<u64>, id: u32) {
 }
 
 impl Distinct {
+    /// Inlined on purpose: the plain fold calls this once per selected row
+    /// and distinct slot. With one caller the compiler inlined it into
+    /// `fold_selections`; the extended fold became a second caller, the
+    /// compiler then kept it out of line, and the whole-extent
+    /// agg.rel_bucket paid a call per row (11.6 % of the fold's samples on
+    /// the tiered 10M store, 5-11 % of the query).
+    #[inline(always)]
     fn insert(&mut self, id: u32, plan: &DistinctPlan) {
         match self {
             Distinct::Ids(v) => {
@@ -237,14 +328,25 @@ pub(crate) struct GroupState {
     distinct: Vec<Distinct>,
     /// `(min, max, sum, n)` per stat aggregate.
     stats: Vec<(i64, i64, i128, u64)>,
+    /// One accumulator per property aggregate, boxed so the state of a call
+    /// with none (every call without an [`AggExt`]) stays the size it was:
+    /// the fold's group table holds one of these per group per worker. A
+    /// thin box (8 bytes, `None` free), not a 24-byte `Vec`, on purpose.
+    #[allow(clippy::box_collection)]
+    props: Option<Box<Vec<PAcc>>>,
 }
 
 impl GroupState {
     fn new(n_distinct: usize, n_stats: usize) -> Self {
+        Self::with_props(n_distinct, n_stats, 0)
+    }
+
+    fn with_props(n_distinct: usize, n_stats: usize, n_props: usize) -> Self {
         Self {
             count: 0,
             distinct: vec![Distinct::Ids(Vec::new()); n_distinct],
             stats: vec![(i64::MAX, i64::MIN, 0, 0); n_stats],
+            props: (n_props > 0).then(|| Box::new(vec![PAcc::default(); n_props])),
         }
     }
 
@@ -259,6 +361,122 @@ impl GroupState {
             a.2 += b.2;
             a.3 += b.3;
         }
+        if let (Some(a), Some(b)) = (self.props.as_mut(), other.props.as_ref()) {
+            for (x, y) in a.iter_mut().zip(b.iter()) {
+                x.merge(y);
+            }
+        }
+    }
+}
+
+/// What one property aggregate needs of its values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PropKind {
+    Min,
+    Max,
+    Mean,
+    Sum,
+}
+
+/// A property aggregate's partial state. Every part merges commutatively:
+/// counts and the integer total add, the float total is an exact
+/// accumulator, and an extreme is a value plus whether an equal but
+/// distinguishable value competes with it (then the answer would depend on
+/// the order the portable path meets them in, and the call declines).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PAcc {
+    n: u64,
+    floats: u64,
+    int_sum: i128,
+    exact: ExactSum,
+    min: Option<(PNum, bool)>,
+    max: Option<(PNum, bool)>,
+}
+
+fn pick(cur: Option<(PNum, bool)>, v: (PNum, bool), want: Ordering) -> Option<(PNum, bool)> {
+    Some(match cur {
+        None => v,
+        Some(c) => match aggprops::cmp_num(v.0, c.0) {
+            Ordering::Equal => (c.0, c.1 || v.1 || aggprops::distinguishable(c.0, v.0)),
+            o if o == want => v,
+            _ => c,
+        },
+    })
+}
+
+impl PAcc {
+    fn add(&mut self, v: PNum, kind: PropKind) {
+        self.n += 1;
+        match kind {
+            PropKind::Min => self.min = pick(self.min, (v, false), Ordering::Less),
+            PropKind::Max => self.max = pick(self.max, (v, false), Ordering::Greater),
+            PropKind::Mean | PropKind::Sum => match v {
+                // `math.fsum` converts an int with `float()`; `as` rounds
+                // to nearest, ties to even, the same conversion
+                PNum::Int(i) => {
+                    self.int_sum += i as i128;
+                    self.exact.add(i as f64);
+                }
+                PNum::Float(f) => {
+                    self.floats += 1;
+                    self.exact.add(f);
+                }
+            },
+        }
+    }
+
+    fn merge(&mut self, o: &PAcc) {
+        self.n += o.n;
+        self.floats += o.floats;
+        self.int_sum += o.int_sum;
+        self.exact.merge(&o.exact);
+        if let Some(m) = o.min {
+            self.min = pick(self.min, m, Ordering::Less);
+        }
+        if let Some(m) = o.max {
+            self.max = pick(self.max, m, Ordering::Greater);
+        }
+    }
+
+    /// The portable path's value for this group, or a decline.
+    fn finish(&self, kind: PropKind) -> Result<Option<Number>> {
+        if self.n == 0 {
+            return Ok(None);
+        }
+        let num = |p: PNum| match p {
+            PNum::Int(i) => Number::Int(i as i128),
+            PNum::Float(f) => Number::Float(f),
+        };
+        let float = |f: f64| -> Result<Number> {
+            if f.is_finite() {
+                Ok(Number::Float(f))
+            } else {
+                Err(decline())
+            }
+        };
+        Ok(Some(match kind {
+            PropKind::Min | PropKind::Max => {
+                let (v, ambiguous) = if kind == PropKind::Min { self.min } else { self.max }
+                    .expect("a value was folded");
+                if ambiguous {
+                    return Err(decline());
+                }
+                num(v)
+            }
+            PropKind::Sum if self.floats == 0 => Number::Int(self.int_sum),
+            PropKind::Sum => float(self.exact.value())?,
+            // `ops_compute._quotient`: exact when exact, else one rounding
+            PropKind::Mean if self.floats == 0 => {
+                let n = self.n as i128;
+                let (q, r) = (self.int_sum.div_euclid(n), self.int_sum.rem_euclid(n));
+                if r == 0 {
+                    Number::Int(q)
+                } else {
+                    float(q as f64 + (r as f64) / (n as f64))?
+                }
+            }
+            PropKind::Mean => float(self.exact.value() / self.n as f64)?,
+        }))
     }
 }
 
@@ -269,20 +487,62 @@ struct AggLayout {
     distinct: Vec<bool>,
     /// Stat aggregates: source per slot.
     stats: Vec<Source>,
+    /// Property aggregates: (key index, kind) per slot.
+    props: Vec<(usize, PropKind)>,
 }
 
 impl AggLayout {
     fn of(aggs: &[Agg]) -> Self {
         let mut distinct = Vec::new();
         let mut stats = Vec::new();
+        let mut props = Vec::new();
         for a in aggs {
             match a {
                 Agg::Count => {}
                 Agg::CountDistinct { dst } => distinct.push(*dst),
-                Agg::Min(s) | Agg::Max(s) | Agg::Mean(s) => stats.push(*s),
+                Agg::Min(s) | Agg::Max(s) | Agg::Mean(s) | Agg::Sum(s) => stats.push(*s),
+                Agg::PropMin(k) => props.push((*k, PropKind::Min)),
+                Agg::PropMax(k) => props.push((*k, PropKind::Max)),
+                Agg::PropMean(k) => props.push((*k, PropKind::Mean)),
+                Agg::PropSum(k) => props.push((*k, PropKind::Sum)),
             }
         }
-        Self { distinct, stats }
+        Self { distinct, stats, props }
+    }
+}
+
+/// An [`AggExt`] resolved for the row loop: the cohort as a bitset over
+/// dense ids, the keys as `&str`, and the shared `prop_coercion` counters
+/// every worker adds its own counts into.
+pub(crate) struct ExtPlan {
+    keys: Vec<String>,
+    filter: Option<PropFilter>,
+    cohort: Option<(Vec<u64>, CohortRole)>,
+    valid_at: Option<i64>,
+    skipped: Vec<AtomicU64>,
+}
+
+impl ExtPlan {
+    fn new(ext: &AggExt) -> Self {
+        let cohort = ext.cohort.as_ref().map(|c| {
+            let mut bits = vec![0u64; c.ids.iter().max().map_or(0, |m| (*m as usize >> 6) + 1)];
+            for &id in &c.ids {
+                bits[(id >> 6) as usize] |= 1u64 << (id & 63);
+            }
+            (bits, c.role)
+        });
+        Self {
+            keys: ext.keys.clone(),
+            filter: ext.filter.clone(),
+            cohort,
+            valid_at: ext.valid_at,
+            skipped: ext.keys.iter().map(|_| AtomicU64::new(0)).collect(),
+        }
+    }
+
+    #[inline]
+    fn in_cohort(bits: &[u64], id: u32) -> bool {
+        bits.get((id >> 6) as usize).is_some_and(|w| w & (1u64 << (id & 63)) != 0)
     }
 }
 
@@ -321,6 +581,8 @@ struct SegCols<'a> {
     rel: Option<&'a [u16]>,
     /// Segment-local rel code -> global rel code.
     rel_map: Vec<i64>,
+    /// Props refs and the string table, only when the call reads properties.
+    props: Option<(&'a [u32], crate::segment::StringView<'a>)>,
 }
 
 impl<'a> SegCols<'a> {
@@ -329,8 +591,22 @@ impl<'a> SegCols<'a> {
         need_rel: bool,
         global_rel: &HashMap<&str, i64>,
     ) -> Result<Self> {
+        Self::open_with(seg, need_rel, false, global_rel)
+    }
+
+    fn open_with<S: SegmentSource>(
+        seg: &'a Segment<S>,
+        need_rel: bool,
+        need_props: bool,
+        global_rel: &HashMap<&str, i64>,
+    ) -> Result<Self> {
         let h = seg.header();
         Ok(Self {
+            props: if need_props {
+                Some((seg.u32_column("props_ref")?, seg.strings()?))
+            } else {
+                None
+            },
             vt_s: seg.i64_column("vt_s")?,
             vt_e: if h.vt_e_elided {
                 None
@@ -527,6 +803,7 @@ fn open_seg_cols<'a, S: SegmentSource>(
     selections: &[Selection],
     req: &AggregateRequest,
     global_rel: &HashMap<&str, i64>,
+    need_props: bool,
 ) -> Result<Vec<Option<SegCols<'a>>>> {
     let need_rel = req.dims.iter().any(|d| matches!(d, Dim::RelType));
     let t_cols = std::time::Instant::now();
@@ -537,7 +814,11 @@ fn open_seg_cols<'a, S: SegmentSource>(
     let mut out: Vec<Option<SegCols<'a>>> = Vec::with_capacity(segments.len());
     for (i, seg) in segments.iter().enumerate() {
         out.push(if wanted[i] {
-            Some(SegCols::open(seg, need_rel, global_rel)?)
+            Some(if need_props {
+                SegCols::open_with(seg, need_rel, true, global_rel)?
+            } else {
+                SegCols::open(seg, need_rel, global_rel)?
+            })
         } else {
             None
         });
@@ -555,10 +836,11 @@ fn open_seg_cols<'a, S: SegmentSource>(
 /// the fold's CPU *and* 27 % of the select stage's, on the settled stores
 /// where the schedule is provably identical either way (5 units over 5
 /// workers, 14 over 14) — a whole-binary codegen effect, since select's own
-/// source was untouched in that arm. A fresh rebuild of the unmodified source
-/// reproduced the original timing to 0.1 %, so the arm was the variable and
+/// source was untouched in that configuration. A fresh rebuild of the unmodified source
+/// reproduced the original timing to 0.1 %, so the configuration was the variable and
 /// not the build. Leave the body here.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn fold_selections(
     cols: &[Option<SegCols<'_>>],
     selections: &[Selection],
@@ -642,6 +924,174 @@ fn fold_selections(
     Ok(map)
 }
 
+/// Slots of the props cache in [`fold_selections_ext`]: a direct-mapped
+/// table keyed by props ref, so a bag shared by many rows (the interned
+/// common case) is parsed once, and a bag per row costs one slot, not a
+/// map entry per row.
+const PROPS_CACHE_SLOTS: usize = 1024;
+
+/// [`fold_selections`] for a call with an [`AggExt`]: the cohort test, the
+/// property filter and the property aggregates on top of the same row
+/// loop. A separate function so the plain fold keeps its exact shape
+/// (`fold_selections`' note on codegen).
+#[allow(clippy::too_many_arguments)]
+fn fold_selections_ext(
+    cols: &[Option<SegCols<'_>>],
+    selections: &[Selection],
+    req: &AggregateRequest,
+    layout: &AggLayout,
+    labels: Option<&LabelIndex>,
+    plan: &DistinctPlan,
+    ext: &ExtPlan,
+) -> Result<GroupMap> {
+    let n_distinct = layout.distinct.len();
+    let n_stats = layout.stats.len();
+    let n_props = layout.props.len();
+    let nk = ext.keys.len();
+    let keys: Vec<&str> = ext.keys.iter().map(|s| s.as_str()).collect();
+    let mut skipped = vec![0u64; nk];
+    let mut cache: Vec<(u32, Vec<PVal>)> = Vec::new();
+    let mut map = GroupMap::new();
+    for sel in selections {
+        let c = cols[sel.segment]
+            .as_ref()
+            .ok_or_else(|| crate::EngineError::corrupt("fold unit names an unopened segment"))?;
+        let t_rows = std::time::Instant::now();
+        if nk > 0 {
+            cache.clear();
+            cache.resize(PROPS_CACHE_SLOTS, (u32::MAX, vec![PVal::Absent; nk]));
+        }
+        let cut = sel
+            .rows
+            .partition_point(|&r| c.vt_s[r as usize] < req.t_a);
+        for &r in &sel.rows[cut..] {
+            let i = r as usize;
+            if let Some((bits, role)) = &ext.cohort {
+                let ok = match role {
+                    CohortRole::Src => ExtPlan::in_cohort(bits, c.src[i]),
+                    CohortRole::Dst => ExtPlan::in_cohort(bits, c.dst[i]),
+                    CohortRole::Either => {
+                        ExtPlan::in_cohort(bits, c.src[i]) || ExtPlan::in_cohort(bits, c.dst[i])
+                    }
+                };
+                if !ok {
+                    continue;
+                }
+            }
+            if let Some(t) = ext.valid_at {
+                // an event-lane row's vt_e is elided: it is `vt_s + 1`
+                let vt_e = c.vt_e.map(|col| col[i]).unwrap_or(c.vt_s[i] + 1);
+                if !(c.vt_s[i] <= t && t < vt_e) {
+                    continue;
+                }
+            }
+            let vals: &[PVal] = if nk > 0 {
+                let (refs, strings) = c
+                    .props
+                    .as_ref()
+                    .ok_or_else(|| crate::EngineError::corrupt("props column not resolved"))?;
+                let pr = refs[i];
+                let slot = &mut cache[pr as usize % PROPS_CACHE_SLOTS];
+                if slot.0 != pr {
+                    aggprops::extract(strings.get_opt(pr)?, &keys, &mut slot.1);
+                    slot.0 = pr;
+                }
+                &slot.1
+            } else {
+                &[]
+            };
+            if let Some(f) = &ext.filter {
+                match aggprops::verdict(&vals[f.key], f.cmp, &f.lit) {
+                    Err(()) => return Err(decline()),
+                    Ok(None) => {
+                        skipped[f.key] += 1;
+                        continue;
+                    }
+                    Ok(Some(false)) => continue,
+                    Ok(Some(true)) => {}
+                }
+            }
+            let mut key = [0i64; 2];
+            for (k, d) in req.dims.iter().enumerate() {
+                key[k] = match d {
+                    Dim::TimeBucket { stride } => (c.vt_s[i] - req.t_a) / stride,
+                    Dim::RelType => {
+                        let codes = c.rel.expect("rel column resolved");
+                        c.rel_map[codes[i] as usize]
+                    }
+                    Dim::Endpoint { dst } => {
+                        (if *dst { c.dst[i] } else { c.src[i] }) as i64
+                    }
+                    Dim::Label { dst } => {
+                        let ep = if *dst { c.dst[i] } else { c.src[i] };
+                        labels.expect("label index built").lookup(ep, c.vt_s[i])
+                    }
+                };
+            }
+            let g = map
+                .entry(key)
+                .or_insert_with(|| GroupState::with_props(n_distinct, n_stats, n_props));
+            g.count += 1;
+            for (slot, dst) in layout.distinct.iter().enumerate() {
+                g.distinct[slot].insert(if *dst { c.dst[i] } else { c.src[i] }, plan);
+            }
+            if !layout.stats.is_empty() {
+                let vt_e = c.vt_e.map(|col| col[i]).unwrap_or(c.vt_s[i] + 1);
+                for (slot, src) in layout.stats.iter().enumerate() {
+                    let v = match src {
+                        Source::VtS => c.vt_s[i],
+                        Source::Duration => {
+                            if vt_e >= OPEN_END {
+                                continue; // open-ended: contributes nothing
+                            }
+                            vt_e - c.vt_s[i]
+                        }
+                    };
+                    let s = &mut g.stats[slot];
+                    s.0 = s.0.min(v);
+                    s.1 = s.1.max(v);
+                    s.2 += v as i128;
+                    s.3 += 1;
+                }
+            }
+            for (slot, (k, kind)) in layout.props.iter().enumerate() {
+                match &vals[*k] {
+                    PVal::Num(x) => g.props.as_mut().expect("property slots")[slot].add(*x, *kind),
+                    PVal::Unsure => return Err(decline()),
+                    _ => skipped[*k] += 1,
+                }
+            }
+        }
+        crate::phase::since(crate::phase::Phase::FoldRows, t_rows);
+        crate::phase::add(
+            crate::phase::Phase::FoldRowsWalked,
+            (sel.rows.len() - cut) as u64,
+        );
+        crate::phase::add(crate::phase::Phase::FoldUnits, 1);
+    }
+    for (k, n) in skipped.iter().enumerate() {
+        ext.skipped[k].fetch_add(*n, AtomicOrdering::Relaxed);
+    }
+    Ok(map)
+}
+
+/// The fold over a set of selections, with or without an [`ExtPlan`].
+#[allow(clippy::too_many_arguments)]
+fn fold_any(
+    cols: &[Option<SegCols<'_>>],
+    selections: &[Selection],
+    req: &AggregateRequest,
+    layout: &AggLayout,
+    labels: Option<&LabelIndex>,
+    plan: &DistinctPlan,
+    ext: Option<&ExtPlan>,
+) -> Result<GroupMap> {
+    match ext {
+        None => fold_selections(cols, selections, req, layout, labels, plan),
+        Some(x) => fold_selections_ext(cols, selections, req, layout, labels, plan, x),
+    }
+}
+
 /// Fold `src`'s groups into `dst`. Commutative and associative by
 /// construction, so a caller may apply it in any order (`GroupState::merge`).
 fn merge_maps(dst: &mut GroupMap, src: GroupMap) {
@@ -667,6 +1117,7 @@ fn merge_maps(dst: &mut GroupMap, src: GroupMap) {
 /// how much partial state the fold may hold. Passing `threads` for it is the
 /// the previous behaviour exactly.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn aggregate_partials<S: SegmentSource>(
     segments: &[&Segment<S>],
     selections: &[Selection],
@@ -677,8 +1128,28 @@ pub(crate) fn aggregate_partials<S: SegmentSource>(
     threads: usize,
     map_cap: usize,
 ) -> Result<GroupMap> {
+    aggregate_partials_ext(
+        segments, selections, req, global_rel, labels, plan, threads, map_cap, None,
+    )
+}
+
+/// [`aggregate_partials`] with an optional [`ExtPlan`]: the same schedule
+/// and merge, with [`fold_selections_ext`] as the fold when one is given.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn aggregate_partials_ext<S: SegmentSource>(
+    segments: &[&Segment<S>],
+    selections: &[Selection],
+    req: &AggregateRequest,
+    global_rel: &HashMap<&str, i64>,
+    labels: Option<&LabelIndex>,
+    plan: DistinctPlan,
+    threads: usize,
+    map_cap: usize,
+    ext: Option<&ExtPlan>,
+) -> Result<GroupMap> {
     let layout = AggLayout::of(&req.aggs);
-    let cols = open_seg_cols(segments, selections, req, global_rel)?;
+    let need_props = ext.is_some_and(|x| !x.keys.is_empty());
+    let cols = open_seg_cols(segments, selections, req, global_rel, need_props)?;
     let map_cap = map_cap.max(1);
     // `Narrow` spends the width it cannot afford tables for; `Share` keeps
     // the width and shares `map_cap` tables between the workers.
@@ -690,7 +1161,7 @@ pub(crate) fn aggregate_partials<S: SegmentSource>(
     };
     if threads <= 1 || selections.len() < 2 {
         let t = std::time::Instant::now();
-        let map = fold_selections(&cols, selections, req, &layout, labels, &plan);
+        let map = fold_any(&cols, selections, req, &layout, labels, &plan, ext);
         crate::phase::worker(
             crate::phase::Phase::FoldBusy,
             crate::phase::Phase::FoldMaxBusy,
@@ -766,13 +1237,14 @@ pub(crate) fn aggregate_partials<S: SegmentSource>(
                         // the exact shape it had. The extra map and merge per
                         // claimed selection are what the phase timers already
                         // price at 0.01-0.28 ms for a whole query's merging.
-                        let part = fold_selections(
+                        let part = fold_any(
                             cols,
                             std::slice::from_ref(&selections[si]),
                             req,
                             layout,
                             labels,
                             plan,
+                            ext,
                         )?;
                         if let Some(lock) = shared.get(w % shared.len().max(1)) {
                             let mut dst = lock.lock().expect("fold table poisoned");
@@ -885,9 +1357,32 @@ fn finalize(
 
     let layout = AggLayout::of(&req.aggs);
     let mut aggs_out = Vec::with_capacity(req.aggs.len());
-    let (mut di, mut si) = (0usize, 0usize);
+    let (mut di, mut si, mut pi) = (0usize, 0usize, 0usize);
     for a in &req.aggs {
         match a {
+            Agg::Sum(_) => {
+                let slot = si;
+                si += 1;
+                aggs_out.push(AggValues::Num(
+                    groups
+                        .iter()
+                        .map(|(_, g)| {
+                            let s = g.stats[slot];
+                            (s.3 > 0).then_some(Number::Int(s.2))
+                        })
+                        .collect(),
+                ));
+            }
+            Agg::PropMin(_) | Agg::PropMax(_) | Agg::PropMean(_) | Agg::PropSum(_) => {
+                let (slot, kind) = (pi, layout.props[pi].1);
+                pi += 1;
+                aggs_out.push(AggValues::Num(
+                    groups
+                        .iter()
+                        .map(|(_, g)| g.props.as_ref().expect("property slots")[slot].finish(kind))
+                        .collect::<Result<Vec<_>>>()?,
+                ));
+            }
             Agg::Count => aggs_out.push(AggValues::Int(
                 groups.iter().map(|(_, g)| Some(g.count as i64)).collect(),
             )),
@@ -928,6 +1423,7 @@ fn finalize(
     }
     debug_assert_eq!(di, layout.distinct.len());
     debug_assert_eq!(si, layout.stats.len());
+    debug_assert_eq!(pi, layout.props.len());
 
     Ok(AggregateOut {
         keys,
@@ -1205,6 +1701,39 @@ impl NativeStore {
     /// fixed-width codes; the caller rehydrates names from the returned
     /// tables. Results are byte-identical at any thread count.
     pub fn aggregate_edges(&self, req: &AggregateRequest) -> Result<AggregateOut> {
+        self.aggregate_edges_inner(req, None)
+    }
+
+    /// `aggregate_edges` for a call that reads properties or restricts to a
+    /// cohort (`AggExt`). `Ok(None)`: the kernel declines, because it
+    /// cannot reproduce the portable path's answer exactly (the `aggprops`
+    /// module docs list when); the operator then answers on that path.
+    ///
+    /// A cohort is pushed into the scan as its incidence filter (the same
+    /// superset prune the portable path's `touching_ids` is), and the exact
+    /// role test runs in the fold. The count-by-bucket range path never
+    /// takes an extended call: it reads no row, and these calls test rows.
+    pub fn aggregate_edges_ext(
+        &self,
+        req: &AggregateRequest,
+        ext: &AggExt,
+    ) -> Result<Option<AggExtOut>> {
+        let plan = ExtPlan::new(ext);
+        match self.aggregate_edges_inner(req, Some((&plan, ext))) {
+            Ok(out) => Ok(Some(AggExtOut {
+                out,
+                skipped: plan.skipped.iter().map(|a| a.load(AtomicOrdering::Relaxed)).collect(),
+            })),
+            Err(e) if is_decline(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn aggregate_edges_inner(
+        &self,
+        req: &AggregateRequest,
+        ext: Option<(&ExtPlan, &AggExt)>,
+    ) -> Result<AggregateOut> {
         use crate::phase::{since, Phase};
         crate::phase::add(Phase::AggCalls, 1);
         self.assert_full_belief(req.as_of_tt)?;
@@ -1221,6 +1750,19 @@ impl NativeStore {
             vt_min: Some(req.t_a),
             vt_max: Some(req.t_b),
             rel_types: req.rel_types.clone(),
+            touching_ids: ext.and_then(|(_, x)| x.cohort.as_ref()).map(|c| {
+                let mut ids = c.ids.clone();
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            }),
+            // An event starts in the window, so the scan starts at the
+            // window's first vt_s rather than wherever the vt_e cut can
+            // bound closed rows from (`ScanRequest::vt_s_min`). Both paths
+            // below read it: the row path's fold, which used to discard
+            // those rows, and the range path's selected-row count, which
+            // used to walk them.
+            vt_s_min: Some(req.t_a),
             ..Default::default()
         };
 
@@ -1334,7 +1876,7 @@ impl NativeStore {
         // A count by time bucket is answered from the believed
         // row ranges' lengths and never touches a row; see `range_counts`.
         // `GNOMON_AGG_RANGE_COUNT=0` keeps the row path (read at open).
-        let range_buckets = if self.designs().agg_range_count {
+        let range_buckets = if self.designs().agg_range_count && ext.is_none() {
             range_count_buckets(req)
         } else {
             None
@@ -1412,7 +1954,7 @@ impl NativeStore {
             crate::phase::add(Phase::FoldWidthCap, map_cap as u64);
             crate::phase::add(Phase::FoldMapBytesEst, est_map_bytes);
             let t_fold = std::time::Instant::now();
-            let map = aggregate_partials(
+            let map = aggregate_partials_ext(
                 &seg_refs,
                 &selections,
                 req,
@@ -1423,6 +1965,7 @@ impl NativeStore {
                 DistinctPlan::for_space(self.dict().len()),
                 width,
                 map_cap,
+                ext.map(|(p, _)| p),
             )?;
             since(Phase::AggFoldWall, t_fold);
             map
@@ -1433,7 +1976,11 @@ impl NativeStore {
             let layout = AggLayout::of(&req.aggs);
             map.insert(
                 [0, 0],
-                GroupState::new(layout.distinct.len(), layout.stats.len()),
+                GroupState::with_props(
+                    layout.distinct.len(),
+                    layout.stats.len(),
+                    layout.props.len(),
+                ),
             );
         }
 
@@ -1647,6 +2194,114 @@ mod tests {
             &seg_refs, &selections, r, &global_rel, None, plan, threads, threads,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn sum_is_the_exact_integer_total_at_every_width() {
+        let f = Fixture::build("sums");
+        let rel_names: Vec<String> =
+            ["PAID", "RATED", "SENT"].iter().map(|s| s.to_string()).collect();
+        let r = req(
+            vec![Dim::RelType],
+            vec![Agg::Count, Agg::Sum(Source::VtS), Agg::Sum(Source::Duration)],
+        );
+        let want = reference(&f.rows, &r, &rel_names);
+        for threads in [1, 2, 5] {
+            let got = run_partials(&f, &r, threads);
+            let out = finalize(got, &r, rel_names.clone(), vec![], |_| HashMap::new()).unwrap();
+            for (gi, (_, (_, _, stats))) in want.iter().enumerate() {
+                for (slot, col) in [(0usize, 1usize), (1, 2)] {
+                    let AggValues::Num(v) = &out.aggs[col] else { panic!() };
+                    assert_eq!(v[gi], stats[slot].map(|s| Number::Int(s.2)), "threads={threads}");
+                }
+            }
+        }
+    }
+
+    /// The extended fold over a property: sums, extremes and the coercion
+    /// count against a direct computation, at several widths.
+    #[test]
+    fn property_aggregates_match_a_direct_computation() {
+        let dir = tmp("props");
+        let vals: Vec<serde_json::Value> = (0..400)
+            .map(|i| match i % 5 {
+                0 => serde_json::json!({"amt": i}),
+                1 => serde_json::json!({"amt": i as f64 + 0.25}),
+                2 => serde_json::json!({"amt": "text"}),
+                3 => serde_json::json!({"other": 1}),
+                _ => serde_json::json!({"amt": -(i as i64) * 1_000_000_007}),
+            })
+            .collect();
+        let mut rows: Vec<EdgeRow> = (0..400u32)
+            .map(|i| {
+                let mut e = edge(1_000 + (i % 300) as i64, 2_000, i, 10, "PAID", i % 7, (i + 1) % 7);
+                e.props = vals[i as usize].to_string();
+                e
+            })
+            .collect();
+        rows.sort_by_key(|r| r.sort_key());
+        let path = dir.join("p.tgs");
+        write_edge_segment(&path, &rows, &SegmentSpec::default()).unwrap();
+        let seg = Segment::open(&path, MemorySource::load(&path).unwrap(), true).unwrap();
+        let r = req(
+            vec![],
+            vec![Agg::Count, Agg::PropSum(0), Agg::PropMin(0), Agg::PropMax(0)],
+        );
+        let ext = AggExt { keys: vec!["amt".into()], ..Default::default() };
+        let mut ints: i128 = 0;
+        let mut exact = ExactSum::default();
+        let (mut n, mut skipped) = (0u64, 0u64);
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for row in &rows {
+            if row.vt_s < r.t_a || row.vt_s >= r.t_b {
+                continue;
+            }
+            n += 1;
+            let v: serde_json::Value = serde_json::from_str(&row.props).unwrap();
+            match v.get("amt") {
+                Some(serde_json::Value::Number(x)) => {
+                    if let Some(i) = x.as_i64() {
+                        ints += i as i128;
+                    }
+                    let f = x.as_f64().unwrap();
+                    exact.add(f);
+                    lo = lo.min(f);
+                    hi = hi.max(f);
+                }
+                _ => skipped += 1,
+            }
+        }
+        for threads in [1, 3, 8] {
+            let plan = ExtPlan::new(&ext);
+            let set = ScanSet::from_pairs(vec![(&seg, Lane::Event)]);
+            let scan_req = ScanRequest {
+                as_of_tt: r.as_of_tt,
+                vt_min: Some(r.t_a),
+                vt_max: Some(r.t_b),
+                ..Default::default()
+            };
+            let (selections, _) = set.select(&scan_req).unwrap();
+            let global_rel: HashMap<&str, i64> = [("PAID", 0i64)].into_iter().collect();
+            let map = aggregate_partials_ext(
+                &[&seg], &selections, &r, &global_rel, None,
+                DistinctPlan::for_space(IDS), threads, threads, Some(&plan),
+            )
+            .unwrap();
+            let out = finalize(map, &r, vec!["PAID".into()], vec![], |_| HashMap::new()).unwrap();
+            let AggValues::Int(c) = &out.aggs[0] else { panic!() };
+            assert_eq!(c[0], Some(n as i64));
+            let AggValues::Num(s) = &out.aggs[1] else { panic!() };
+            assert_eq!(s[0], Some(Number::Float(exact.value())), "threads={threads}");
+            assert!(ints != 0);
+            let AggValues::Num(mn) = &out.aggs[2] else { panic!() };
+            let AggValues::Num(mx) = &out.aggs[3] else { panic!() };
+            // the extremes are integers here (the -i*1e9 rows and i rows)
+            assert_eq!(mn[0], Some(Number::Int(lo as i128)));
+            assert_eq!(mx[0].map(|x| match x { Number::Int(i) => i as f64, Number::Float(f) => f }), Some(hi));
+            // the sum aggregate, the min and the max each count the same
+            // non-numeric rows: three aggregates on one key
+            assert_eq!(plan.skipped[0].load(AtomicOrdering::Relaxed), 3 * skipped);
+        }
     }
 
     #[test]

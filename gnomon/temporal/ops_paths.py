@@ -38,15 +38,49 @@ from gnomon.temporal.algebra import (
     paginate,
     required,
 )
-from gnomon.temporal.guardrails import window_fraction
+from gnomon.temporal.guardrails import ROUTES_KEY, coeff_scale, started_by, window_fraction
 
 INF = OPEN_END
 MAX_PATH_HOPS = 6
 MAX_K = 20
 MAX_EXPANSIONS = 500_000
+#: The engine's `temporal_paths` search examines only edges that can
+#: still lie on an answer -- prefixes past their node's latest start are cut,
+#: last edges are counted by binary search, never walked -- a subset of the
+#: edges the enumeration below examines. It gets a larger budget: every query
+#: the enumeration answers, it answers too, and the hub queries the
+#: enumeration's budget refused it answers as well.
+KERNEL_MAX_EXPANSIONS = 64 * MAX_EXPANSIONS
+
+
+#: The engine's earliest-arrival search (`_engine_reach`): one planned
+#: scan of the window's believed edge versions into a by-source CSR, then a
+#: label-setting search. Per edge version the scan may return, measured on the
+#: five calibration stores; `both` reads and searches twice.
+REACH_KERNEL_MS_PER_M = 60.0
+REACH_CALL_MS = 2.0
 
 
 def _reach_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Admission estimate of one earliest-arrival search from one source.
+
+    With the engine's search (single label: no `delta_max_wait`), the work is
+    the scan of the window's edge versions and a search over them: the
+    versions that may overlap the window are those started by its end (a
+    long-lived version overlaps every later window, so the window's share of
+    the extent undercounts it), priced per version at the engine's measured
+    rate. The old price -- the window's share, nine units each at the
+    170 ms/M columnar rate, the NumPy fixpoint's bound -- was 20 to 60 times
+    the engine's time and refused whole-span searches that run in 0.3 to
+    0.7 s. The NumPy fixpoint and the multi-label search under a wait
+    cap keep that price, and so does any caller that does not say which
+    route the call takes (`ROUTES_KEY`)."""
+    routes = stats.get(ROUTES_KEY) or {}
+    if routes.get("reach_kernel") and args.get("delta_max_wait") is None:
+        rows = int(stats.get("n_edge_versions", 0) * started_by(args["window"]["t_b"], stats))
+        both = 2.0 if args.get("direction", args.get("dir")) == "both" else 1.0
+        ms = (REACH_CALL_MS + rows * both * REACH_KERNEL_MS_PER_M / 1e6) * coeff_scale()
+        return {"rows_scanned_est": rows, "expansions_est": 0, "time_est_ms": int(ms)}
     rows = int(stats.get("n_edge_versions", 0) * window_fraction(args, stats))
     # fixpoint rounds are bounded by path length; budget a small multiple
     return {"rows_scanned_est": rows, "expansions_est": rows * 8}
@@ -270,6 +304,10 @@ def temporal_paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
     as_of = args["as_of_tt"]
     sid, did = (int(x) for x in adapter.dense_ids([args["src"], args["dst"]]))
 
+    page = _engine_paths(adapter, sid, did, t_a, t_b, as_of, args)
+    if page is not None:
+        return page
+
     csr, cols = _csr_for(adapter, as_of, t_a, t_b)
     # traversal over the TCSR: per-node slices ordered by (vt_s, vid); the
     # deterministic enumeration order is fixed after the walk, by (vt_s, eid)
@@ -334,6 +372,48 @@ def temporal_paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
         })
     return {"rows": rows, "rows_total": len(paths),
             "truncated": len(paths) > args["k"], "cursor": None}
+
+
+def _paths_kernel(adapter: StorageAdapter) -> bool:
+    """Does this adapter carry the engine's paths search? Only the
+    native engine, and only with `GNOMON_PATHS_KERNEL` not set to `python` --
+    read when the handle opens and reported by `designs()`."""
+    designs = getattr(adapter, "designs", None)
+    if designs is None or not hasattr(adapter, "paths_topk"):
+        return False
+    return bool(designs().get("paths_kernel", False))
+
+
+def _engine_paths(adapter: StorageAdapter, sid: int, did: int, t_a: int, t_b: int,
+                  as_of: int, args: dict[str, Any]) -> dict[str, Any] | None:
+    """The engine's answer in the enumeration's exact shape, or `None` to run
+    the enumeration. Strings are built for the `k` returned paths only."""
+    if not _paths_kernel(adapter):
+        return None
+    got = adapter.paths_topk(sid, did, t_a, t_b, as_of, args["k"], args["max_hops"],
+                             KERNEL_MAX_EXPANSIONS)
+    if got is None:
+        return None
+    if got["exceeded"]:
+        raise CostError("temporal_paths expansion budget exceeded",
+                        estimate={"expansions_est": int(got["expansions"])},
+                        suggestions=["narrow the window", "reduce max_hops"])
+    ids = sorted(set(got["src_id"]) | set(got["dst_id"]))
+    uid = dict(zip(ids, adapter.uids_for(ids))) if ids else {}
+    rows, at = [], 0
+    for arrival, hops in zip(got["arrival"], got["hops"]):
+        rows.append({
+            "arrival": int(arrival),
+            "hops": int(hops),
+            "edges": [{"src": uid[got["src_id"][i]], "dst": uid[got["dst_id"][i]],
+                       "rel_type": got["rel_type"][i], "eid": got["eid"][i],
+                       "t": int(got["vt_s"][i])}
+                      for i in range(at, at + int(hops))],
+        })
+        at += int(hops)
+    total = int(got["total"])
+    return {"rows": rows, "rows_total": total, "truncated": total > args["k"],
+            "cursor": None}
 
 
 def _csr_for(adapter: StorageAdapter, as_of: int, t_a: int, t_b: int):

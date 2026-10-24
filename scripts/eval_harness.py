@@ -110,7 +110,7 @@ MOTIF_FILTER = 200
 #: band at `scale // 2` — the window is identical from 30M to 1B, and
 #: anything the p50 does across scales is the engine, not the query.
 #:
-#: `_w10_window` clamps for extents too small or too coarse to hold that
+#: `_fixed_window` clamps for extents too small or too coarse to hold that
 #: (unit fixtures, and real corpora such as CollegeMsg whose ticks are
 #: microseconds), so the ids are always runnable; on those the window is a
 #: fixed *fraction* of the extent instead and the absolute-width claim does
@@ -119,7 +119,7 @@ FIXED_WINDOW_WIDTH = 10
 FIXED_WINDOW_OFFSET = 1_000
 
 
-def _w10_window(t0: int, t1: int) -> dict[str, int]:
+def _fixed_window(t0: int, t1: int) -> dict[str, int]:
     """The fixed absolute-width window, placed inside `[t0, t1)`."""
     span = max(1, t1 - t0)
     t_a = t0 + min(FIXED_WINDOW_OFFSET, span // 4)
@@ -232,7 +232,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # published query order and every prior receipt stay comparable.
         # Same three operators as `series.count` / `burst.zscore` /
         # `agg.rel_bucket` above and the same arguments, except that the
-        # window is `_w10_window` — fixed at FIXED_WINDOW_WIDTH absolute ticks
+        # window is `_fixed_window` — fixed at FIXED_WINDOW_WIDTH absolute ticks
         # instead of the whole extent — and the stride is 1, so the bucket
         # count is the window width rather than a fixed 100 buckets that
         # would grow with the store. These carry no `op` of their own, so
@@ -242,7 +242,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # written yet (not a verdict)" the same way any id absent from
         # their own QUERIES map already is.
         Query("series.count.w10", "graph_metric_timeseries",
-              {"metric": "edge_event_count", "window": _w10_window(t0, t1),
+              {"metric": "edge_event_count", "window": _fixed_window(t0, t1),
                "stride": 1},
               f"bucketed event rate over a fixed {FIXED_WINDOW_WIDTH}-tick window "
               f"(fixed-window variant)"),
@@ -250,13 +250,13 @@ def registry(t0: int, t1: int, tt_epoch1: int,
               {"group_by": [{"dim": "rel_type"}, {"dim": "time_bucket"}],
                "aggregates": [{"agg": "count"},
                               {"agg": "count_distinct", "of": "dst"}],
-               "window": _w10_window(t0, t1),
+               "window": _fixed_window(t0, t1),
                "stride": 1, "limit": 1000},
               f"count + distinct-dst by rel_type x time-bucket over a fixed "
               f"{FIXED_WINDOW_WIDTH}-tick window (fixed-window variant)"),
         Query("burst.zscore.w10", "burst_detection",
               {"target": {"kind": "edge_event_rate"},
-               "window": _w10_window(t0, t1),
+               "window": _fixed_window(t0, t1),
                "stride": 1, "method": "zscore", "params": {"z": 3.0}},
               f"burst flags over the same fixed {FIXED_WINDOW_WIDTH}-tick window "
               f"(fixed-window variant)"),
@@ -273,7 +273,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # our beliefs changed about since the first epoch". A pair of
         # arbitrary literals would mean something different on each.
         #
-        # **Window.** `_w10_window`, not the whole extent, for exactly the
+        # **Window.** `_fixed_window`, not the whole extent, for exactly the
         # reason FIXED_WINDOW_WIDTH's note above gives: a whole-extent window makes the
         # answer — and so the latency — grow with the store by construction,
         # which would hide the property this operator exists to demonstrate.
@@ -289,7 +289,7 @@ def registry(t0: int, t1: int, tt_epoch1: int,
         # `_diff_belief_dispatch` below.
         Query("diff.belief", "diff_belief",
               {"t1": tt_epoch1, "t2": OPEN_END,
-               "window": _w10_window(t0, t1), "limit": 1000},
+               "window": _fixed_window(t0, t1), "limit": 1000},
               f"versions whose belief state changed between the first belief "
               f"epoch and current belief, over a fixed {FIXED_WINDOW_WIDTH}-tick "
               f"valid-time window",
@@ -612,6 +612,34 @@ COMMUNITY = 50
 INTRA_PCT = 70
 
 
+#: Opt-in endpoint law for hub reproductions:
+#: `GNOMON_SYNTH_ENDPOINTS=powerlaw`, read once at import. Unset (the default,
+#: and every frozen log), `_event` is unchanged. Set, each endpoint is drawn
+#: independently from a power law with probability POWERLAW_P (an inverse-CDF
+#: draw of x^-POWERLAW_ALPHA on [1, |V|], degree exponent ~2.1), else
+#: uniformly; rank r is node (r * POWERLAW_PERM) mod |V|, so the top hubs are
+#: n0 and n4729 at |V| = 10,000. At 1M: max instant degree 3,474, the top 1%
+#: of nodes hold 28% of endpoints.
+ENDPOINT_LAW = os.environ.get("GNOMON_SYNTH_ENDPOINTS", "").strip().lower() or "default"
+POWERLAW_ALPHA, POWERLAW_P, POWERLAW_PERM = 0.909, 700, 4729
+
+
+def _powerlaw_node(r: int, n: int) -> int:
+    u = (r >> 11) / 2.0 ** 53
+    b = 1.0 - POWERLAW_ALPHA
+    rank = min(int((1.0 + u * (n ** b - 1.0)) ** (1.0 / b)) - 1, n - 1)
+    return (rank * POWERLAW_PERM) % n
+
+
+def _event_powerlaw(i: int, scale: int) -> dict[str, Any]:
+    n, t = n_nodes(scale), _vt_s(i, scale)
+    r1, r2, r3 = _mix(3 * i + 7), _mix(3 * i + 8), _mix(3 * i + 9)
+    src = _powerlaw_node(r1, n) if r3 % 1000 < POWERLAW_P else r1 % n
+    dst = _powerlaw_node(r2, n) if (r3 >> 20) % 1000 < POWERLAW_P else r2 % n
+    return {"src": f"n{src}", "dst": f"n{dst}", "rel_type": "R" if i % 3 else "S",
+            "vt_s": t, "vt_e": t + edge_life(scale)}
+
+
 def _event(i: int, scale: int) -> dict[str, Any]:
     """Event `i`: a random edge with community structure, reproducible from `i`.
 
@@ -627,6 +655,8 @@ def _event(i: int, scale: int) -> dict[str, Any]:
     scale sweep should vary scale alone, and the real skew is measured on the
     frozen CollegeMsg replay, which has a genuine one.
     """
+    if ENDPOINT_LAW == "powerlaw":
+        return _event_powerlaw(i, scale)
     n, t = n_nodes(scale), _vt_s(i, scale)
     src = _mix(2 * i) % n
     r = _mix(2 * i + 1)

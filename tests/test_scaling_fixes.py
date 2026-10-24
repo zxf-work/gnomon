@@ -46,7 +46,7 @@ SMALL, LARGE = 20_000, 100_000
 #: Every variable that changes which path these queries take.
 VARS = ("GNOMON_SEED_EXPANSION", "GNOMON_ADJ_FILTERED_SCAN", "GNOMON_TCSR",
         "GNOMON_RANGE_VISIBILITY", "GNOMON_WINDOW_FIRST", "GNOMON_SEGMENT_PRUNE",
-        "GNOMON_VIDFILTER", "GNOMON_EXISTENCE_PROBE", "GNOMON_TIME_CODEC")
+        "GNOMON_VIDFILTER", "GNOMON_EXISTENCE_PROBE", "GNOMON_TIME_CODEC", "GNOMON_MATCH_KERNEL")
 
 
 def _harness():
@@ -72,7 +72,7 @@ def stores(tmp_path_factory) -> dict[int, tuple[Path, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         for k in VARS:
             mp.delenv(k, raising=False)
-        base = tmp_path_factory.mktemp("w30")
+        base = tmp_path_factory.mktemp("scaling")
         for n in (SMALL, LARGE):
             data = H.build_dataset(n)
             root = base / f"s{n}"
@@ -218,7 +218,7 @@ def test_a_frontier_past_the_cap_takes_the_whole_snapshot_and_answers_the_same(
     H = _harness()
     path, data = stores[SMALL]
     q = _query(data, "snap.hop2")
-    store = _open(path, monkeypatch)
+    store = _open(path, monkeypatch, {"GNOMON_MATCH_KERNEL": "python"})
     try:
         ref, _ = _spied(store, q.op, q.args)
         monkeypatch.setattr(ops_snapshot, "SEED_EXPANSION_MAX_IDS", 5)
@@ -229,6 +229,29 @@ def test_a_frontier_past_the_cap_takes_the_whole_snapshot_and_answers_the_same(
     # the fallback: the instant's whole edge set and node set
     assert any(c["op"] == "scan_edges" and not c["kw"].get("touching_ids") for c in calls)
     assert any(c["op"] == "scan_nodes" for c in calls)
+
+
+def test_a_frontier_past_the_cap_takes_the_engines_frontier_and_answers_the_same(
+        stores, monkeypatch):
+    """Past the cap the engine's batched frontier answers the snapshot, in
+    one call and with no scan of the instant, where `GNOMON_MATCH_KERNEL=python`
+    takes the whole snapshot; the answer is the scan expansion's."""
+    from gnomon.temporal import ops_snapshot
+    H = _harness()
+    for path, data in stores.values():
+        q = _query(data, "snap.hop2")
+        store = _open(path, monkeypatch)
+        try:
+            ref, _ = _spied(store, q.op, q.args)
+            with monkeypatch.context() as m:
+                m.setattr(ops_snapshot, "SEED_EXPANSION_MAX_IDS", 5)
+                got, calls = _spied(store, q.op, q.args)
+        finally:
+            store.close()
+        ops = [c["op"] for c in calls]
+        assert ops.count("snapshot_expand") == 1, ops
+        assert "scan_nodes" not in ops, ops
+        assert H.canonical_hash(got) == H.canonical_hash(ref)
 
 
 def test_the_operator_cap_is_the_engines(stores):

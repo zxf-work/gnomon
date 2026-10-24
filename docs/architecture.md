@@ -6,6 +6,7 @@ Gnomon has three layers:
  Python  gnomon.Store ─ write-ahead event log (eventlog.jsonl), single-writer lock
          gnomon.storage.base ─ bi-temporal write semantics (carve / retract / correct)
          gnomon.temporal ─ operator registry, argument schemas, result envelopes
+         gnomon.plan ─ the plan IR `match` compiles to, and its reference evaluator
            │ PyO3 (crates/gnomon-py → gnomon._engine)
  Rust    gnomon-core ─ segments, close runs, manifests, compaction, indexes, scans
            │
@@ -50,19 +51,48 @@ records the event-log offset and a rolling hash chain over the log prefix it
 has applied, so recovery replays exactly the missing suffix and refuses a log
 that does not match.
 
-### Bulk ingest from the log record
+### Bulk ingest and per-operation writes from the log record
 
 The bi-temporal write semantics live in Python (`gnomon/storage/base.py`),
 which turns each event of an `ingest_events` op into Python objects before
-the engine sees it. For the common bulk shape — an `ingest_events` op with
-no `nodes` array and no event `props` — the engine instead stages the op
-straight from the event-log record the batch was just logged as (replay
-hands it the same bytes): it parses the op, derives the identity hashes,
-runs the same endpoint-existence probe, inserts the same dictionary entries
-in the same order and stages the same rows. Any other shape, or anything
-the parser does not accept, is refused before anything is changed and takes
-the Python row build, so the stored rows, dense ids and digests are the same
-either way.
+the engine sees it. For the common shapes the engine instead works straight
+from the event-log record the batch was just logged as (replay hands it the
+same bytes):
+
+* **Bulk events.** An `ingest_events` op — with or without a `nodes` array,
+  and with event `props` that hold no float — is parsed, its identity hashes
+  derived, the same endpoint-existence probe run, the same dictionary
+  entries inserted in the same order and the same rows staged.
+* **Per-operation ops.** A transaction of `assert_node`, `assert_edge`,
+  `retract` and `correct` ops is applied op by op with the engine primitives
+  the Python path calls, in the same order: the windowed point read of the
+  versions the op overlaps, the retires and closes that supersede them, then
+  the staged rows, with the same version ids, intervals and canonical props.
+
+Any other shape, or anything the parser does not accept, is refused before
+anything is changed and takes the Python path, so the stored rows, dense ids
+and digests are the same either way. The windowed point read (`pointread.rs`)
+is what keeps a write's cost independent of its key's history: within a
+segment a key's rows are in `vt_s` order, so the rows that can overlap the
+written interval are a prefix of its postings, walked backwards and stopped
+at the first believed row that ends before the interval (the believed
+versions of one identity are disjoint in valid time).
+
+### The small-commit path
+
+By default every transaction publishes its own generation. With
+`GNOMON_SMALL_COMMIT=1` a transaction is acknowledged as soon as its
+event-log record is fsynced — the record is the source of truth, and a crash
+before its generation is published is recovered by the ordinary suffix
+replay — and the engine batch stays open across transactions: one generation
+is published per `GNOMON_SMALL_COMMIT_N` transactions, once the oldest
+unpublished transaction is `GNOMON_SMALL_COMMIT_MS` old, before any read on
+the writing handle, and on close. Each transaction keeps its own log record
+and its rows their own `tt_s`, so durability, the event log and both digests
+are unchanged; what changes is that a reader in another process sees
+published generations only and may lag the writer by that much. A failed
+transaction rolls the batch back and re-applies its unpublished batch-mates
+from their records, which is deterministic.
 
 ## Segments
 
@@ -155,6 +185,12 @@ instead. Traversals choose between building a segment’s believed row ranges
 and testing belief per adjacency row, whichever reads less. The engine
 counts the runs, codes and closes each belief test reads (`phase_stats`),
 so this cost claim is checked by tests on counts rather than timings.
+
+Traversals over a segment with closes can decide belief from a cached
+**effective-`tt_e` column**: one value per row (the row's own `tt_e`, or the
+close that ended it), built once per segment and kept within
+`GNOMON_TT_E_COLUMN_BYTES`, so the test is one comparison per adjacency row
+instead of building the segment's believed ranges per call.
 
 ## Range-native operators
 
@@ -281,6 +317,77 @@ index is never authoritative.
   filter, and finally to no filter. False negatives are impossible by
   construction; a false positive costs one extra segment visit.
 
+### Path kernels
+
+* **Counted paths.** `temporal_paths` counts its time-respecting paths in
+  the engine and materialises only the first `k`: the search reads the
+  graph from both ends, a round at a time and the cheaper side first, and
+  computes for every node and hop budget the latest arrival from which the
+  target is still reachable. The total is exact, so a hub that would exhaust
+  an enumeration's budget is answered.
+* **Interval pages.** `co_active` counts its interval join and cuts the
+  requested page in the engine, without materialising the whole join.
+* **The window search of `paths`.** Under `valid_window` the least-cost
+  search runs over (node, set of instants) states with exact costs:
+  integer weights as integers, float weights as exactly scaled rationals, so
+  ties are ties.
+* **Frontier loading.** A bounded search from known sources reads the edges
+  incident to its frontier, round by round, and switches to one read of the
+  window when a round would read more than half of it.
+
+## Pattern matching and the plan IR
+
+`match` (`gnomon/temporal/ops_match.py`) compiles its argument to one plan
+of the plan IR (`gnomon/plan`): a DAG of typed nodes — `NodeScan`,
+`EdgeScan`, `Expand`, `Filter`, `TypeConstraint`, `Project`, `Join`,
+`Aggregate`, `Order`, `Limit`, plus the shared-instant nodes `CoValidExpand`,
+`CoValidJoin` and `Collapse` — with the scope Σ and the output columns.
+**One plan, two executors:** the engine's plan executor
+(`crates/gnomon-core/src/matcher.rs`) runs it by default, and the reference
+evaluator (`gnomon/plan/eval`, NumPy) runs the very same plan with
+`GNOMON_MATCH_KERNEL=python`, on the DuckDB backend, inside an open write
+batch, or when the engine declines the plan. Because both consume one plan,
+an answer difference between them can only be an execution difference, and
+the tests compare them on random stores; an independent oracle checks the
+compiler against the operator's definition.
+
+The engine executor is range-native:
+
+* a relation is a **binding table** — per pattern variable a column of
+  dense ids and a column of version addresses (segment, row), per computed
+  expression a typed column; no row carries a string;
+* scans read each segment's believed, window-clipped row ranges, and
+  `Expand` walks the per-segment adjacency index once per hop for the whole
+  distinct frontier; a closure is a level-synchronous multi-source
+  breadth-first search;
+* node versions under Σ come from identity point reads for a few ids, or
+  from one pass over the believed node rows for many;
+* properties are read through **typed property columns**: each distinct
+  stored payload is parsed once per key, never once per binding row;
+* a join on a whole scan either **seeks** its left keys (through the
+  adjacency index or point reads) or **scans** and joins through a
+  compressed-sparse-row index of the smaller side's keys, whichever the
+  measured cost model picks for the key count; a hash join covers the rest;
+* aggregates fold with exact integer sums and a correctly rounded float sum;
+  the order is a top-k selection and a sort of the page alone, and strings
+  are built for the returned page only;
+* large frontiers, joins, scans and folds run in chunks on the worker pool
+  (`GNOMON_MATCH_THREADS`, from `GNOMON_MATCH_PAR_ROWS` rows), merged in
+  order, so every width gives the same rows in the same order.
+
+The engine **declines** a plan, and the reference evaluator answers it,
+for a node or expression form it does not implement and for any row that
+would make the evaluator raise (division by zero, a non-canonical uid cast,
+an integer outside int64, a comparison across type classes): the error is
+left to the one implementation that defines it.
+
+Under a window, or a belief mode other than `current`, walks and
+sub-patterns follow the **shared-instant rule**: a binding's nodes and edges
+must all be valid at one common instant. The shared-instant nodes carry, per
+binding, the set of instants (as disjoint intervals) at which everything
+bound so far is valid, and narrow it hop by hop; a walk explores (node,
+instant set) states breadth first.
+
 ## Readers, writers and concurrency
 
 * One writer per store, enforced by `writer.lock`.
@@ -292,8 +399,8 @@ index is never authoritative.
   writer threads, `gnomon.write.GroupCommitWriter` coalesces submissions
   into shared commits.
 * The parallel read stages (the scan planner and row loop, column
-  materialisation, the aggregation fold, the reachability and diff kernels)
-  run on one persistent worker pool per process: its threads are started
+  materialisation, the aggregation fold, the reachability, diff, path and
+  pattern kernels) run on one persistent worker pool per process: its threads are started
   once and parked between calls, so a fan-out costs a wake-up rather than a
   thread spawn. The caller claims work items alongside the pool threads, so
   concurrent callers on one handle, or a nested call from inside a worker,

@@ -111,7 +111,7 @@ def _npz(root: Path) -> Path:
 
 
 # --------------------------------------------------------------------- #
-# the instrument: one store, two arms, the whole registry                #
+# the instrument: one store, two configurations, the whole registry                #
 # --------------------------------------------------------------------- #
 
 
@@ -154,7 +154,7 @@ def _slices(adapter, direction: str = "out") -> list[list]:
 
 
 def _slices_both_arms(root: Path, monkeypatch) -> tuple[list, list]:
-    """The same store read twice, one fresh handle per arm."""
+    """The same store read twice, one fresh handle per configuration."""
     got = []
     for backend in ("python", "rust"):
         monkeypatch.setenv("GNOMON_TCSR", backend)
@@ -178,7 +178,7 @@ def test_every_registry_answer_is_identical_under_both_backends(
     The campaign scores this at 1M and 10M on the measurement host; this runs
     the same instrument at unit scale so a divergence is caught by the suite
     rather than by a sweep. It also asserts the fixture is real in the one way
-    that matters: `paths.k` must actually answer, and the Rust arm must
+    that matters: `paths.k` must actually answer, and the Rust configuration must
     actually have built per-segment indexes — an A/B between two identical
     Python paths would agree perfectly and prove nothing.
     """
@@ -192,7 +192,7 @@ def test_every_registry_answer_is_identical_under_both_backends(
 
     rust = _registry_answers(root, "rust", monkeypatch)
     assert _tci(root), (
-        "the rust arm built no per-segment index — the two arms just ran the "
+        "the rust configuration built no per-segment index — the two configurations just ran the "
         "same code and this comparison is vacuous")
 
     assert set(python) == set(rust)
@@ -265,7 +265,7 @@ def test_a_compaction_since_the_index_was_built_invalidates_by_body_sha(
     assert after == before, "compaction moved a traversal answer"
 
     py, rs = _slices_both_arms(root, monkeypatch)
-    assert py == rs, "the two arms disagree on the compacted store"
+    assert py == rs, "the two configurations disagree on the compacted store"
 
 
 def test_the_superseded_index_files_are_never_consulted_for_new_segments(
@@ -356,12 +356,12 @@ def test_a_settled_store_loads_its_indexes_and_builds_none(tmp_path,
     assert after == before, "settle moved a traversal answer"
 
     py, rs = _slices_both_arms(root, monkeypatch)
-    assert py == rs, "the two arms disagree on the settled store"
+    assert py == rs, "the two configurations disagree on the settled store"
 
 
 def test_the_registry_agrees_on_a_settled_store(tmp_path, monkeypatch):
     """The operator-level form of the above. Settle is where the campaign's
-    settled arm is measured, so its equivalence is not optional."""
+    settled configuration is measured, so its equivalence is not optional."""
     root = tmp_path / "s"
     store = _build(root)
     store.adapter.settle()
@@ -385,7 +385,7 @@ def test_suffix_recovery_leaves_existing_indexes_alone_and_agrees(
     never sees it, so the next open replays the suffix and publishes a
     generation of its own. Recovery rewrites no existing segment, so every
     index built before it must still be byte-identical afterwards — and the
-    recovered rows must be visible to the traversal under both arms."""
+    recovered rows must be visible to the traversal under both configurations."""
     from gnomon.storage.eventlog import EventLog
 
     monkeypatch.setenv("GNOMON_TCSR", "rust")
@@ -419,7 +419,7 @@ def test_suffix_recovery_leaves_existing_indexes_alone_and_agrees(
             f"it does not rewrite them")
 
     py, rs = _slices_both_arms(root, monkeypatch)
-    assert py == rs, "the two arms disagree on the recovered store"
+    assert py == rs, "the two configurations disagree on the recovered store"
 
 
 def test_an_index_for_a_re_written_segment_of_the_same_id_is_not_reused(
@@ -498,7 +498,7 @@ def test_the_opt_out_is_a_whole_working_path_not_a_fallback_stub(
         tmp_path, monkeypatch):
     """`GNOMON_TCSR=python` has to stay a first-class path, not a switch that
     happens to still compile: it is what every portable backend runs, and it
-    is the control arm of every future A/B. On the same store it must build
+    is the control configuration of every future A/B. On the same store it must build
     and persist its own whole-store permutation, answer the registry, and
     leave `idx/tcsr/` untouched."""
     root = tmp_path / "s"

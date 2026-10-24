@@ -620,7 +620,7 @@ mod heap_tests {
 /// the forms they replace, over the shapes the store holds and adversarial
 /// extremes.
 #[cfg(test)]
-mod w22_tests {
+mod codec_layout_tests {
     use super::*;
 
     /// `exact_scale` as it was originally (u128 GCD, per-value range check).

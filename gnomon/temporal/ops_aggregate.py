@@ -37,6 +37,7 @@ parallel aggregation on fixed-width codes).
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 import numpy as np
@@ -54,7 +55,13 @@ from gnomon.temporal.algebra import (
     paginate,
     required,
 )
-from gnomon.temporal.guardrails import scan_estimate
+from gnomon.temporal.guardrails import (
+    ROUTES_KEY,
+    coeff_scale,
+    rel_rows,
+    scan_estimate,
+    window_fraction,
+)
 from gnomon.temporal.ops_compute import _mean as _blessed_mean
 from gnomon.temporal.ops_series import MAX_BUCKETS
 from gnomon.temporal.props import (
@@ -64,6 +71,7 @@ from gnomon.temporal.props import (
     numeric_value,
     parse_props,
     prop_keys,
+    sum_exact,
 )
 
 #: Runtime cap on emitted groups. Pagination bounds the *page*, not the
@@ -175,6 +183,40 @@ ENDPOINT_FILTER = {
 PAIR_MODE = {"type": ["string", "null"],
              "enum": ["undirected", "reciprocal", None], "default": None,
              "description": "requires group_by = [endpoint src, endpoint dst]"}
+
+#: Aggregates registered for engine-level callers only. `sum` (over `vt_s`,
+#: `duration` or a numeric property) is exact: an integer total over
+#: integers, and `math.fsum`'s correctly rounded total once a float takes
+#: part -- `match`'s `sum_exact` rule, `props.sum_exact`. It is not in the
+#: base schema, which stays as it was (algebra.OperatorSpec).
+ENGINE_AGGS = ("sum",)
+
+
+def _engine_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The engine-level argument schema: the base one, with
+    `ENGINE_AGGS` added to the aggregate enum."""
+    agg = schema["properties"]["aggregates"]["items"]["properties"]["agg"]
+    agg["enum"] = [*agg["enum"][:5], *ENGINE_AGGS, *agg["enum"][5:]]
+    of = schema["properties"]["aggregates"]["items"]["properties"]["of"]
+    of["description"] = ("src|dst for count_distinct; vt_s|duration|prop for "
+                         "min/max/mean/sum; the sequence aggregates take none")
+    schema["properties"]["valid_at"] = VALID_AT
+    return schema
+
+
+#: Engine-level: keep only events whose version is valid at this instant
+#: (`vt_s <= t < vt_e`). A read "as of now" over event edges whose record
+#: a later delete closed (FinBench's TSR rows at Σ = (now, now)) is the
+#: window's events that the state at `now` still holds. No default: a call
+#: without it fills, echoes and digests exactly as before.
+VALID_AT = {"type": ["integer", "null"], "minimum": 0, "maximum": OPEN_END,
+            "description": "keep only events valid at this instant "
+                           "(vt_s <= t < vt_e)"}
+
+
+#: `GNOMON_AGG_EXT=python` keeps property-reading and cohort-restricted calls
+#: on the portable path (the A/B control for the engine's extended fold).
+AGG_EXT_ENV = "GNOMON_AGG_EXT"
 
 
 def _dim_key(d: dict[str, Any]) -> tuple[str, str | None, str | None]:
@@ -601,6 +643,9 @@ def _portable(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
         touching_ids=cohort_ids or None)
     # the scan filter is interval *overlap*; an event is containment of vt_s
     m = e["vt_s"] >= t_a
+    if args.get("valid_at") is not None:
+        t = int(args["valid_at"])
+        m = m & (e["vt_s"] <= t) & (t < e["vt_e"])
     if ef is not None:
         cohort = np.asarray(cohort_ids, dtype=np.int64)
         in_src = np.isin(e["src_id"], cohort)
@@ -723,7 +768,8 @@ def _portable(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
                     skipped[key] += 1
                 else:
                     per_group[int(inv[i])].append(v)
-            fn = {"min": min, "max": max, "mean": _blessed_mean}[a["agg"]]
+            fn = {"min": min, "max": max, "mean": _blessed_mean,
+                  "sum": sum_exact}[a["agg"]]
             agg_cols[field] = [fn(vals) if vals else None for vals in per_group]
             continue
         else:
@@ -742,6 +788,13 @@ def _portable(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
                 out = np.full(g, np.iinfo(np.int64).min, dtype=np.int64)
                 if len(grp):
                     np.maximum.at(out, grp, v)
+            elif a["agg"] == "sum":  # exact: object dtype = Python ints
+                sums = np.zeros(g, dtype=object)
+                if len(grp):
+                    np.add.at(sums, grp, v.astype(object))
+                agg_cols[field] = [int(sums[i]) if nc[i] else None
+                                   for i in range(g)]
+                continue
             else:  # mean: exact integer sums (object dtype = Python ints)
                 sums = np.zeros(g, dtype=object)
                 if len(grp):
@@ -773,7 +826,32 @@ def _portable(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
+def _ext_kwargs(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
+    """The extended fold's arguments (properties, filter, cohort), or `{}`
+    for a call that needs none of them."""
+    pkeys = _prop_keys(args)
+    ef = args.get("endpoint_filter")
+    if not pkeys and ef is None and args.get("valid_at") is None:
+        return {}
+    kw: dict[str, Any] = {}
+    if args.get("valid_at") is not None:
+        kw["valid_at"] = int(args["valid_at"])
+    if pkeys:
+        kw["prop_keys"] = pkeys
+        kw["agg_props"] = [pkeys.index(a["prop"]) if a.get("of") == "prop"
+                           else None for a in args["aggregates"]]
+        pf = args.get("prop_filter")
+        if pf is not None:
+            kw["prop_filter"] = (pkeys.index(pf["prop"]), pf["cmp"], pf["value"])
+    if ef is not None:
+        kw["cohort"] = (_cohort_ids(adapter, ef["uids"]), ef["role"])
+    return kw
+
+
+def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any] | None:
+    """The engine's answer, or `None` when the engine declines an extended
+    call it cannot reproduce exactly (the caller then takes `_portable`)."""
+    ext = _ext_kwargs(adapter, args)
     try:
         got = adapter.aggregate_events_columnar(
             as_of_tt=args["as_of_tt"],
@@ -783,15 +861,23 @@ def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
             group_by=[(d["dim"], d.get("role")) for d in args["group_by"]],
             aggregates=[(a["agg"], a.get("of")) for a in args["aggregates"]],
             max_groups=MAX_GROUPS,
+            **ext,
         )
     except InvalidArgError as e:
         # the kernel's capacity refusal is this operator's E_LIMIT, with the
         # same narrowing levers as the portable path
+        if "group count" in str(e) and "exceeds cap" in str(e) and ext:
+            # the portable path's refusal, which an extended call always
+            # gave before it had an engine fold: same count, same levers
+            n = str(e).split("group count ", 1)[1].split(" ", 1)[0]
+            raise _too_many_groups(int(n)) from None
         if "group count" in str(e) and "exceeds cap" in str(e):
             raise LimitError(
                 f"{str(e).split('capacity: ', 1)[-1]}; narrow the window, "
                 f"add a rel_types filter, or use coarser dimensions") from None
         raise
+    if got is None:
+        return None
     g = got["rows_total"]
     try:
         offset = int(args["cursor"]) if args["cursor"] else 0
@@ -825,7 +911,10 @@ def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     for a, col in zip(args["aggregates"], got["aggs"]):
         field = _agg_field(a)
         page = col[lo:hi]
-        if a["agg"] == "mean":
+        if a.get("of") == "prop":
+            # an int or a float per group, as the portable path holds it
+            agg_value_cols[field] = list(page)
+        elif a["agg"] == "mean":
             agg_value_cols[field] = [None if v is None else float(v)
                                      for v in page]
         else:
@@ -836,8 +925,58 @@ def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
              **{k: c[i] for k, c in agg_value_cols.items()}}
             for i in range(hi - lo)]
     truncated = lo + len(rows) < g
-    return {"rows": rows, "rows_total": g, "truncated": truncated,
-            "cursor": str(lo + len(rows)) if truncated else None}
+    out = {"rows": rows, "rows_total": g, "truncated": truncated,
+           "cursor": str(lo + len(rows)) if truncated else None}
+    if "prop_keys" in ext:
+        out["prop_coercion"] = {k: int(n) for k, n in
+                                zip(ext["prop_keys"], got["prop_skipped"])}
+    return out
+
+
+#: aggregate_events' columnar fold (`_native`): per event read and folded,
+#: measured 1.5-4 ms/M on the five calibration stores; the
+#: window test over the relation's start times (~1 ms/M: 18 ms for a 1 %
+#: window on an SNB SF1 store's 21.6M versions); per output group the row
+#: built in Python.
+AGG_KERNEL_MS_PER_M = 20.0
+AGG_SCAN_MS_PER_M = 2.0
+AGG_GROUP_MS = 0.005
+AGG_CALL_MS = 2.0
+
+
+def _aggregate_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """The events in the window (`t_a <= vt_s < t_b`: the window's share of
+    the relation's versions) folded by the engine where the call takes its
+    columnar route, the same test as the dispatch below; otherwise the
+    portable path's `scan_estimate` (that price was 10 to 250 times the
+    fold's time). Output groups are at most the events, and per dimension at
+    most its buckets, rel types or entities."""
+    routes = stats.get(ROUTES_KEY) or {}
+    extended = (bool(_prop_keys(args)) or args.get("endpoint_filter") is not None
+                or args.get("valid_at") is not None)
+    kernel = (routes.get("aggregate_kernel")
+              and (not extended or (routes.get("aggregate_ext")
+                                    and os.environ.get(AGG_EXT_ENV) != "python"))
+              and args.get("pair_mode") is None
+              and not any(a["agg"] in SEQ_AGGS for a in args["aggregates"])
+              and not any(d["dim"] == "calendar_unit" for d in args["group_by"]))
+    if not kernel:
+        return scan_estimate(args, stats)
+    rel = rel_rows(stats, args.get("rel_types"))
+    rows = int(rel * window_fraction(args, stats))
+    groups = 1.0
+    for d in args["group_by"]:
+        if d["dim"] == "time_bucket":
+            w = args["window"]
+            groups *= max(1, -(-(w["t_b"] - w["t_a"]) // max(1, int(args.get("stride") or 1))))
+        elif d["dim"] == "rel_type":
+            groups *= max(1, len(stats.get("rel_type_counts") or {}) or 1)
+        else:
+            groups *= max(1, int(stats.get("n_entities") or 1))
+    out = min(float(rows), groups)
+    ms = (AGG_CALL_MS + rel * AGG_SCAN_MS_PER_M / 1e6 + rows * AGG_KERNEL_MS_PER_M / 1e6
+          + out * AGG_GROUP_MS) * coeff_scale()
+    return {"rows_scanned_est": rows, "expansions_est": 0, "time_est_ms": int(ms)}
 
 
 @operator(
@@ -897,10 +1036,11 @@ def _native(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     "`max_session_span` with `gap` is the longest run of events no two of "
     "which are more than `gap` apart, measured first to last. One `span` "
     "and one `gap` per call.",
-    cost_fn=scan_estimate,
+    cost_fn=_aggregate_cost,
     validators=[_aggregate_validators],
     output_fields=("rows", "rows_total", "truncated", "cursor",
                    "prop_coercion"),
+    engine_schema=_engine_schema,
 )
 def aggregate_events(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     # A property-touching call takes the portable path on every backend: the
@@ -915,14 +1055,25 @@ def aggregate_events(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str,
     # sliding window and a session all need. Pushing them down is a kernel
     # design question, and the measurement that would justify it is a
     # measurement of this.
-    if (hasattr(adapter, "aggregate_events_columnar") and not _prop_keys(args)
+    #
+    # Properties and cohorts (`prop_filter`, `of: "prop"`, `endpoint_filter`)
+    # now take the engine's extended fold where the adapter has one, which
+    # reads the typed values natively under the same rule and declines any
+    # call whose answer it cannot reproduce exactly (`aggprops.rs`).
+    # `GNOMON_AGG_EXT=python` keeps them on the portable path.
+    extended = (bool(_prop_keys(args)) or args.get("endpoint_filter") is not None
+                or args.get("valid_at") is not None)
+    if (hasattr(adapter, "aggregate_events_columnar")
+            and (not extended or (getattr(adapter, "AGGREGATE_EXT", False)
+                                  and os.environ.get(AGG_EXT_ENV) != "python"))
             and args.get("pair_mode") is None
-            and args.get("endpoint_filter") is None
             and not any(a["agg"] in SEQ_AGGS for a in args["aggregates"])
             # the kernel's dimension codes are a time-bucket index, a rel
             # code, a dense id or a label code; a calendar unit is none of
             # those and pushing it down means teaching it civil arithmetic
             and not any(d["dim"] == "calendar_unit"
                         for d in args["group_by"])):
-        return _native(adapter, args)
+        out = _native(adapter, args)
+        if out is not None:
+            return out
     return _portable(adapter, args)

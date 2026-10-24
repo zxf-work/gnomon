@@ -368,7 +368,7 @@ impl NativeStore {
     /// `mode` follows the rule in [`NativeStore::open_segment_mode`]: the
     /// selective form is a point read that will come back, so it caches; the
     /// whole-segment form is one pass of a store-sized walk, so it does not.
-    fn edge_rows_sel(
+    pub(crate) fn edge_rows_sel(
         &self,
         file: &str,
         id: u64,
@@ -439,7 +439,7 @@ impl NativeStore {
     }
 
     /// Node versions in one segment: all of them, or just `rows`.
-    fn node_rows_sel(
+    pub(crate) fn node_rows_sel(
         &self,
         file: &str,
         id: u64,
@@ -529,14 +529,14 @@ impl NativeStore {
     /// Edge versions staged in the open batch, if any.
     pub(crate) fn staged_edge_versions(&self) -> Result<Vec<EdgeVersionOut>> {
         self.staged_edges()
-            .iter()
+            .rows()
             .map(|r| self.staged_edge_out(r))
             .collect()
     }
 
     pub(crate) fn staged_node_versions(&self) -> Result<Vec<NodeVersionOut>> {
         self.staged_nodes()
-            .iter()
+            .rows()
             .map(|r| self.staged_node_out(r))
             .collect()
     }
@@ -549,7 +549,7 @@ impl NativeStore {
     /// a k-op batch cost O(k²): 0.077 s at 500 asserts, 22 s at 8,000.
     /// `key` is a prefix, so these are candidates; the caller's exact `eid`
     /// comparison still decides, exactly as it does for committed rows.
-    fn staged_edge_versions_for(&self, key: u64) -> Result<Vec<EdgeVersionOut>> {
+    pub(crate) fn staged_edge_versions_for(&self, key: u64) -> Result<Vec<EdgeVersionOut>> {
         let positions = self.staging().edge_positions(key, |r| {
             Ok(edge_eid(
                 &self.uid_of(r.src_id)?,
@@ -562,13 +562,18 @@ impl NativeStore {
         let staged = self.staged_edges();
         positions
             .iter()
-            .map(|&i| self.staged_edge_out(&staged[i as usize]))
+            .map(|&i| {
+                let r = staged.get(i as usize).ok_or_else(|| {
+                    EngineError::invariant(format!("staged edge {i} indexed but retired"))
+                })?;
+                self.staged_edge_out(r)
+            })
             .collect()
     }
 
     /// Staged node versions for one uid. Node identity is dense, so this is
     /// exact: a uid the dictionary does not know cannot have a staged row.
-    fn staged_node_versions_for(&self, uid: &str) -> Result<Vec<NodeVersionOut>> {
+    pub(crate) fn staged_node_versions_for(&self, uid: &str) -> Result<Vec<NodeVersionOut>> {
         let Some(uid_id) = self.dict().dense_id(uid) else {
             return Ok(Vec::new());
         };
@@ -576,7 +581,12 @@ impl NativeStore {
         let staged = self.staged_nodes();
         positions
             .iter()
-            .map(|&i| self.staged_node_out(&staged[i as usize]))
+            .map(|&i| {
+                let r = staged.get(i as usize).ok_or_else(|| {
+                    EngineError::invariant(format!("staged node {i} indexed but retired"))
+                })?;
+                self.staged_node_out(r)
+            })
             .collect()
     }
 
@@ -714,7 +724,7 @@ impl NativeStore {
     ///
     /// `f` may mutate the entry, which is how `locate_open` performs its
     /// in-place prune.
-    fn with_segment_postings<T>(
+    pub(crate) fn with_segment_postings<T>(
         &self,
         kind: RowKind,
         seg_id: u64,
@@ -759,6 +769,13 @@ impl NativeStore {
     /// segment is a candidate and is asked in turn. What the byte budget
     /// bounds is what asking costs in memory — a segment's postings are folded, used,
     /// and kept only while the budget has room for them.
+    /// Every stored `(file, row)` carrying identity `key`, any belief: the
+    /// identity point read the pattern executor (`matcher.rs`) filters by
+    /// belief mode and valid time itself.
+    pub(crate) fn locate_rows(&self, kind: RowKind, key: u64) -> Result<Vec<(String, u32)>> {
+        self.locate(kind, key)
+    }
+
     fn locate(&self, kind: RowKind, key: u64) -> Result<Vec<(String, u32)>> {
         let files = self.segment_files();
         let mut out = Vec::new();
@@ -787,7 +804,7 @@ impl NativeStore {
     /// Only the current-belief question has a standing answer worth indexing:
     /// "which rows are open now". Every historical `as_of` is a different
     /// question per tt and keeps the walk.
-    fn is_current_belief(as_of_tt: i64) -> bool {
+    pub(crate) fn is_current_belief(as_of_tt: i64) -> bool {
         crate::clamp_tt(as_of_tt) >= OPEN_END - 1
     }
 
@@ -997,6 +1014,62 @@ impl NativeStore {
         Ok(out)
     }
 
+    /// Every version of one logical edge ever written, whatever its belief,
+    /// with its effective `tt_e` (closes applied), ordered by `(tt_s, vid)`:
+    /// the identity's belief log. The identity postings locate the rows, so
+    /// the cost is the identity's own history, not the store's
+    /// (`version_history` with a `ref`).
+    pub fn edge_versions_of(&self, eid: &str) -> Result<Vec<EdgeVersionOut>> {
+        let key = Id96::from_hex(eid).map(|i| i.hi)?;
+        let closes = self.close_index()?;
+        let mut by_file: std::collections::BTreeMap<String, Vec<u32>> = Default::default();
+        for (file, row) in self.locate(RowKind::Edge, key)? {
+            by_file.entry(file).or_default().push(row);
+        }
+        let mut out = Vec::new();
+        for (file, rows) in by_file {
+            let id = segment_id_of(&file);
+            // a prefix hit is a candidate; the full eid decides
+            for r in self.edge_rows_sel(&file, id, &closes, Some(&rows), OpenMode::Cached)? {
+                if r.eid == eid {
+                    out.push(r);
+                }
+            }
+        }
+        out.extend(
+            self.staged_edge_versions_for(key)?
+                .into_iter()
+                .filter(|r| r.eid == eid),
+        );
+        out.sort_by(|a, b| (a.tt_s, &a.vid).cmp(&(b.tt_s, &b.vid)));
+        Ok(out)
+    }
+
+    /// [`Self::edge_versions_of`] for a node identity.
+    pub fn node_versions_of(&self, uid: &str) -> Result<Vec<NodeVersionOut>> {
+        let closes = self.close_index()?;
+        let mut by_file: std::collections::BTreeMap<String, Vec<u32>> = Default::default();
+        for (file, row) in self.locate(RowKind::Node, uid_key(uid))? {
+            by_file.entry(file).or_default().push(row);
+        }
+        let mut out = Vec::new();
+        for (file, rows) in by_file {
+            let id = segment_id_of(&file);
+            for r in self.node_rows_sel(&file, id, &closes, Some(&rows), OpenMode::Cached)? {
+                if r.uid == uid {
+                    out.push(r);
+                }
+            }
+        }
+        out.extend(
+            self.staged_node_versions_for(uid)?
+                .into_iter()
+                .filter(|r| r.uid == uid),
+        );
+        out.sort_by(|a, b| (a.tt_s, &a.vid).cmp(&(b.tt_s, &b.vid)));
+        Ok(out)
+    }
+
     pub fn believed_node_versions(&self, uid: &str, as_of_tt: i64) -> Result<Vec<NodeVersionOut>> {
         self.assert_full_belief(as_of_tt)?;
         let closes = self.close_index()?;
@@ -1048,7 +1121,7 @@ impl NativeStore {
     /// size. The two strategies below it grew with the store: the scan per
     /// batch with stored node versions, the postings walk per uid with live
     /// node segments, and together they were 29 % of ingest time at 100M
-    /// rows and 58 % at 1B (ingest cost breakdown, 2026-09-25).
+    /// rows and 58 % at 1B (measured by the per-phase ingest breakdown).
     ///
     /// **Any historical `as_of_tt`** keeps the walk below unchanged
     /// ([`ExistenceProbe::Walk`]), and both walk strategies stay callable by
@@ -1169,7 +1242,7 @@ impl NativeStore {
         // the open batch's closes of counted committed rows, per dense id;
         // a row closed twice in one batch is one row
         let mut closed_now: HashMap<u32, u32> = HashMap::new();
-        for (segment, row) in self.pending_closed_rows(RowKind::Node) {
+        for &(segment, row) in self.pending_closed_rows(RowKind::Node) {
             if let Some(id) = nb.counted_uid(segment, row) {
                 *closed_now.entry(id).or_default() += 1;
             }
@@ -1187,7 +1260,7 @@ impl NativeStore {
             let believed = committed > 0
                 || (!staged.is_empty()
                     && self.staging().node_positions(id).iter().any(|&i| {
-                        let r = &staged[i as usize];
+                        let Some(r) = staged.get(i as usize) else { return false };
                         let tt_e = staged_closes.get(&r.vid).copied().unwrap_or(OPEN_END);
                         believed_at(r.tt_s, tt_e, as_of_tt)
                     }));
@@ -1530,7 +1603,7 @@ impl NativeStore {
         // rows staged in an open batch: a batch must read its own writes
         let staged = self.staged_nodes();
         let staged_closes = self.staged_closes();
-        for (ri, r) in staged.iter().enumerate() {
+        for (ri, r) in staged.positions() {
             let tt_e = staged_closes.get(&r.vid).copied().unwrap_or(OPEN_END);
             if !believed_at(r.tt_s, tt_e, as_of_tt) {
                 continue;
@@ -1568,7 +1641,9 @@ impl NativeStore {
         }
         let canonical = |s: &Slot| -> Result<(&str, &str)> {
             if s.sel == STAGED {
-                let r = &staged[s.row as usize];
+                let r = staged.get(s.row as usize).ok_or_else(|| {
+                    EngineError::invariant(format!("staged node {} indexed but retired", s.row))
+                })?;
                 Ok((r.label.as_str(), r.props.as_str()))
             } else {
                 let (strings, label_ref, props_ref) = &views[s.sel as usize];
@@ -2237,7 +2312,7 @@ impl NativeStore {
         match kind {
             RowKind::Edge => {
                 let staged_closes = self.staged_closes();
-                for (i, r) in self.staged_edges().iter().enumerate() {
+                for (i, r) in self.staged_edges().positions() {
                     if r.vt_s >= f.t_b || r.vt_e <= f.t_a || r.tt_s > f.as_of {
                         continue;
                     }
@@ -2261,7 +2336,7 @@ impl NativeStore {
             }
             RowKind::Node => {
                 let staged_closes = self.staged_closes();
-                for (i, r) in self.staged_nodes().iter().enumerate() {
+                for (i, r) in self.staged_nodes().positions() {
                     if r.vt_s >= f.t_b || r.vt_e <= f.t_a || r.tt_s > f.as_of {
                         continue;
                     }

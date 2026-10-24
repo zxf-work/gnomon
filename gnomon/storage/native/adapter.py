@@ -27,6 +27,7 @@ import numpy as np
 from gnomon.core.errors import InvalidArgError, NotFoundError, StateError
 from gnomon.core.model import OPEN_END, EdgeVersion, NodeVersion, canonical_json, clamp_tt
 from gnomon.storage.base import StorageAdapter
+from gnomon.storage.crashpoint import crash_point
 
 try:
     from gnomon import _engine
@@ -68,6 +69,9 @@ class NativeAdapter(StorageAdapter):
     #: fetches identities afterwards for the rows that survive it, via
     #: `edge_idents_at`. Portable backends keep the base class columns.
     TCSR_COLS = ("src_id", "dst_id", "vt_s", "vt_e", "seg_id", "seg_row")
+    #: `aggregate_events_columnar` takes the extended fold's arguments
+    #: (properties, a property filter, a cohort) and may decline (`None`).
+    AGGREGATE_EXT = True
 
     #: `apply_ops` takes the batch's event-log record as `raw=`, so
     #: an `ingest_events` op can be staged from it by the engine
@@ -106,8 +110,11 @@ class NativeAdapter(StorageAdapter):
         # entirely -- a soak reading this across many periodic reopens needs
         # it to keep counting across all of them.
         self._reopen_on_enoent_total = 0
+        self._small_commit_init()
 
     def close(self) -> None:
+        if self._sc_on:
+            self.publish_pending()
         self._store.close()
 
     # --- reopen-on-ENOENT net ----------------------------------------------- #
@@ -182,8 +189,8 @@ class NativeAdapter(StorageAdapter):
         No store needed — it is a property of the extension module, not of
         an open handle — so this is a `staticmethod`: `NativeAdapter.build_info()`
         works without constructing one. Every timing record (`open_phase_us`,
-        `last_commit_phases`) should be paired with this: the 2026-09
-        engine-commit A/B diagnosis found the untimed residual absorbing all
+        `last_commit_phases`) should be paired with this: a diagnosis of the
+        engine's commit cost found the untimed residual absorbing all
         of the treatment's decile growth, and a debug-assertions build (which
         runs `store::publish`'s O(segments) `debug_assert_eq!` every commit)
         was the top candidate.
@@ -276,10 +283,48 @@ class NativeAdapter(StorageAdapter):
         `ops`. With it, each `ingest_events` op is offered to the engine's
         raw-record fast path first (`_ingest_events` below).
         """
+        if not self._sc_on:
+            self._apply_ops_once(ops, tt, raw)
+            return
+        self._sc_txn = (ops, tt, raw)
+        self._sc_cursor = None
+        self._sc_applying += 1
+        try:
+            self._apply_ops_once(ops, tt, raw)
+        finally:
+            self._sc_applying -= 1
+
+    def _apply_ops_once(self, ops: Sequence[dict[str, Any]], tt: int,
+                        raw: bytes | None) -> None:
+        fresh = not self._store.in_batch()
         self._ensure_batch(tt)
         if raw is None:
             super().apply_ops(ops, tt)
             return
+        # A transaction with per-operation ops is applied by the
+        # engine from its record (`crates/gnomon-core/src/apply_raw.rs`),
+        # which stages exactly what the loop below stages. Only on a batch
+        # this transaction opened, so a refusal can roll back this
+        # transaction and nothing else -- never on the small-commit path,
+        # whose batch carries unpublished batch-mates, nor under `paranoid`.
+        if (fresh and not self._sc_on and not self.paranoid
+                and any(op.get("op") != "ingest_events" for op in ops)):
+            try:
+                verdict = self._store.apply_ops_raw(raw, tt)
+            except Exception as e:
+                raise _translate(e) from None
+            if verdict == "applied":
+                self._tcsr = None  # as `apply_ops` does after its loop
+                self.note_frontier_tt(tt)
+                return
+            if verdict == "refused":
+                # an op the Python path raises on: undo the ops staged before
+                # it, then let that path apply the record again and raise there
+                try:
+                    self._store.rollback()
+                except Exception as e:
+                    raise _translate(e) from None
+                self._ensure_batch(tt)
         self._raw_batch = (raw, {id(op): i for i, op in enumerate(ops)})
         try:
             super().apply_ops(ops, tt)
@@ -309,6 +354,12 @@ class NativeAdapter(StorageAdapter):
         pass
 
     def commit(self) -> None:
+        if self._sc_on:
+            self._small_commit_end_txn()
+            return
+        self._publish()
+
+    def _publish(self) -> None:
         if not self._store.in_batch():
             return  # a batch that wrote nothing publishes nothing
         t = time.perf_counter()
@@ -330,12 +381,173 @@ class NativeAdapter(StorageAdapter):
         return self._last_commit_python_wrap_us
 
     def rollback(self) -> None:
+        if self._sc_on:
+            self._small_commit_rollback()
+            return
         if not self._store.in_batch():
             return
         try:
             self._store.rollback()
         except Exception as e:
             raise _translate(e) from None
+
+    # --- the small-commit path (GNOMON_SMALL_COMMIT=1, opt-in) --------------- #
+    #
+    # A transaction is durable once `Store._write` has fsynced its event-log
+    # record: that record is the source of truth, and a crash before the
+    # generation that contains it is published is recovered by the
+    # suffix replay (`Store._recover`). The per-transaction generation is a
+    # materialized view of the log, so the small-commit path keeps the engine
+    # batch open across transactions and publishes one generation per
+    # `small_commit_n` transactions, or once the oldest unpublished one is
+    # `small_commit_ms` old, or before any read on this handle, or on close.
+    #
+    # What that changes is cross-process visibility and nothing else: a
+    # reader in another process (a `read_only` handle) sees published
+    # generations, so it may lag this writer by up to N transactions or T
+    # ms. This handle always reads its own commits — every read method
+    # publishes first (`_small_commit_barrier`). Durability, the event-log
+    # bytes and both digests are unchanged: each transaction keeps its own
+    # log record and its rows their own `tt_s`; only how many transactions
+    # one generation carries differs.
+    #
+    # A transaction that fails rolls the engine batch back — which discards
+    # its unpublished batch-mates too — and the batch-mates are applied
+    # again from their records. Apply is deterministic (replay rests on
+    # that), so they stage exactly what they staged the first time.
+
+    #: Methods the read barrier leaves alone: the write path itself, the
+    #: dictionary (staged entities are visible either way), what describes
+    #: the handle, and the compaction trigger, which is a question about
+    #: published state that the replay driver asks after every transaction.
+    _SC_NO_BARRIER = frozenset({
+        "apply_ops", "begin", "commit", "rollback", "close", "publish_pending",
+        "small_commit", "small_commit_pending", "insert_node_versions",
+        "insert_edge_versions", "close_node_versions", "close_edge_versions",
+        "retire_node_versions", "retire_edge_versions", "ensure_entities",
+        "dense_ids", "uids_for", "num_entities", "note_event_cursor",
+        "note_frontier_tt", "frontier_tt", "designs", "build_info",
+        "last_commit_python_wrap_us", "reopen_on_enoent_total",
+        "needs_compaction", "needs_whole_store_compaction", "needs_settle",
+    })
+
+    def _small_commit_init(self) -> None:
+        on, n, ms = (False, 1, 0) if self.read_only else self._store.small_commit()
+        self._sc_on = bool(on)
+        self._sc_n = max(1, int(n))
+        self._sc_ms = max(0, int(ms))
+        #: unpublished transactions, oldest first: `(ops, tt, raw, cursor)`
+        self._sc_pending: list[tuple[Sequence[dict[str, Any]], int, bytes | None,
+                                     tuple[int, str] | None]] = []
+        self._sc_txn: tuple[Sequence[dict[str, Any]], int, bytes | None] | None = None
+        self._sc_cursor: tuple[int, str] | None = None
+        self._sc_first = 0.0
+        self._sc_tt = 0
+        self._sc_applying = 0
+        #: serializes a publish with this handle's own reads: the publish may
+        #: come from `Store`'s timer thread (the `small_commit_ms` bound)
+        import threading
+        self._sc_lock = threading.RLock()
+        if self._sc_on:
+            self._small_commit_barrier()
+
+    def small_commit(self) -> dict[str, Any]:
+        """The small-commit path as this handle runs it: `{"enabled", "n",
+        "ms"}`, read when the handle opened (`GNOMON_SMALL_COMMIT`,
+        `GNOMON_SMALL_COMMIT_N`, `GNOMON_SMALL_COMMIT_MS`)."""
+        return {"enabled": self._sc_on, "n": self._sc_n, "ms": self._sc_ms}
+
+    def small_commit_pending(self) -> tuple[int, float]:
+        """`(transactions acknowledged but unpublished, seconds the oldest
+        has waited)`; `(0, 0.0)` when the path is off or nothing is pending."""
+        if not self._sc_pending:
+            return 0, 0.0
+        return len(self._sc_pending), time.monotonic() - self._sc_first
+
+    def publish_pending(self) -> None:
+        """Publish the open batch now, if the small-commit path holds one."""
+        if not self._sc_on or self._sc_applying:
+            return
+        with self._sc_lock:
+            if self._sc_pending:
+                crash_point("py_small_commit_publish")
+                self._publish()
+            self._sc_pending.clear()
+
+    def _small_commit_end_txn(self) -> None:
+        if self._sc_txn is not None:
+            ops, tt, raw = self._sc_txn
+            self._sc_txn = None
+            if not self._sc_pending:
+                self._sc_first = time.monotonic()
+            self._sc_pending.append((ops, tt, raw, self._sc_cursor))
+            self._sc_cursor = None
+        if not self._store.in_batch():
+            # nothing staged by any pending transaction: nothing to publish,
+            # as on the default path
+            self._sc_pending.clear()
+            return
+        if (len(self._sc_pending) >= self._sc_n
+                or (time.monotonic() - self._sc_first) * 1e3 >= self._sc_ms):
+            self.publish_pending()
+            return
+        # acknowledged (the record is fsynced) but not yet published
+        crash_point("py_small_commit_deferred")
+
+    def _small_commit_rollback(self) -> None:
+        self._sc_txn = None
+        self._sc_cursor = None
+        if not self._store.in_batch():
+            return
+        try:
+            self._store.rollback()
+        except Exception as e:
+            raise _translate(e) from None
+        self._sc_tt = 0
+        mates = list(self._sc_pending)
+        if not mates:
+            return
+        self._sc_applying += 1
+        try:
+            cursor = None
+            for i, (ops, tt, raw, cur) in enumerate(mates):
+                self._apply_ops_once(ops, tt, raw)
+                if cur is not None:
+                    cursor = cur
+                if i == 0:
+                    crash_point("py_small_commit_reapply")
+            if cursor is not None:
+                self._store.set_event_cursor(int(cursor[0]), cursor[1])
+        finally:
+            self._sc_applying -= 1
+
+    def _small_commit_barrier(self) -> None:
+        """Shadow every read method of this instance with one that first
+        publishes what the handle holds unpublished, so a read here always
+        sees this writer's own commits through the ordinary (batch-free)
+        read paths. Installed only when the path is on: off, nothing on any
+        path changes."""
+        import inspect
+
+        def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+            def read(*args: Any, **kwargs: Any) -> Any:
+                if self._sc_applying:
+                    return fn(*args, **kwargs)
+                with self._sc_lock:
+                    if self._sc_pending:
+                        self.publish_pending()
+                    return fn(*args, **kwargs)
+            read.__name__ = getattr(fn, "__name__", "read")
+            read.__doc__ = getattr(fn, "__doc__", None)
+            return read
+
+        for name in dir(type(self)):
+            if name.startswith("_") or name in self._SC_NO_BARRIER:
+                continue
+            static = inspect.getattr_static(type(self), name)
+            if isinstance(static, (property, staticmethod, classmethod)) or not callable(static):
+                continue
+            setattr(self, name, wrap(getattr(self, name)))
 
     # --- replay cursor (suffix recovery) ------------------------------------ #
 
@@ -353,14 +565,26 @@ class NativeAdapter(StorageAdapter):
     def note_event_cursor(self, offset: int, chain: str) -> None:
         """Stage the cursor the next commit records in its manifest."""
         self._store.set_event_cursor(int(offset), chain)
+        if self._sc_on:
+            self._sc_cursor = (int(offset), chain)
 
     def _ensure_batch(self, tt: int) -> None:
-        """Open the engine batch lazily; `in_batch` is the source of truth."""
+        """Open the engine batch lazily; `in_batch` is the source of truth.
+        On the small-commit path a later transaction joins the batch its
+        unpublished predecessors left open, which moves the batch's
+        transaction time forward instead."""
         if not self._store.in_batch():
             try:
                 self._store.begin(tt)
             except Exception as e:
                 raise _translate(e) from None
+            self._sc_tt = tt
+        elif self._sc_on and tt > self._sc_tt:
+            try:
+                self._store.advance_batch(tt)
+            except Exception as e:
+                raise _translate(e) from None
+            self._sc_tt = tt
 
     # --- entities ---------------------------------------------------------- #
 
@@ -572,6 +796,54 @@ class NativeAdapter(StorageAdapter):
         return self._edges(self._read_op(
             lambda s: s.believed("edge", eid, clamp_tt(as_of_tt))))
 
+    def believed_node_versions_overlapping(self, uid: str, vt_s: int, vt_e: int,
+                                           as_of_tt: int = OPEN_END) -> list[NodeVersion]:
+        """The engine's windowed point read (`pointread.rs`): seeks to the
+        versions overlapping `[vt_s, vt_e)` instead of materializing the
+        uid's whole believed history and filtering it here. Same answer as
+        the base class's filter, in the same order."""
+        return self._nodes(self._read_op(
+            lambda s: s.believed_window("node", uid, int(vt_s), int(vt_e), clamp_tt(as_of_tt))))
+
+    def believed_edge_versions_overlapping(self, eid: str, vt_s: int, vt_e: int,
+                                           as_of_tt: int = OPEN_END, *,
+                                           src: str | None = None,
+                                           dst: str | None = None) -> list[EdgeVersion]:
+        # src/dst: ignored, as in `believed_edge_versions`
+        return self._edges(self._read_op(
+            lambda s: s.believed_window("edge", eid, int(vt_s), int(vt_e), clamp_tt(as_of_tt))))
+
+    def identity_versions(self, kind: str, key: str) -> list[NodeVersion] | list[EdgeVersion]:
+        """The engine's identity log (`read.rs::*_versions_of`): the
+        identity's rows located through its postings, every belief, closes
+        applied, open batch included, in `(tt_s, vid)` order. An edge key
+        that is not an eid's hex is no identity: empty."""
+        if kind == "edge":
+            try:
+                int(key, 16)
+            except ValueError:
+                return []
+            if len(key) != 24:
+                return []
+            return self._edges(self._read_op(lambda s: s.versions_of("edge", key)))
+        return self._nodes(self._read_op(lambda s: s.versions_of("node", key)))
+
+    def node_intervals(self, ids: Sequence[int], vt_min: int, vt_max: int,
+                       as_of_tt: int = OPEN_END) -> dict[int, list[tuple[int, int]]]:
+        """`{dense id: [(vt_s, vt_e), ...]}` of the node versions believed at
+        `as_of_tt` overlapping `[vt_min, vt_max)`, by one point read per id
+        (the windowed read of `believed_node_versions_overlapping`): what
+        `nodes_columnar(as_of_tt, vt_min, vt_max)` says about these ids."""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return {}
+        a, s_, e_ = self._read_op(lambda s: s.node_intervals(ids, int(vt_min), int(vt_max),
+                                                             clamp_tt(as_of_tt)))
+        out: dict[int, list[tuple[int, int]]] = {}
+        for i, x, y in zip(a, s_, e_):
+            out.setdefault(int(i), []).append((int(x), int(y)))
+        return out
+
     def nodes_with_believed_versions(
         self, uids: Sequence[str], as_of_tt: int = OPEN_END
     ) -> set[str]:
@@ -650,8 +922,7 @@ class NativeAdapter(StorageAdapter):
         version of the store to answer a 50-row question.
 
         Peak memory is therefore the page plus the key array plus the segment
-        cache budget, not ~1,060 bytes per stored version
-       .
+        cache budget, not ~1,060 bytes per stored version.
         """
         got = self._read_op(lambda s: s.version_page(
             kind, clamp_tt(as_of), t_a, t_b, belief,
@@ -724,12 +995,31 @@ class NativeAdapter(StorageAdapter):
         group_by: Sequence[tuple[str, str | None]],
         aggregates: Sequence[tuple[str, str | None]],
         max_groups: int,
-    ) -> dict[str, Any]:
+        prop_keys: Sequence[str] | None = None,
+        agg_props: Sequence[int | None] | None = None,
+        prop_filter: tuple[int, str, Any] | None = None,
+        cohort: tuple[Sequence[int], str] | None = None,
+        valid_at: int | None = None,
+    ) -> dict[str, Any] | None:
         """fast path: the whole grouped aggregation in one engine call
         (aggregate.rs — two-phase parallel partials over the scan's
         selections, fixed-width group codes, canonical order). Returns key
         code columns plus rehydration tables; the operator pages in Python.
+
+        With any of the last four arguments the engine runs its extended
+        fold and returns `None` when it declines the call; the answer then
+        carries `prop_skipped`, the per-key `prop_coercion` counts.
         """
+        ext: dict[str, Any] = {}
+        if prop_keys is not None:
+            ext["prop_keys"] = list(prop_keys)
+            ext["agg_props"] = list(agg_props) if agg_props is not None else None
+        if prop_filter is not None:
+            ext["prop_filter"] = (int(prop_filter[0]), str(prop_filter[1]), prop_filter[2])
+        if cohort is not None:
+            ext["cohort"] = ([int(i) for i in cohort[0]], str(cohort[1]))
+        if valid_at is not None:
+            ext["valid_at"] = int(valid_at)
         got = self._read_op(lambda s: s.aggregate_edges(
             as_of_tt=clamp_tt(as_of_tt),
             t_a=int(t_a),
@@ -739,8 +1029,13 @@ class NativeAdapter(StorageAdapter):
             group_by=[(d, r) for d, r in group_by],
             aggregates=[(a, o) for a, o in aggregates],
             max_groups=int(max_groups),
+            **ext,
         ))
+        if got is None:
+            return None
         return {
+            **({"prop_skipped": list(got["prop_skipped"])}
+               if "prop_skipped" in got else {}),
             "rows_total": int(got["rows_total"]),
             "keys": [np.asarray(k, dtype=np.int64) for k in got["keys"]],
             "aggs": got["aggs"],
@@ -933,7 +1228,7 @@ class NativeAdapter(StorageAdapter):
         """
         return dict(self._store.open_path_stats())
 
-    def designs(self) -> dict[str, bool]:
+    def designs(self) -> dict[str, Any]:
         """Which engine designs this handle runs with: `name -> in
         force`. Each ablation switch (`GNOMON_RANGE_VISIBILITY=0`,
         `GNOMON_WINDOW_FIRST=0`, `GNOMON_SEGMENT_PRUNE=0`, `GNOMON_TCSR=scan`,
@@ -941,7 +1236,10 @@ class NativeAdapter(StorageAdapter):
         `GNOMON_SEED_EXPANSION=0`, `GNOMON_ADJ_FILTERED_SCAN=0`) turns one
         design off and keeps every answer; the engine reads them once, when
         the handle opens, so this -- not the current environment -- is what
-        a receipt records. All `True` is the shipped engine."""
+        a receipt records. All `True` is the shipped engine. One entry is a
+        number, not a switch: `match_threads`, the threads the read kernels
+        split a large frontier or join over (`GNOMON_MATCH_THREADS`; by default
+        the available cores), which changes no answer and no row order."""
         return dict(self._store.designs())
 
     def reach_earliest(self, src: int, t_a: int, t_b: int, as_of_tt: int,
@@ -956,6 +1254,24 @@ class NativeAdapter(StorageAdapter):
             int(src), int(t_a), int(t_b), clamp_tt(as_of_tt), direction,
             int(offset), int(limit)))
 
+    def paths_topk(self, src: int, dst: int, t_a: int, t_b: int, as_of_tt: int,
+                   k: int, max_hops: int, budget: int,
+                   rounds: bool | None = None) -> dict[str, Any] | None:
+        """`temporal_paths` in the engine -- the graph read from both
+        ends in rounds (or one window read), latest-start pruning, every path
+        counted with its last edge by binary search, the first `k` kept as
+        they are found. `{"total", "arrival", "hops", "src_id", "dst_id",
+        "vt_s", "eid", "rel_type", "expansions", "exceeded", ...}`, the edge
+        lists path after path. `None` inside an open write batch, and under
+        `GNOMON_TCSR=python`, whose opt-out is the whole traversal path through
+        the NumPy index (as for `match_kernel` and `snapshot_kernel`). `rounds`
+        forces the reading by rounds on or off (None: `GNOMON_PATHS_ROUNDS`)."""
+        if tcsr_backend() == "python":
+            return None
+        return self._read_op(lambda s: s.temporal_paths(
+            int(src), int(dst), int(t_a), int(t_b), clamp_tt(as_of_tt),
+            int(k), int(max_hops), int(budget), rounds))
+
     def diff_snapshots_kernel(self, t1: int, t2: int, as_of_tt: int,
                               limit: int) -> dict[str, Any] | None:
         """`diff_snapshots` without `scope`, in the engine -- two
@@ -966,6 +1282,52 @@ class NativeAdapter(StorageAdapter):
         compare. `None` inside an open write batch."""
         return self._read_op(lambda s: s.diff_snapshots(
             int(t1), int(t2), clamp_tt(as_of_tt), int(limit)))
+
+    def match_kernel(self, plan_json: str, offset: int, limit: int) -> dict[str, Any] | None:
+        """`match` in the engine: execute one compiled plan
+        (`ops_match.plan_json`) on binding tables of dense ids, hops through
+        the per-segment adjacency index, typed property columns, and return
+        the page `[offset, offset + limit)` as `{"rows", "rows_total"}` with
+        each row a dict. `None` sends the operator to its reference route."""
+        if tcsr_backend() == "python":
+            return None             # the opt-out builds no per-segment index
+        got = self._read_op(lambda s: s.match_plan(plan_json, int(offset), int(limit)))
+        if got is None:
+            return None
+        cols = got["columns"]
+        rows = [{c: (json.loads(v[0]) if isinstance(v, tuple) else v)
+                 for c, v in zip(cols, r)} for r in got["rows"]]
+        return {"rows": rows, "rows_total": int(got["rows_total"])}
+
+    def match_pairs(self, plan_json: str) -> tuple | None:
+        """A weight pattern's plan in the engine, column-wise: `(src, dst,
+        w_kind, w_int, w_f64)` arrays (dense ids; 0 null, 1 integer, 2
+        float), or None for the rows route."""
+        if tcsr_backend() == "python":
+            return None
+        return self._read_op(lambda s: s.match_plan_pairs(plan_json))
+
+    def snapshot_kernel(self, seed_ids: Sequence[int], t: int, as_of_tt: int, hops: int,
+                        rel_types: list[str] | None) -> dict[str, Any] | None:
+        """`snapshot_subgraph` from its seeds in the engine: an undirected
+        breadth-first search with one adjacency call per level for the whole
+        frontier, node validity by identity point reads, and the induced
+        edges in `(vt_s, vid)` order. `None` inside an open write batch, and
+        under `GNOMON_TCSR=python`, which builds no per-segment index."""
+        if tcsr_backend() == "python":
+            return None
+        return self._read_op(lambda s: s.snapshot_expand(
+            [int(i) for i in seed_ids], int(t), clamp_tt(as_of_tt), int(hops),
+            list(rel_types) if rel_types else None))
+
+    def match_last_decline(self) -> str:
+        """Why the engine's `match` executor last declined a plan."""
+        return str(self._store.match_last_decline())
+
+    def match_label_counts(self) -> dict[str, int]:
+        """Node versions written per label (every version: an estimate for
+        the `match` compiler's step order), cached per generation."""
+        return {str(k): int(v) for k, v in self._read_op(lambda s: s.match_label_counts())}
 
     def phase_stats(self) -> dict[str, int]:
         """Per-phase read-path timers: `agg_*` for the aggregate path's own

@@ -9,7 +9,7 @@
 //! Nothing here is durable. A rolled-back batch simply drops the buffers; the
 //! event log keeps the record and replay re-fails it identically.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -90,8 +90,25 @@ pub struct Staging {
     /// folds into the sidecar instead of becoming a close run, and that
     /// question is asked once per close — a scan of the buffer would make a
     /// carve-heavy batch quadratic in its own size.
-    edge_vids: HashSet<Id96>,
-    node_vids: HashSet<Id96>,
+    ///
+    /// Edges map each vid to its buffer position, so a retire finds its row
+    /// without walking the buffer. The position is trusted only while
+    /// `edge_vid_scan` is false: a vid staged twice, or a buffer permuted by
+    /// [`Self::seal`], sets it, and a retire then scans, as it always did.
+    edge_vids: HashMap<Id96, u32>,
+    edge_vid_scan: bool,
+    /// Nodes, likewise (`retire_node`).
+    node_vids: HashMap<Id96, u32>,
+    node_vid_scan: bool,
+    /// Edge rows this batch retired, by buffer position (`retire_edge`).
+    /// Empty until the first retire; then one flag per row. A retired row
+    /// stays in the buffer, so positions never move, and every reader goes
+    /// through [`LiveEdges`], which skips it; [`Self::seal`] drops it.
+    edge_dead: Vec<bool>,
+    edge_dead_n: usize,
+    /// Node rows this batch retired, as `edge_dead` is for edges.
+    node_dead: Vec<bool>,
+    node_dead_n: usize,
     /// Identity index over the buffers, so a read-your-own-writes lookup
     /// touches the rows of *that* identity rather than every staged row.
     index: Mutex<StagedIndex>,
@@ -117,15 +134,77 @@ struct StagedIndex {
     nodes_upto: usize,
 }
 
-impl StagedIndex {
-    /// Re-key `edges` from `keys`, which must be the keys of the surviving
-    /// rows in buffer order.
-    fn rekey_edges(&mut self, keys: Vec<u64>) {
-        self.edges.clear();
-        for (pos, &k) in keys.iter().enumerate() {
-            self.edges.entry(k).or_default().push(pos as u32);
-        }
-        self.edge_keys = keys;
+/// The live rows of a staged buffer: every row but those the batch retired.
+/// Positions are buffer positions, the ones the identity index and a staged
+/// [`crate::read`] row key hold; there is deliberately no slice and no
+/// indexing, so a reader cannot count or address a retired row by accident.
+pub struct Live<'a, T> {
+    rows: &'a [T],
+    dead: &'a [bool],
+    dead_n: usize,
+}
+
+impl<T> Clone for Live<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Live<'_, T> {}
+
+/// The live staged edges.
+pub type LiveEdges<'a> = Live<'a, EdgeRow>;
+/// The live staged nodes.
+pub type LiveNodes<'a> = Live<'a, NodeRow>;
+
+fn alive(dead: &[bool], i: usize) -> bool {
+    dead.get(i).is_none_or(|d| !*d)
+}
+
+impl<'a, T> Live<'a, T> {
+    /// The live rows, in buffer order.
+    pub fn rows(&self) -> LiveIter<'a, T> {
+        LiveIter { rows: self.rows.iter().enumerate(), dead: self.dead }
+    }
+
+    /// The live rows with their buffer positions, in buffer order.
+    pub fn positions(&self) -> impl Iterator<Item = (usize, &'a T)> + 'a {
+        let dead = self.dead;
+        self.rows.iter().enumerate().filter(move |(i, _)| alive(dead, *i))
+    }
+
+    /// The row at buffer position `pos`, unless it was retired.
+    pub fn get(&self, pos: usize) -> Option<&'a T> {
+        self.rows.get(pos).filter(|_| alive(self.dead, pos))
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len() - self.dead_n
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<'a, T> IntoIterator for Live<'a, T> {
+    type Item = &'a T;
+    type IntoIter = LiveIter<'a, T>;
+    fn into_iter(self) -> LiveIter<'a, T> {
+        self.rows()
+    }
+}
+
+/// [`Live::rows`].
+pub struct LiveIter<'a, T> {
+    rows: std::iter::Enumerate<std::slice::Iter<'a, T>>,
+    dead: &'a [bool],
+}
+
+impl<'a, T> Iterator for LiveIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<&'a T> {
+        self.rows.by_ref().find(|(i, _)| alive(self.dead, *i)).map(|(_, r)| r)
     }
 }
 
@@ -166,8 +245,10 @@ impl Staging {
                 .sum::<u64>();
         let bufs = self.edges.capacity() * std::mem::size_of::<EdgeRow>()
             + self.nodes.capacity() * std::mem::size_of::<NodeRow>()
-            + (self.edge_vids.capacity() + self.node_vids.capacity())
-                * std::mem::size_of::<Id96>();
+            + self.edge_vids.capacity() * (std::mem::size_of::<Id96>() + 4)
+            + self.node_vids.capacity() * (std::mem::size_of::<Id96>() + 4)
+            + self.edge_dead.capacity()
+            + self.node_dead.capacity();
         let idx = self
             .index
             .lock()
@@ -177,42 +258,54 @@ impl Staging {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.edges.is_empty() && self.nodes.is_empty()
+        self.edge_count() == 0 && self.node_count() == 0
     }
 
+    /// Live staged edges (retired rows excluded).
     pub fn edge_count(&self) -> usize {
-        self.edges.len()
+        self.edges.len() - self.edge_dead_n
     }
 
+    /// Live staged nodes (retired rows excluded).
     pub fn node_count(&self) -> usize {
-        self.nodes.len()
+        self.nodes.len() - self.node_dead_n
     }
 
     pub fn push_edge(&mut self, row: EdgeRow) {
-        self.edge_vids.insert(row.vid);
+        if self.edge_vids.insert(row.vid, self.edges.len() as u32).is_some() {
+            self.edge_vid_scan = true;
+        }
+        if !self.edge_dead.is_empty() {
+            self.edge_dead.push(false);
+        }
         self.edges.push(row);
     }
 
     pub fn push_node(&mut self, row: NodeRow) {
-        self.node_vids.insert(row.vid);
+        if self.node_vids.insert(row.vid, self.nodes.len() as u32).is_some() {
+            self.node_vid_scan = true;
+        }
+        if !self.node_dead.is_empty() {
+            self.node_dead.push(false);
+        }
         self.nodes.push(row);
     }
 
     /// Staged rows, for read-your-own-writes inside the open batch.
-    pub fn edges(&self) -> &[EdgeRow] {
-        &self.edges
+    pub fn edges(&self) -> LiveEdges<'_> {
+        LiveEdges { rows: &self.edges, dead: &self.edge_dead, dead_n: self.edge_dead_n }
     }
 
-    pub fn nodes(&self) -> &[NodeRow] {
-        &self.nodes
+    pub fn nodes(&self) -> LiveNodes<'_> {
+        Live { rows: &self.nodes, dead: &self.node_dead, dead_n: self.node_dead_n }
     }
 
     pub fn has_edge_vid(&self, vid: Id96) -> bool {
-        self.edge_vids.contains(&vid)
+        self.edge_vids.contains_key(&vid)
     }
 
     pub fn has_node_vid(&self, vid: Id96) -> bool {
-        self.node_vids.contains(&vid)
+        self.node_vids.contains_key(&vid)
     }
 
     /// Positions in `edges()` of the rows whose identity key is `key`, in
@@ -233,7 +326,9 @@ impl Staging {
             // derived before either structure is touched: a failure here
             // must leave the watermark exactly where it was
             let k = key_of(&self.edges[pos])?;
-            ix.edges.entry(k).or_default().push(pos as u32);
+            if alive(&self.edge_dead, pos) {
+                ix.edges.entry(k).or_default().push(pos as u32);
+            }
             ix.edge_keys.push(k);
         }
         Ok(ix.edges.get(&key).cloned().unwrap_or_default())
@@ -244,7 +339,9 @@ impl Staging {
         let mut ix = self.index.lock().expect("staging index mutex poisoned");
         while ix.nodes_upto < self.nodes.len() {
             let pos = ix.nodes_upto;
-            ix.nodes.entry(self.nodes[pos].uid_id).or_default().push(pos as u32);
+            if alive(&self.node_dead, pos) {
+                ix.nodes.entry(self.nodes[pos].uid_id).or_default().push(pos as u32);
+            }
             ix.nodes_upto = pos + 1;
         }
         ix.nodes.get(&uid_id).cloned().unwrap_or_default()
@@ -254,57 +351,112 @@ impl Staging {
     /// when the same batch replaces a version it staged: that version was
     /// believed over no transaction time, so it is not sealed at all.
     ///
-    /// Buffer order is preserved (the survivors close up, they do not move
-    /// past one another), so the identity index only has to be re-keyed, not
-    /// rebuilt from the rows: the cached keys survive the removal in the same
-    /// order and no `eid` is derived twice.
+    /// The row is marked retired where it stands: the buffer keeps its
+    /// order and every position, the identity index drops that one position,
+    /// and the live rows are exactly the ones the old in-place removal left.
+    /// That removal walked and re-keyed the whole buffer per retire, so a
+    /// batch that stages k events and retracts r of them cost O(k r): 10 ms
+    /// a retire at 100k staged rows (SF1 daily-update transactions).
     pub fn retire_edge(&mut self, vid: Id96) -> bool {
-        if !self.edge_vids.remove(&vid) {
+        let Some(pos) = self.edge_vids.remove(&vid) else {
             return false;
-        }
-        let ix = self.index.get_mut().expect("staging index mutex poisoned");
-        // keyed rows are a *prefix* of the buffer, and stay one: removing a
-        // row from the prefix shifts only rows behind it
-        let mut kept = Vec::with_capacity(ix.edge_keys.len());
-        let mut pos = 0usize;
-        self.edges.retain(|r| {
-            let keep = r.vid != vid;
-            if keep {
-                if let Some(&k) = ix.edge_keys.get(pos) {
-                    kept.push(k);
-                }
+        };
+        if self.edge_vid_scan {
+            let hits: Vec<usize> = (0..self.edges.len())
+                .filter(|&p| alive(&self.edge_dead, p) && self.edges[p].vid == vid)
+                .collect();
+            for p in hits {
+                self.kill_edge(p);
             }
-            pos += 1;
-            keep
-        });
-        ix.rekey_edges(kept);
+        } else {
+            self.kill_edge(pos as usize);
+        }
         true
     }
 
-    pub fn retire_node(&mut self, vid: Id96) -> bool {
-        if !self.node_vids.remove(&vid) {
-            return false;
+    fn kill_edge(&mut self, p: usize) {
+        if self.edge_dead.is_empty() {
+            self.edge_dead = vec![false; self.edges.len()];
         }
-        self.nodes.retain(|r| r.vid != vid);
-        // node keys are read straight off the row, so dropping the index
-        // costs one integer pass at the next lookup and no derivation
+        if self.edge_dead[p] {
+            return;
+        }
+        self.edge_dead[p] = true;
+        self.edge_dead_n += 1;
         let ix = self.index.get_mut().expect("staging index mutex poisoned");
-        ix.nodes.clear();
-        ix.nodes_upto = 0;
+        if let Some(&k) = ix.edge_keys.get(p) {
+            if let Some(list) = ix.edges.get_mut(&k) {
+                if let Ok(i) = list.binary_search(&(p as u32)) {
+                    list.remove(i);
+                }
+                if list.is_empty() {
+                    ix.edges.remove(&k);
+                }
+            }
+        }
+    }
+
+    /// By tombstone, as [`Self::retire_edge`]: the old removal
+    /// `retain`ed the node buffer and dropped the node index, which the next
+    /// lookup rebuilt over every staged node -- per retire, so O(k r) again
+    /// (~0.3 ms a retire in an SF1 correction transaction).
+    pub fn retire_node(&mut self, vid: Id96) -> bool {
+        let Some(pos) = self.node_vids.remove(&vid) else {
+            return false;
+        };
+        if self.node_vid_scan {
+            let hits: Vec<usize> = (0..self.nodes.len())
+                .filter(|&p| alive(&self.node_dead, p) && self.nodes[p].vid == vid)
+                .collect();
+            for p in hits {
+                self.kill_node(p);
+            }
+        } else {
+            self.kill_node(pos as usize);
+        }
         true
+    }
+
+    fn kill_node(&mut self, p: usize) {
+        if self.node_dead.is_empty() {
+            self.node_dead = vec![false; self.nodes.len()];
+        }
+        if self.node_dead[p] {
+            return;
+        }
+        self.node_dead[p] = true;
+        self.node_dead_n += 1;
+        let uid_id = self.nodes[p].uid_id;
+        let ix = self.index.get_mut().expect("staging index mutex poisoned");
+        if p < ix.nodes_upto {
+            if let Some(list) = ix.nodes.get_mut(&uid_id) {
+                if let Ok(i) = list.binary_search(&(p as u32)) {
+                    list.remove(i);
+                }
+                if list.is_empty() {
+                    ix.nodes.remove(&uid_id);
+                }
+            }
+        }
     }
 
     /// Rows buffered, both kinds. `store::seal_ratios_for_batch` uses it to
     /// decide whether this batch can produce a chunk boundary at all.
     pub fn staged_rows(&self) -> usize {
-        self.edges.len() + self.nodes.len()
+        self.edge_count() + self.node_count()
     }
 
     pub fn clear(&mut self) {
         self.edges.clear();
         self.nodes.clear();
         self.edge_vids.clear();
+        self.edge_vid_scan = false;
+        self.edge_dead.clear();
+        self.edge_dead_n = 0;
         self.node_vids.clear();
+        self.node_vid_scan = false;
+        self.node_dead.clear();
+        self.node_dead_n = 0;
         *self.index.get_mut().expect("staging index mutex poisoned") = StagedIndex::default();
     }
 
@@ -338,6 +490,32 @@ impl Staging {
         // the sorts below permute the buffers, and the identity index holds
         // positions in the order it was built against
         *self.index.get_mut().expect("staging index mutex poisoned") = StagedIndex::default();
+        // retired rows go here, before anything reads the buffer as a whole;
+        // the sort then permutes it, so no vid position is trusted after this
+        if self.edge_dead_n > 0 {
+            let dead = std::mem::take(&mut self.edge_dead);
+            let mut i = 0usize;
+            self.edges.retain(|_| {
+                let keep = !dead[i];
+                i += 1;
+                keep
+            });
+            self.edge_dead_n = 0;
+        }
+        self.edge_dead.clear();
+        self.edge_vid_scan = true;
+        if self.node_dead_n > 0 {
+            let dead = std::mem::take(&mut self.node_dead);
+            let mut i = 0usize;
+            self.nodes.retain(|_| {
+                let keep = !dead[i];
+                i += 1;
+                keep
+            });
+            self.node_dead_n = 0;
+        }
+        self.node_dead.clear();
+        self.node_vid_scan = true;
 
         let t = Timer::start();
         self.edges.sort_by_key(|r| r.sort_key());
@@ -699,6 +877,166 @@ mod tests {
     fn zero_width_partitions_are_rejected() {
         assert!(PartitionMap::new(0, 0).is_err());
         assert!(PartitionMap::new(0, -1).is_err());
+    }
+
+    /// Retiring by tombstone answers exactly what removing the row in
+    /// place did. A pseudo-random run of pushes (vids drawn from a small pool,
+    /// so a vid is often staged twice), retires (of staged and of absent vids)
+    /// and identity lookups is held, after every step, to a model that keeps
+    /// the old semantics: a `Vec` the retire `retain`s.
+    #[test]
+    fn a_retire_by_tombstone_answers_what_removal_in_place_did() {
+        let key_of = |r: &EdgeRow| -> Result<u64> { Ok(r.src_id as u64 % 4) };
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for round in 0..6 {
+            let mut s = Staging::default();
+            let mut model: Vec<EdgeRow> = Vec::new();
+            for step in 0..600u32 {
+                let r = next();
+                let i = (r >> 8) as u32 % 90;
+                match r % 7 {
+                    0..=3 => {
+                        let mut e = edge(DAY + i as i64, DAY + i as i64 + 1, i);
+                        e.src_id = (r >> 20) as u32 % 9;
+                        model.push(e.clone());
+                        s.push_edge(e);
+                    }
+                    4 | 5 => {
+                        let vid = edge(DAY + i as i64, DAY + i as i64 + 1, i).vid;
+                        let had = model.iter().any(|e| e.vid == vid);
+                        model.retain(|e| e.vid != vid);
+                        assert_eq!(s.retire_edge(vid), had, "round {round} step {step}");
+                    }
+                    _ => {
+                        let k = (r >> 30) % 4;
+                        let pos = s.edge_positions(k, key_of).unwrap();
+                        let live = s.edges();
+                        let got: Vec<Id96> = pos.iter().map(|&p| live.get(p as usize).unwrap().vid).collect();
+                        let want: Vec<Id96> = model.iter().filter(|e| e.src_id as u64 % 4 == k).map(|e| e.vid).collect();
+                        assert_eq!(got, want, "round {round} step {step} key {k}");
+                    }
+                }
+                let live: Vec<Id96> = s.edges().rows().map(|e| e.vid).collect();
+                assert_eq!(live, model.iter().map(|e| e.vid).collect::<Vec<_>>(), "round {round} step {step}");
+                assert_eq!(s.edge_count(), model.len());
+                assert_eq!(s.edges().len(), model.len());
+                assert_eq!(s.edges().positions().count(), model.len());
+                let probe = edge(DAY + i as i64, DAY + i as i64 + 1, i).vid;
+                assert_eq!(s.has_edge_vid(probe), model.iter().any(|e| e.vid == probe));
+            }
+        }
+    }
+
+    /// Nodes retire by tombstone too, and answer what removal in place
+    /// did: the same pseudo-random run as the edge test, over node rows, with
+    /// `node_positions` checked against the model per entity.
+    #[test]
+    fn a_node_retire_by_tombstone_answers_what_removal_in_place_did() {
+        let node = |i: u32, uid_id: u32| NodeRow {
+            vid: version_vid(&format!("n{i}"), 100, i as i64),
+            uid_id,
+            label: "P".into(),
+            vt_s: i as i64,
+            vt_e: OPEN_END,
+            tt_s: 100,
+            props: "{}".into(),
+            source: "ingest".into(),
+            provenance_ref: None,
+        };
+        let mut x = 0x5851_f42d_4c95_7f2du64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for round in 0..6 {
+            let mut s = Staging::default();
+            let mut model: Vec<NodeRow> = Vec::new();
+            for step in 0..600u32 {
+                let r = next();
+                let i = (r >> 8) as u32 % 90;
+                match r % 7 {
+                    0..=3 => {
+                        let n = node(i, (r >> 20) as u32 % 9);
+                        model.push(n.clone());
+                        s.push_node(n);
+                    }
+                    4 | 5 => {
+                        let vid = node(i, 0).vid;
+                        let had = model.iter().any(|n| n.vid == vid);
+                        model.retain(|n| n.vid != vid);
+                        assert_eq!(s.retire_node(vid), had, "round {round} step {step}");
+                    }
+                    _ => {
+                        let id = (r >> 30) as u32 % 9;
+                        let live = s.nodes();
+                        let got: Vec<Id96> = s
+                            .node_positions(id)
+                            .iter()
+                            .map(|&p| live.get(p as usize).unwrap().vid)
+                            .collect();
+                        let want: Vec<Id96> = model.iter().filter(|n| n.uid_id == id).map(|n| n.vid).collect();
+                        assert_eq!(got, want, "round {round} step {step} uid {id}");
+                    }
+                }
+                let live: Vec<Id96> = s.nodes().rows().map(|n| n.vid).collect();
+                assert_eq!(live, model.iter().map(|n| n.vid).collect::<Vec<_>>(), "round {round} step {step}");
+                assert_eq!(s.node_count(), model.len());
+                assert_eq!(s.nodes().positions().count(), model.len());
+                let probe = node(i, 0).vid;
+                assert_eq!(s.has_node_vid(probe), model.iter().any(|n| n.vid == probe));
+            }
+        }
+    }
+
+    /// A batch that staged rows and retired some seals exactly the
+    /// segments a batch that staged only the survivors seals.
+    #[test]
+    fn a_batch_with_retires_seals_what_its_survivors_alone_seal() {
+        let rows: Vec<EdgeRow> = (0..400u32)
+            .map(|i| edge(DAY + (i as i64 * 7919) % 5_000, DAY + 60 * DAY * (i as i64 % 3), i))
+            .collect();
+        let gone = |i: usize| i.is_multiple_of(3) || i.is_multiple_of(11);
+        let mut with = Staging::default();
+        for r in &rows {
+            with.push_edge(r.clone());
+        }
+        for (i, r) in rows.iter().enumerate() {
+            if gone(i) {
+                assert!(with.retire_edge(r.vid));
+            }
+        }
+        let mut only = Staging::default();
+        for (i, r) in rows.iter().enumerate() {
+            if !gone(i) {
+                only.push_edge(r.clone());
+            }
+        }
+        let seal = |s: &mut Staging, name: &str| {
+            let dir = tmp(name);
+            let mut next = 0u64;
+            let b = s
+                .seal(&dir, &PartitionMap::default(), 4096, &mut SealRatios::unmeasured(),
+                      &mut next, &HashMap::new())
+                .unwrap();
+            let bytes: Vec<Vec<u8>> = b
+                .segment_ids
+                .iter()
+                .map(|id| std::fs::read(dir.join(format!("{id:012}.tgs"))).unwrap())
+                .collect();
+            (b.edges.iter().map(|(l, e)| (*l, e.rows)).collect::<Vec<_>>(), bytes)
+        };
+        let a = seal(&mut with, "retired-seal-a");
+        let b = seal(&mut only, "retired-seal-b");
+        assert!(a.1.len() > 1, "the fixture spans several segments");
+        assert_eq!(a, b);
     }
 
     #[test]

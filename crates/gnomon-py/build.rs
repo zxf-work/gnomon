@@ -4,7 +4,7 @@
 //! directly, only a build script does.
 //!
 //! What this is for: `build_info()`'s `profile`/`opt_level` fields
-//! (`lib.rs`). The 2026-09 engine-commit A/B diagnosis found the untimed
+//! (`lib.rs`). A diagnosis of the engine's commit cost found the untimed
 //! residual absorbing all of the treatment's decile growth, and a
 //! debug-assertions build — which runs `publish`'s O(segments)
 //! `debug_assert_eq!` every commit — was the top candidate. Every future

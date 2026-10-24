@@ -218,6 +218,21 @@ impl NativeStore {
         out
     }
 
+    /// Move the open batch's transaction time forward (the small-commit
+    /// path: a later transaction joins the open batch).
+    fn advance_batch(&mut self, tt: i64) -> Res<()> {
+        self.inner.advance_batch(tt).map_err(err)
+    }
+
+    /// `(enabled, n, ms)` of the small-commit path, as this handle was
+    /// opened (`GNOMON_SMALL_COMMIT`, `GNOMON_SMALL_COMMIT_N`,
+    /// `GNOMON_SMALL_COMMIT_MS`; `designs()["publish_per_transaction"]` is its
+    /// negation).
+    fn small_commit(&self) -> (bool, u64, u64) {
+        let d = self.inner.designs();
+        (!d.publish_per_transaction, d.small_commit_n, d.small_commit_ms)
+    }
+
     fn commit(&mut self) -> Res<u64> {
         let t = Timer::start();
         let out = self.commit_body();
@@ -592,6 +607,27 @@ impl NativeStore {
         r
     }
 
+    /// Apply every op of an event-log record -- `assert_node`,
+    /// `assert_edge`, `retract`, `correct` and `ingest_events` -- at `tt` in
+    /// the engine, exactly as `base.py::apply_ops` would
+    /// (`gnomon_core::apply_raw`). `"applied"`; `"declined"` with
+    /// nothing changed (a shape it does not reproduce, or
+    /// `GNOMON_INGEST_RAW=0`); `"refused"` when an op met what the Python path
+    /// raises on after earlier ops were staged -- the caller rolls the batch
+    /// back and runs the Python path, which raises at the same op.
+    fn apply_ops_raw(&mut self, record: &[u8], tt: i64) -> Res<&'static str> {
+        use gnomon_core::apply_raw::ApplyRaw;
+        let t = Timer::start();
+        let r = self.inner.apply_ops_raw(record, tt).map_err(err);
+        t.stop(G::PyApplyRaw);
+        ip::add(G::PyCalls, 1);
+        r.map(|a| match a {
+            ApplyRaw::Applied => "applied",
+            ApplyRaw::Declined => "declined",
+            ApplyRaw::Refused => "refused",
+        })
+    }
+
     /// Close committed (or same-batch) versions.
     ///
     /// `vt_s`, when given, is the valid-time start of each row in `vids`,
@@ -671,6 +707,79 @@ impl NativeStore {
         t.stop(G::PyBelieved);
         ip::add(G::PyCalls, 1);
         out
+    }
+
+    /// Every version of one identity ever written, whatever its belief, with
+    /// its effective `tt_e`, open batch included, in `(tt_s, vid)` order:
+    /// the identity's belief log (`version_history` with a `ref`). Same
+    /// column dict as `believed`.
+    fn versions_of(&self, py: Python<'_>, kind: &str, identity: &str) -> Res<Py<PyDict>> {
+        match kind_of(kind)? {
+            RowKind::Edge => edges_to_py(py, self.inner.edge_versions_of(identity).map_err(err)?),
+            RowKind::Node => nodes_to_py(py, self.inner.node_versions_of(identity).map_err(err)?),
+        }
+    }
+
+    /// The believed versions of one identity that overlap the valid-time
+    /// window `[vt_lo, vt_hi)` at `as_of_tt`, open batch included, in
+    /// `(vt_s, vid)` order: `believed` filtered to the window, found by
+    /// seeking instead of by materializing the identity's history
+    /// (`gnomon_core::pointread`). Same column dict as `believed`.
+    #[pyo3(signature = (kind, identity, vt_lo, vt_hi, as_of_tt = OPEN_END))]
+    fn believed_window(
+        &self,
+        py: Python<'_>,
+        kind: &str,
+        identity: &str,
+        vt_lo: i64,
+        vt_hi: i64,
+        as_of_tt: i64,
+    ) -> Res<Py<PyDict>> {
+        let t = Timer::start();
+        let out = match kind_of(kind)? {
+            RowKind::Edge => edges_to_py(
+                py,
+                self.inner
+                    .believed_edge_versions_overlapping(identity, as_of_tt, vt_lo, vt_hi)
+                    .map_err(err)?,
+            ),
+            RowKind::Node => nodes_to_py(
+                py,
+                self.inner
+                    .believed_node_versions_overlapping(identity, as_of_tt, vt_lo, vt_hi)
+                    .map_err(err)?,
+            ),
+        };
+        t.stop(G::PyBelievedWindow);
+        ip::add(G::PyCalls, 1);
+        out
+    }
+
+    /// For each dense id, the `(vt_s, vt_e)` of its node versions believed at
+    /// `as_of_tt` that overlap `[vt_lo, vt_hi)`, by one point read per id:
+    /// `(ids, vt_s, vt_e)`, an id once per version, unknown ids skipped.
+    #[pyo3(signature = (ids, vt_lo, vt_hi, as_of_tt = OPEN_END))]
+    fn node_intervals(
+        &self,
+        ids: Vec<u32>,
+        vt_lo: i64,
+        vt_hi: i64,
+        as_of_tt: i64,
+    ) -> Res<(Vec<u32>, Vec<i64>, Vec<i64>)> {
+        let (mut out_id, mut out_s, mut out_e) = (Vec::new(), Vec::new(), Vec::new());
+        for id in ids {
+            let Some(uid) = self.inner.dict().uid(id).map(str::to_string) else { continue };
+            for v in self
+                .inner
+                .believed_node_versions_overlapping(&uid, as_of_tt, vt_lo, vt_hi)
+                .map_err(err)?
+            {
+                out_id.push(id);
+                out_s.push(v.vt_s);
+                out_e.push(v.vt_e);
+            }
+        }
+        Ok((out_id, out_s, out_e))
     }
 
     #[pyo3(signature = (uids, as_of_tt = OPEN_END))]
@@ -755,6 +864,7 @@ impl NativeStore {
                 ids
             }),
             touching_both,
+            vt_s_min: None,
             limit,
             // eid is `sha256(src_uid, dst_uid, rel_type, disc)`, so asking for
             // it implies materializing all four inputs even when the caller
@@ -922,8 +1032,16 @@ impl NativeStore {
     /// pairs — the operator's already-validated closed sets. Returns group
     /// key columns as fixed-width codes (NumPy i64) plus the rehydration
     /// tables; the operator builds only the requested page in Python.
+    ///
+    /// Engine-level extensions, all optional: `sum` over vt_s|duration;
+    /// `prop_keys` with `agg_props` (per aggregate, the key index of an
+    /// `of: "prop"` aggregate, else `None`); `prop_filter` as `(key index,
+    /// cmp, literal)`; `cohort` as `(dense ids, src|dst|either)`. A call
+    /// that uses any of the last three returns `None` when the kernel
+    /// declines (`aggprops`), and carries `prop_skipped` per key otherwise.
     #[pyo3(signature = (as_of_tt, t_a, t_b, rel_types, stride, group_by,
-                        aggregates, max_groups))]
+                        aggregates, max_groups, prop_keys=None, agg_props=None,
+                        prop_filter=None, cohort=None, valid_at=None))]
     #[allow(clippy::too_many_arguments)]
     fn aggregate_edges<'py>(
         &self,
@@ -936,8 +1054,17 @@ impl NativeStore {
         group_by: Vec<(String, Option<String>)>,
         aggregates: Vec<(String, Option<String>)>,
         max_groups: usize,
-    ) -> Res<Bound<'py, PyDict>> {
-        use gnomon_core::aggregate::{Agg, AggValues, AggregateRequest, Dim, Source};
+        prop_keys: Option<Vec<String>>,
+        agg_props: Option<Vec<Option<usize>>>,
+        prop_filter: Option<(usize, String, Bound<'py, PyAny>)>,
+        cohort: Option<(Vec<u32>, String)>,
+        valid_at: Option<i64>,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        use gnomon_core::aggprops::{PCmp, PLit, PNum};
+        use gnomon_core::aggregate::{
+            Agg, AggExt, AggValues, AggregateRequest, Cohort, CohortRole, Dim, Number,
+            PropFilter, Source,
+        };
 
         let is_dst = |role: &Option<String>, what: &str| -> Res<bool> {
             match role.as_deref() {
@@ -978,7 +1105,32 @@ impl NativeStore {
             }
         };
         let mut aggs = Vec::with_capacity(aggregates.len());
-        for (agg, of) in &aggregates {
+        for (i, (agg, of)) in aggregates.iter().enumerate() {
+            let key = agg_props.as_ref().and_then(|p| p.get(i).copied().flatten());
+            if let Some(k) = key {
+                if of.as_deref() != Some("prop") {
+                    return Err(PyRuntimeError::new_err(
+                        "aggregate_edges: a property key needs of = prop",
+                    ));
+                }
+                if k >= prop_keys.as_ref().map_or(0, |v| v.len()) {
+                    return Err(PyRuntimeError::new_err(
+                        "aggregate_edges: property key index out of range",
+                    ));
+                }
+                aggs.push(match agg.as_str() {
+                    "min" => Agg::PropMin(k),
+                    "max" => Agg::PropMax(k),
+                    "mean" => Agg::PropMean(k),
+                    "sum" => Agg::PropSum(k),
+                    other => {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "aggregate_edges: {other:?} takes no property"
+                        )))
+                    }
+                });
+                continue;
+            }
             aggs.push(match agg.as_str() {
                 "count" => Agg::Count,
                 "count_distinct" => Agg::CountDistinct {
@@ -987,12 +1139,66 @@ impl NativeStore {
                 "min" => Agg::Min(source(of)?),
                 "max" => Agg::Max(source(of)?),
                 "mean" => Agg::Mean(source(of)?),
+                "sum" => Agg::Sum(source(of)?),
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
                         "aggregate_edges: unknown aggregate {other:?}"
                     )))
                 }
             });
+        }
+        let extended = prop_keys.is_some()
+            || prop_filter.is_some()
+            || cohort.is_some()
+            || valid_at.is_some();
+        let mut ext = AggExt {
+            keys: prop_keys.unwrap_or_default(),
+            valid_at,
+            ..Default::default()
+        };
+        if let Some((key, cmp, lit)) = prop_filter {
+            if key >= ext.keys.len() {
+                return Err(PyRuntimeError::new_err(
+                    "aggregate_edges: filter key index out of range",
+                ));
+            }
+            let cmp = PCmp::parse(&cmp).ok_or_else(|| {
+                PyRuntimeError::new_err(format!("aggregate_edges: unknown comparison {cmp:?}"))
+            })?;
+            // bool before int: a Python bool is an int
+            let lit = if lit.is_instance_of::<pyo3::types::PyBool>() {
+                PLit::Bool(lit.extract()?)
+            } else if lit.is_instance_of::<pyo3::types::PyInt>() {
+                match lit.extract::<i64>() {
+                    Ok(i) => PLit::Num(PNum::Int(i)),
+                    // outside int64: not reproducible here; decline
+                    Err(_) => return Ok(None),
+                }
+            } else if lit.is_instance_of::<pyo3::types::PyFloat>() {
+                let f: f64 = lit.extract()?;
+                if !f.is_finite() {
+                    return Ok(None);
+                }
+                PLit::Num(PNum::Float(f))
+            } else if lit.is_instance_of::<pyo3::types::PyString>() {
+                PLit::Str(lit.extract()?)
+            } else {
+                PLit::None
+            };
+            ext.filter = Some(PropFilter { key, cmp, lit });
+        }
+        if let Some((ids, role)) = cohort {
+            let role = match role.as_str() {
+                "src" => CohortRole::Src,
+                "dst" => CohortRole::Dst,
+                "either" => CohortRole::Either,
+                other => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "aggregate_edges: unknown cohort role {other:?}"
+                    )))
+                }
+            };
+            ext.cohort = Some(Cohort { ids, role });
         }
         let req = AggregateRequest {
             as_of_tt,
@@ -1003,7 +1209,14 @@ impl NativeStore {
             aggs,
             max_groups,
         };
-        let out = self.inner.aggregate_edges(&req).map_err(err)?;
+        let (out, skipped) = if extended {
+            match self.inner.aggregate_edges_ext(&req, &ext).map_err(err)? {
+                None => return Ok(None),
+                Some(x) => (x.out, Some(x.skipped)),
+            }
+        } else {
+            (self.inner.aggregate_edges(&req).map_err(err)?, None)
+        };
 
         let d = PyDict::new(py);
         let n = out
@@ -1012,6 +1225,7 @@ impl NativeStore {
             .map(|c| match c {
                 AggValues::Int(v) => v.len(),
                 AggValues::Float(v) => v.len(),
+                AggValues::Num(v) => v.len(),
             })
             .unwrap_or(0);
         d.set_item("rows_total", n)?;
@@ -1025,9 +1239,23 @@ impl NativeStore {
             match col {
                 AggValues::Int(v) => aggs_py.append(v)?,
                 AggValues::Float(v) => aggs_py.append(v)?,
+                AggValues::Num(v) => {
+                    let l = PyList::empty(py);
+                    for x in v {
+                        match x {
+                            None => l.append(py.None())?,
+                            Some(Number::Int(i)) => l.append(i)?,
+                            Some(Number::Float(f)) => l.append(f)?,
+                        }
+                    }
+                    aggs_py.append(l)?
+                }
             }
         }
         d.set_item("aggs", aggs_py)?;
+        if let Some(s) = skipped {
+            d.set_item("prop_skipped", s)?;
+        }
         d.set_item("rel_names", PyList::new(py, &out.rel_names)?)?;
         d.set_item("label_names", PyList::new(py, &out.label_names)?)?;
         // Manifest-level prune selectivity, so "a narrow window opens
@@ -1038,7 +1266,7 @@ impl NativeStore {
         d.set_item("segments_pruned", out.stats.segments_pruned)?;
         d.set_item("segments_opened", out.stats.segments_opened)?;
         d.set_item("rows_selected", out.stats.rows_selected)?;
-        Ok(d)
+        Ok(Some(d))
     }
 
     /// `(eids, rel_types)` for explicit `(segment id, row)` scan addresses.
@@ -1415,6 +1643,10 @@ impl NativeStore {
         for (name, on) in self.inner.designs().named() {
             d.set_item(name, on)?;
         }
+        // not an on/off design: the thread count of the read kernels (every
+        // count answers the same rows in the same order)
+        d.set_item("match_threads", self.inner.designs().match_threads())?;
+        d.set_item("match_par_rows", self.inner.designs().match_par_rows)?;
         Ok(d.into())
     }
 
@@ -1547,6 +1779,30 @@ impl NativeStore {
         d.set_item("built", built)?;
         d.set_item("loaded", loaded)?;
         Ok(d.into())
+    }
+
+    /// The traversal's effective-`tt_e` columns: entries, bytes,
+    /// peak bytes, budget (`GNOMON_TT_E_COLUMN_BYTES`, default 256 MiB),
+    /// builds, build time, rows built, hits and evictions.
+    fn tt_e_column_stats(&self, py: Python<'_>) -> Res<Py<PyDict>> {
+        let (entries, bytes, peak, budget, builds, build_ns, rows, hits, evictions) =
+            self.inner.tt_e_column_stats();
+        let d = PyDict::new(py);
+        d.set_item("entries", entries)?;
+        d.set_item("bytes", bytes)?;
+        d.set_item("peak_bytes", peak)?;
+        d.set_item("budget", budget)?;
+        d.set_item("builds", builds)?;
+        d.set_item("build_ns", build_ns)?;
+        d.set_item("build_rows", rows)?;
+        d.set_item("hits", hits)?;
+        d.set_item("evictions", evictions)?;
+        Ok(d.into())
+    }
+
+    /// Drop the cached effective-`tt_e` columns (counters kept).
+    fn release_tt_e_columns(&self) {
+        self.inner.release_tt_e_columns();
     }
 
     /// Residency and provenance of this handle's TCSR indexes: how many
@@ -2286,6 +2542,151 @@ impl NativeStore {
         d.set_item("edge_cands", ec)?;
         Ok(Some(d))
     }
+
+    /// `match`: execute one compiled plan (`ops_match.plan_json`) and return
+    /// the page `[offset, offset + limit)` of the answer as `{"columns",
+    /// "rows", "rows_total"}`, each row a list in column order. A JSON value
+    /// (a whole `props`, or one property's value) comes as a 1-tuple of its
+    /// text for the operator to parse. `None` sends the operator to its
+    /// reference route (an open write batch, a form the executor does not
+    /// implement, or a row the evaluator would refuse).
+    fn match_plan<'py>(
+        &self,
+        py: Python<'py>,
+        plan: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        use gnomon_core::matcher::MVal;
+        let out = py.detach(|| self.inner.match_plan(plan, offset, limit)).map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("columns", &out.columns)?;
+        let rows = PyList::empty(py);
+        for r in &out.rows {
+            let row = PyList::empty(py);
+            for v in r {
+                match v {
+                    MVal::Null => row.append(py.None())?,
+                    MVal::Int(x) => row.append(*x)?,
+                    MVal::Float(x) => row.append(*x)?,
+                    MVal::Bool(x) => row.append(*x)?,
+                    MVal::Str(x) => row.append(x)?,
+                    MVal::Json(x) => row.append((x,))?,
+                }
+            }
+            rows.append(row)?;
+        }
+        d.set_item("rows", rows)?;
+        d.set_item("rows_total", out.rows_total)?;
+        Ok(Some(d))
+    }
+
+    /// A weight pattern's plan, column-wise: `(src, dst, w_kind, w_int,
+    /// w_f64)` as arrays (dense ids; 0 null, 1 integer, 2 float), or `None`
+    /// for the rows route.
+    #[allow(clippy::type_complexity)]
+    fn match_plan_pairs<'py>(
+        &self,
+        py: Python<'py>,
+        plan: &str,
+    ) -> Res<Option<(Bound<'py, PyArray1<u32>>, Bound<'py, PyArray1<u32>>, Bound<'py, PyArray1<u8>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>)>> {
+        let out = py.detach(|| self.inner.match_plan_pairs(plan)).map_err(err)?;
+        Ok(out.map(|o| {
+            (o.src.into_pyarray(py), o.dst.into_pyarray(py), o.w_kind.into_pyarray(py), o.w_int.into_pyarray(py), o.w_f64.into_pyarray(py))
+        }))
+    }
+
+    /// `snapshot_subgraph` from its seeds in the engine (the executor's
+    /// batched frontier): `{"nodes": [(uid, label, hop)], "edges": [dict]}`
+    /// with the edges in `(vt_s, vid)` order; `None` inside an open batch.
+    #[pyo3(signature = (seeds, t, as_of_tt, hops, rel_types=None))]
+    fn snapshot_expand<'py>(
+        &self,
+        py: Python<'py>,
+        seeds: Vec<u32>,
+        t: i64,
+        as_of_tt: i64,
+        hops: u32,
+        rel_types: Option<Vec<String>>,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        let out = py
+            .detach(|| self.inner.snapshot_expand(&seeds, t, as_of_tt, hops, rel_types.as_deref()))
+            .map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("nodes", out.nodes)?;
+        let rows = PyList::empty(py);
+        for e in &out.edges {
+            let r = PyDict::new(py);
+            r.set_item("eid", &e.eid)?;
+            r.set_item("vid", &e.vid)?;
+            r.set_item("src", &e.src)?;
+            r.set_item("dst", &e.dst)?;
+            r.set_item("rel_type", &e.rel_type)?;
+            r.set_item("vt_s", e.vt_s)?;
+            r.set_item("vt_e", e.vt_e)?;
+            rows.append(r)?;
+        }
+        d.set_item("edges", rows)?;
+        Ok(Some(d))
+    }
+
+    /// Why the `match` executor last declined a plan (empty if never).
+    fn match_last_decline(&self) -> String {
+        gnomon_core::matcher::last_decline()
+    }
+
+    /// Node versions written per label, `[(label, count)]`: the `match`
+    /// compiler's step-order estimates.
+    fn match_label_counts(&self, py: Python<'_>) -> Res<Vec<(String, u64)>> {
+        py.detach(|| self.inner.match_label_counts()).map_err(err)
+    }
+
+    /// `temporal_paths` in the engine: the total and the first `k`
+    /// paths as `{"total", "arrival", "hops", "src_id", "dst_id", "vt_s",
+    /// "eid", "rel_type", "expansions", "exceeded", "rows_read",
+    /// "by_rounds"}` (the edge lists run path after path); `None` inside an
+    /// open write batch (the operator keeps its own path there). `rounds`
+    /// forces the reading by rounds on or off (default: the
+    /// `GNOMON_PATHS_ROUNDS` setting, on).
+    #[pyo3(signature = (src, dst, t_a, t_b, as_of_tt, k, max_hops, budget, rounds = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn temporal_paths<'py>(
+        &self,
+        py: Python<'py>,
+        src: u32,
+        dst: u32,
+        t_a: i64,
+        t_b: i64,
+        as_of_tt: i64,
+        k: usize,
+        max_hops: usize,
+        budget: u64,
+        rounds: Option<bool>,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        let out = py
+            .detach(|| match rounds {
+                None => self.inner.temporal_paths(src, dst, t_a, t_b, as_of_tt, k, max_hops, budget),
+                Some(r) => self.inner.temporal_paths_via(src, dst, t_a, t_b, as_of_tt, k, max_hops, budget, r),
+            })
+            .map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("total", out.total)?;
+        d.set_item("arrival", out.arrival)?;
+        d.set_item("hops", out.hops)?;
+        d.set_item("src_id", out.src_id)?;
+        d.set_item("dst_id", out.dst_id)?;
+        d.set_item("vt_s", out.vt_s)?;
+        d.set_item("eid", out.eid)?;
+        d.set_item("rel_type", out.rel_type)?;
+        d.set_item("expansions", out.expansions)?;
+        d.set_item("exceeded", out.exceeded)?;
+        d.set_item("rows_read", out.rows_read)?;
+        d.set_item("by_rounds", out.by_rounds)?;
+        Ok(Some(d))
+    }
 }
 
 /// Plain (non-Python) helpers of the binding.
@@ -2485,6 +2886,41 @@ fn interval_pairs(
     })
 }
 
+/// The interval join's size and one page of it (`co_active`):
+/// [`interval_pairs`]' join minus `exclude`, counted without enumerating
+/// it, and the pairs at `[offset, offset + limit)` in `(a_row, b_row)`
+/// order. Returns `(total, pairs)`.
+#[pyfunction]
+#[pyo3(signature = (lo, hi, a_vt_e, b_vt_e, require_b_end_after_a_end, exclude, offset, limit))]
+#[allow(clippy::too_many_arguments)]
+fn interval_page(
+    py: Python<'_>,
+    lo: PyReadonlyArray1<'_, i64>,
+    hi: PyReadonlyArray1<'_, i64>,
+    a_vt_e: PyReadonlyArray1<'_, i64>,
+    b_vt_e: PyReadonlyArray1<'_, i64>,
+    require_b_end_after_a_end: bool,
+    exclude: Vec<(u32, u32)>,
+    offset: u64,
+    limit: usize,
+) -> Res<(u64, Vec<(u32, u32)>)> {
+    let (lo, hi, a_vt_e, b_vt_e) = (lo.as_slice()?, hi.as_slice()?, a_vt_e.as_slice()?, b_vt_e.as_slice()?);
+    py.detach(|| {
+        gnomon_core::interval::interval_page(
+            lo,
+            hi,
+            a_vt_e,
+            b_vt_e,
+            require_b_end_after_a_end,
+            &exclude,
+            offset,
+            limit,
+        )
+        .map(|p| (p.total, p.pairs))
+        .map_err(err)
+    })
+}
+
 /// Round-trip probe: proves the extension is importable,
 /// the core crate is linked, and arrays cross into NumPy without a copy.
 #[pyfunction]
@@ -2492,6 +2928,62 @@ fn interval_pairs(
 fn ping(py: Python<'_>, n: usize) -> Bound<'_, PyArray1<i64>> {
     let v: Vec<i64> = (0..n as i64).collect();
     v.into_pyarray(py)
+}
+
+/// `win_search`'s pieces: (node, cost, frac, ivs_off, ivs_lo, ivs_hi).
+type WinPieces = (Vec<u32>, Vec<i128>, Vec<bool>, Vec<u32>, Vec<i64>, Vec<i64>);
+
+/// `paths`' window least-cost search natively: the graph as CSR over
+/// local node indices (steps: to, lo, hi, scaled exact weight, fractional),
+/// the nodes' window-clipped existence as CSR, the search's options as
+/// `_win_search` takes them. Returns the pieces in settling order as
+/// `(node, cost, frac, ivs_off, ivs_lo, ivs_hi)`, or raises OverflowError
+/// past the expansion budget (the caller's CostError).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (off, to, lo, hi, w, frac, ex_off, ex_lo, ex_hi, source, va, vb, max_hops, targets, bound, first_only, budget))]
+fn win_search(
+    py: Python<'_>,
+    off: PyReadonlyArray1<'_, u32>,
+    to: PyReadonlyArray1<'_, u32>,
+    lo: PyReadonlyArray1<'_, i64>,
+    hi: PyReadonlyArray1<'_, i64>,
+    w: Vec<i128>,
+    frac: Vec<bool>,
+    ex_off: PyReadonlyArray1<'_, u32>,
+    ex_lo: PyReadonlyArray1<'_, i64>,
+    ex_hi: PyReadonlyArray1<'_, i64>,
+    source: u32,
+    va: i64,
+    vb: i64,
+    max_hops: Option<i128>,
+    targets: Vec<u32>,
+    bound: Option<i128>,
+    first_only: bool,
+    budget: usize,
+) -> Res<WinPieces> {
+    use gnomon_core::winsearch::{win_search as search, WinGraph, WinSearch};
+    let (off, to, lo, hi) = (off.as_slice()?, to.as_slice()?, lo.as_slice()?, hi.as_slice()?);
+    let (ex_off, ex_lo, ex_hi) = (ex_off.as_slice()?, ex_lo.as_slice()?, ex_hi.as_slice()?);
+    let g = WinGraph { off, to, lo, hi, w: &w, frac: &frac, ex_off, ex_lo, ex_hi };
+    let o = WinSearch { source, va, vb, max_hops, targets: &targets, bound, first_only, budget };
+    let pieces = py.detach(|| search(&g, &o)).map_err(|n| PyOverflowError::new_err(format!("expansions {n}")))?;
+    let mut node = Vec::with_capacity(pieces.len());
+    let mut cost = Vec::with_capacity(pieces.len());
+    let mut fr = Vec::with_capacity(pieces.len());
+    let mut ivs_off = vec![0u32];
+    let (mut ivs_lo, mut ivs_hi) = (Vec::new(), Vec::new());
+    for p in pieces {
+        node.push(p.node);
+        cost.push(p.cost);
+        fr.push(p.frac);
+        for (a, b) in p.ivs {
+            ivs_lo.push(a);
+            ivs_hi.push(b);
+        }
+        ivs_off.push(ivs_lo.len() as u32);
+    }
+    Ok((node, cost, fr, ivs_off, ivs_lo, ivs_hi))
 }
 
 /// Version of the Rust core, for determinism receipts.
@@ -2502,7 +2994,7 @@ fn core_version() -> &'static str {
 
 /// What this `.so` was built as, for every timing record to carry.
 ///
-/// The 2026-09 engine-commit A/B diagnosis found 100% of the treatment's
+/// A diagnosis of the engine's commit cost found 100% of the treatment's
 /// decile growth sitting in the untimed residual, and a debug-assertions
 /// build was the top candidate: `store::publish` runs an O(segments)
 /// `debug_assert_eq!` every commit (kept in test builds "as a real net over
@@ -2543,9 +3035,11 @@ fn build_info(py: Python<'_>) -> Bound<'_, PyDict> {
 fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeStore>()?;
     m.add_function(wrap_pyfunction!(interval_pairs, m)?)?;
+    m.add_function(wrap_pyfunction!(interval_page, m)?)?;
     m.add_function(wrap_pyfunction!(motif_match, m)?)?;
     m.add_function(wrap_pyfunction!(ping, m)?)?;
     m.add_function(wrap_pyfunction!(core_version, m)?)?;
+    m.add_function(wrap_pyfunction!(win_search, m)?)?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
     m.add("FORMAT_VERSION", gnomon_core::FORMAT_VERSION)?;
     m.add(

@@ -3,7 +3,7 @@
 //! One question was left unanswered with a sharp shape: on a tiered store the
 //! whole-extent aggregates cost 1.13–1.35× what they cost on a settled store
 //! holding *identical* content — same bytes touched, same rows selected, same
-//! decode count (zero, both arms warm). The residual is neither per byte nor
+//! decode count (zero, both configurations warm). The residual is neither per byte nor
 //! per row nor a per-opened-segment constant (`≤ 0.03 ms`, measured on the
 //! `*.w10` pair). Something is per selection *and* scales with the rows that
 //! selection carries, and no counter in the engine could say which phase.
@@ -181,11 +181,19 @@ pub enum Phase {
     /// Heap the derived staircases hold, summed over the
     /// derivations counted (bytes).
     StairDerivedBytes,
+    /// `match` plans the engine executed (`matcher.rs`).
+    MatchCalls,
+    /// `match`: the plan's execution up to the page, summed.
+    MatchExecNs,
+    /// `match`: adjacency calls (`neighbors_batch`) made by its hops, summed.
+    MatchHopNs,
+    /// `match`: building the page's values (strings for the page only).
+    MatchPageNs,
 }
 
 /// Wire names, indexed by [`Phase`]. Kept beside the enum so the two cannot
 /// drift; a test asserts the lengths agree.
-pub const NAMES: [&str; 52] = [
+pub const NAMES: [&str; 56] = [
     "agg_calls",
     "agg_labels_ns",
     "agg_prune_ns",
@@ -238,6 +246,10 @@ pub const NAMES: [&str; 52] = [
     "stair_derive_ns",
     "stair_derived",
     "stair_derived_bytes",
+    "match_calls",
+    "match_exec_ns",
+    "match_hop_ns",
+    "match_page_ns",
 ];
 
 const N: usize = NAMES.len();
@@ -301,7 +313,8 @@ mod tests {
     fn names_cover_every_slot_in_declaration_order() {
         // The enum's last variant must be the last name: a phase added
         // without a name would silently write into another phase's slot.
-        assert_eq!(Phase::StairDerivedBytes as usize, N - 1);
+        assert_eq!(Phase::MatchPageNs as usize, N - 1);
+        assert_eq!(NAMES[Phase::MatchCalls as usize], "match_calls");
         assert_eq!(NAMES[Phase::SnapEdgePages as usize], "snap_edge_pages_ns");
         assert_eq!(NAMES[Phase::StairDeriveNs as usize], "stair_derive_ns");
         assert_eq!(NAMES[Phase::ReachEdges as usize], "reach_edges_ns");

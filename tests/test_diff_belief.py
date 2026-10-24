@@ -353,7 +353,7 @@ def test_the_harness_registers_diff_belief_and_dispatches_it(corrected_store):
     q = queries[ids.index("diff.belief")]
     assert q.op == "diff_belief", "it is not a REGISTRY operator; see its note"
     assert q.args["t1"] == 42 and q.args["t2"] == OPEN_END
-    assert q.args["window"] == H._w10_window(0, 100)
+    assert q.args["window"] == H._fixed_window(0, 100)
 
     f = corrected_store
     payload = H._diff_belief_dispatch(
@@ -369,14 +369,13 @@ def test_the_harness_registers_diff_belief_and_dispatches_it(corrected_store):
         f["adapter"].diff_belief(0, OPEN_END, *WIDE, LIMIT))
 
 
-def test_diff_belief_is_not_a_registered_operator():
-    """`diff_belief` is an engine capability, not part of the operator
-    algebra: it is not in `REGISTRY` and runs through the harness bypass,
-    exactly like `lookup_name`.
-    """
-    from gnomon.temporal.algebra import REGISTRY, ensure_all_registered
+def test_diff_belief_is_an_engine_level_operator_only():
+    """The belief diff is registered for engine-level callers only, as
+    `match` is: it is in `REGISTRY` and outside `BASE_OPERATORS`, the base
+    operator set."""
+    from gnomon.temporal.algebra import BASE_OPERATORS, REGISTRY, ensure_all_registered
     ensure_all_registered()
-    assert "diff_belief" not in REGISTRY
+    assert "diff_belief" in REGISTRY and "diff_belief" not in BASE_OPERATORS
     assert "diff_snapshots" in REGISTRY, "the valid-time diff is still an operator"
 
 

@@ -550,8 +550,8 @@ def test_a_cross_process_reader_survives_a_settle_and_a_gc(tmp_path: Path) -> No
     emulated unpin.
 
     Settle supersedes *every* segment a reader's generation names — more than
-    a compaction does — so it is the strongest available test of pin-at-open
-   : a reader that opens and queries nothing has its whole generation
+    a compaction does — so it is the strongest available test of pin-at-open:
+    a reader that opens and queries nothing has its whole generation
     mapped at open, and must still answer correctly after the writer has
     settled and gc'd those exact files away.
     """

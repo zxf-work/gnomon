@@ -32,7 +32,7 @@ use gnomon_core::store::NativeStore;
 const TARGET: u64 = 1024 * 1024;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("gnomon-w11-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("gnomon-sealsize-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p

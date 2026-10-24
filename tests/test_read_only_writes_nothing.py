@@ -220,7 +220,7 @@ def _native_extras(adapter: Any, data: Any) -> None:
     step), belief diffs at several windows, every name-index mode, the
     explicit index builds, digest, verify and stats."""
     _identity_folds(adapter._store)
-    w = H._w10_window(data.t0, data.t1)
+    w = H._fixed_window(data.t0, data.t1)
     adapter.diff_belief(0, OPEN_END, w["t_a"], w["t_b"], 1000)
     adapter.diff_belief(0, OPEN_END, data.t0, data.t1, 100_000)
     for mode, q in (("exact", "n1"), ("prefix", "alp"), ("prefix", "n")):
@@ -302,7 +302,7 @@ def test_a_read_only_engine_handle_writes_nothing(corrected, tmp_path):
     before = _tree(path)
     s = _engine.NativeStore(str(path / "native"), read_only=True)
     assert s.is_read_only()
-    w = H._w10_window(corrected.t0, corrected.t1)
+    w = H._fixed_window(corrected.t0, corrected.t1)
     s.diff_belief(0, OPEN_END, w["t_a"], w["t_b"], 1000)
     _identity_folds(s)
     s.neighbors_of(0, "out")
@@ -365,7 +365,7 @@ def test_a_read_only_store_with_no_event_log_creates_none(corrected, tmp_path):
     try:
         assert store.adapter.stats()
         H._diff_belief_dispatch(store.adapter, {
-            "t1": 0, "t2": OPEN_END, "window": H._w10_window(0, SCALE), "limit": 10})
+            "t1": 0, "t2": OPEN_END, "window": H._fixed_window(0, SCALE), "limit": 10})
     finally:
         store.close()
     _assert_unchanged(before, _tree(path), "read-only open without an event log")

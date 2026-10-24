@@ -7,7 +7,7 @@
 //! two ways the store could answer — materialize every stored node version,
 //! or ask every live node segment's identity postings per endpoint — both
 //! grow with the store, so the probe went from 5 % of ingest time at 10M rows
-//! to 58 % at 1B (ingest cost breakdown, 2026-09-25).
+//! to 58 % at 1B (measured by the per-phase ingest breakdown).
 //!
 //! **The structure.** Node identity is already dense: every stored node row
 //! carries a `uid_id` that the dictionary maps one-to-one onto its uid. So

@@ -3038,8 +3038,8 @@ mod tests {
     /// model all declined. That is a regression on exactly the corpus the
     /// change cannot otherwise show a win on.
     #[test]
-    fn a_segment_using_no_w16a_mechanism_writes_no_w16a_keys() {
-        let path = tmp("no-w16a-keys");
+    fn a_segment_using_no_timecodec_mechanism_writes_no_timecodec_keys() {
+        let path = tmp("no-timecodec-keys");
         write_edge_segment(&path, &sorted_edges(1000), &SegmentSpec::default()).unwrap();
         let seg = open(&path);
         let json = serde_json::to_string(seg.header()).unwrap();
@@ -3082,7 +3082,7 @@ mod tests {
             .map(|i| edge(1_000 + i as i64, i, 100 + (i % 7) as i64))
             .collect();
         rows.sort_by_key(|r| r.sort_key());
-        let used = tmp("w16a-keys-used");
+        let used = tmp("timecodec-keys-used");
         write_edge_segment(&used, &rows, &SegmentSpec::default()).unwrap();
         let seg = open(&used);
         let json = serde_json::to_string(seg.header()).unwrap();
@@ -3458,7 +3458,7 @@ mod tests {
 /// did, column for column — codec, scale and bytes — over a fixture on
 /// which every candidate wins at least once.
 #[cfg(test)]
-mod w22_encode_tests {
+mod segment_encode_tests {
     use super::*;
 
     fn rng(state: &mut u64) -> u64 {

@@ -79,6 +79,9 @@ class Store:
         #: want concurrency without the serialization want
         #: `gnomon.write.GroupCommitWriter`, which coalesces instead.
         self._write_lock = threading.Lock()
+        #: The small-commit path's `small_commit_ms` bound (adapter.py): a
+        #: timer that publishes what an idle writer still holds unpublished.
+        self._sc_timer: threading.Timer | None = None
         #: The OS-level single-writer lock's held file handle, or None for a
         #: reader (readers never take this lock) or before it is acquired.
         self._writer_lock_fh: Any | None = None
@@ -390,8 +393,41 @@ class Store:
             crash_point("py_recover_mid_replay")
 
     def close(self) -> None:
-        self.adapter.close()
+        with self._write_lock:
+            if self._sc_timer is not None:
+                self._sc_timer.cancel()
+                self._sc_timer = None
+            self.adapter.close()
         self._release_writer_lock()
+
+    def _small_commit_schedule(self) -> None:
+        """Arm the publish timer when the write just acknowledged left the
+        adapter holding unpublished transactions (the small-commit path), so
+        a reader in another process never lags an idle writer by more than
+        `small_commit_ms`. Off — the default — the adapter has nothing
+        pending and this returns at once."""
+        pending = getattr(self.adapter, "small_commit_pending", None)
+        if pending is None or self._sc_timer is not None:
+            return
+        n, age = pending()
+        if not n:
+            return
+        ms = self.adapter.small_commit()["ms"]
+        t = threading.Timer(max(0.0, ms / 1e3 - age), self._small_commit_due)
+        t.daemon = True
+        self._sc_timer = t
+        t.start()
+
+    def _small_commit_due(self) -> None:
+        with self._write_lock:
+            self._sc_timer = None
+            n, age = self.adapter.small_commit_pending()
+            if not n:
+                return
+            if age * 1e3 >= self.adapter.small_commit()["ms"]:
+                self.adapter.publish_pending()
+            else:
+                self._small_commit_schedule()
 
     # --- OS-level single-writer lock ------------------------------- #
 
@@ -612,6 +648,7 @@ class Store:
         # would make it durable never runs.
         crash_point("py_before_engine_commit")
         self.adapter.commit()
+        self._small_commit_schedule()
         # this handle applied the batch itself, so its frontier is established
         # by observation from here on, whatever it could establish at open
         self.frontier_verified = True

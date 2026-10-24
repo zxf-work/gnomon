@@ -102,6 +102,13 @@ pub struct NativeStore {
     staged_closes: HashMap<Id96, i64>,
     /// Closes landing on already-committed rows, written as a close run.
     pending_closes: Vec<CloseRecord>,
+    /// `pending_closes` as physical addresses per kind (edge, node), kept
+    /// beside it: every mid-batch point read asks "has this batch closed
+    /// that row?", and building the set from the list per read made a
+    /// k-close transaction O(k^2) (76 % of an SF1 correction transaction's
+    /// cycles). Pushed and cleared exactly where
+    /// `pending_closes` is.
+    pending_closed: [std::collections::HashSet<(u64, u32)>; 2],
     partitions: PartitionMap,
     segment_target_bytes: u64,
     /// Cost-guardrail statistics, maintained incrementally (stats
@@ -121,6 +128,25 @@ pub struct NativeStore {
     /// manifest by every later one; `None` until then, and reset to `None`
     /// if a reconcile fails, so a partial state is never trusted.
     node_belief: std::sync::Mutex<Option<crate::node_belief::NodeBelief>>,
+    /// The pattern executor's typed property columns (`matcher.rs`): per
+    /// (kind, segment id, key), each interned payload's value at its JSON
+    /// type, parsed once. Derived and rebuildable, never persisted; segments
+    /// are immutable, so an entry stays valid until its segment is dropped.
+    pub(crate) match_props: crate::matcher::PropsCache,
+    /// The pattern executor's node version map of one (generation, as_of,
+    /// instant): dense id -> the version valid then. Derived, never persisted.
+    pub(crate) match_node_map: std::sync::Mutex<Option<crate::matcher::NodeMapEntry>>,
+    /// Node versions written per label, of one generation: the `match`
+    /// compiler's step-order estimates. Derived, never persisted.
+    pub(crate) match_labels: std::sync::Mutex<Option<crate::matcher::LabelCounts>>,
+    /// Per node segment (by segment id), its rows by label: the `match`
+    /// executor's label scans. Derived and rebuildable; segments are
+    /// immutable, so an entry stays valid while its segment lives.
+    pub(crate) match_label_rows: std::sync::Mutex<crate::matcher::LabelRowsCache>,
+    /// Per edge segment (by segment id), the rows of each relationship rare
+    /// in it: the `match` executor's hops over a rare relationship. Derived
+    /// and rebuildable, valid while the segment lives.
+    pub(crate) match_rel_rows: std::sync::Mutex<crate::matcher::RelRowsCache>,
     /// Identity postings, built incrementally. Segments are
     /// immutable and manifests only accumulate, so a segment is indexed once
     /// and never revisited — which keeps a store built by N single-row
@@ -202,6 +228,9 @@ pub struct NativeStore {
     /// segments, which simply have no entry yet; it can never invalidate an
     /// existing one. That is the property the counters below verify.
     tcsr_cache: std::sync::Mutex<HashMap<u64, std::sync::Arc<crate::tcsr::SegmentTcsr>>>,
+    /// The traversal's cached effective-`tt_e` columns, per edge segment that
+    /// carries closes ([`TtECols`]).
+    tt_e_cols: std::sync::Mutex<TtECols>,
     /// How many segment indexes this handle built from columns, and how many
     /// it loaded from `idx/tcsr/`. Counters, not timings: the claim is "after a
     /// write batch, only the new segments are rebuilt", which is an
@@ -392,7 +421,7 @@ pub struct CommitPhases {
     /// 0. In debug builds this used to run untimed ahead of `manifest_us`'s
     /// timer, so its O(segments) cost was folded into the residual and grew
     /// with generation count (`commit_phases_fully_account_for_total_us_
-    /// over_sixty_singleton_commits`, CI 2026-09-15).
+    /// over_sixty_singleton_commits`, in CI).
     pub debug_verify_us: u64,
     /// Step 4a: building the manifest record's JSON — a delta
     /// (`ManifestDelta::from_appends`, O(appended)) most generations, or a
@@ -684,11 +713,17 @@ impl NativeStore {
             staging: Staging::default(),
             staged_closes: HashMap::new(),
             pending_closes: Vec::new(),
+            pending_closed: Default::default(),
             partitions: PartitionMap::default(),
             segment_target_bytes: crate::defaults::SEGMENT_TARGET_BYTES,
             stats: std::sync::Mutex::new(None),
             stats_summary: std::sync::Mutex::new(None),
             node_belief: std::sync::Mutex::new(None),
+            match_props: crate::matcher::PropsCache::default(),
+            match_node_map: std::sync::Mutex::new(None),
+            match_labels: std::sync::Mutex::new(None),
+            match_label_rows: std::sync::Mutex::new(Default::default()),
+            match_rel_rows: std::sync::Mutex::new(Default::default()),
             edge_postings: std::sync::Mutex::new(Postings::new(postings_budget(
                 std::env::var("GNOMON_POSTINGS_BYTES").ok().as_deref(),
                 detected_ram_bytes(),
@@ -709,6 +744,9 @@ impl NativeStore {
             pin_fallback_logged: std::sync::atomic::AtomicBool::new(false),
             mem_peaks: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             tcsr_cache: std::sync::Mutex::new(HashMap::new()),
+            tt_e_cols: std::sync::Mutex::new(TtECols::new(tt_e_column_budget(
+                std::env::var("GNOMON_TT_E_COLUMN_BYTES").ok().as_deref(),
+            ))),
             tcsr_built: std::sync::atomic::AtomicU64::new(0),
             tcsr_loaded: std::sync::atomic::AtomicU64::new(0),
             vid_filters: std::sync::Mutex::new(Filters::new(crate::vidfilter::filter_budget(
@@ -883,7 +921,7 @@ impl NativeStore {
 
     /// Refuse to treat a populated directory as a fresh store just because
     /// `CURRENT` happens to be missing (corruption-sweep finding,
-    /// 2026-09-15: deleting `native/CURRENT` used to make `open` silently
+    /// Deleting `native/CURRENT` used to make `open` silently
     /// materialize an empty store, so every query returned empty results
     /// instead of failing).
     ///
@@ -1038,6 +1076,10 @@ impl NativeStore {
         let t = std::time::Instant::now();
         write_atomic(&m_path, &json)?;
         let manifest_us = t.elapsed().as_micros() as u64;
+        if delta.is_none() {
+            // a full checkpoint is durable and `CURRENT` still names its parent
+            crash_point("after_checkpoint");
+        }
         crash_point("after_manifest");
         let t = std::time::Instant::now();
         write_atomic(
@@ -1156,6 +1198,64 @@ impl NativeStore {
         // generation returns from cache rather than re-reading a file gc may
         // since have unlinked. Errors are swallowed for the same reason as
         // above.
+        let _ = self.committed_close_index();
+    }
+
+    /// [`Self::pin_generation_files`] for a generation that only appended
+    /// `appended` to `from`: the commit path's incremental form.
+    ///
+    /// The cached [`SegmentFiles`] of `from` is extended in place and
+    /// re-keyed (copied first only if a reader still holds it); when the cache
+    /// is not `from`'s it is left empty and rebuilt on first use. The pinned
+    /// map gains the appended files, or is cleared once the generation is
+    /// over `GNOMON_PIN_MAX_SEGMENTS`, exactly as the full pin decides. Nothing
+    /// is removed, because nothing was.
+    fn pin_appended(&self, from: u64, appended: &[(RowKind, String)]) {
+        let to = self.manifest.generation;
+        {
+            let mut cache = self.files_cache.lock().expect("files-cache mutex poisoned");
+            match cache.take() {
+                Some((g, mut files)) if g == from => {
+                    let f = std::sync::Arc::make_mut(&mut files);
+                    for (kind, name) in appended {
+                        let id = segment_id_of(name);
+                        match kind {
+                            RowKind::Edge => f.edge.insert(id, name.clone()),
+                            RowKind::Node => f.node.insert(id, name.clone()),
+                        };
+                    }
+                    *cache = Some((to, files));
+                }
+                _ => {}
+            }
+        }
+        let m = &self.manifest;
+        let total = m.edge_lanes.event.len() + m.edge_lanes.interval.len() + m.node_store.len();
+        let cap = pin_max_segments();
+        {
+            let mut pinned = self
+                .pinned_sources
+                .lock()
+                .expect("pinned-sources mutex poisoned");
+            if total > cap {
+                pinned.clear();
+                self.log_pin_fallback(total, cap);
+            } else {
+                for (_, name) in appended {
+                    if pinned.contains_key(name) {
+                        continue;
+                    }
+                    match MmapSource::load(&self.root.join(name)) {
+                        Ok(src) => {
+                            pinned.insert(name.clone(), src);
+                        }
+                        Err(e) => {
+                            eprintln!("gnomon: pin could not map {name} at generation {to}: {e}");
+                        }
+                    }
+                }
+            }
+        }
         let _ = self.committed_close_index();
     }
 
@@ -1422,6 +1522,7 @@ impl NativeStore {
             .lock()
             .expect("node-postings mutex poisoned")
             .retain_segments(&keep_ids);
+        self.match_props.retain_segments(&keep_ids);
         // A TCSR index of a segment that no longer exists can never be asked
         // for again, and holding it would make `tcsr_stats`' resident bytes
         // grow across compactions for no reader's benefit.
@@ -1429,6 +1530,19 @@ impl NativeStore {
             .lock()
             .expect("tcsr-cache mutex poisoned")
             .retain(|id, _| keep_ids.contains(id));
+        // …and the traversal's effective-tt_e columns
+        {
+            let mut c = self.tt_e_cols.lock().expect("tt_e column mutex poisoned");
+            let mut freed = 0u64;
+            c.map.retain(|id, e| {
+                let keep = keep_ids.contains(id);
+                if !keep {
+                    freed += (e.col.len() * 8) as u64;
+                }
+                keep
+            });
+            c.bytes -= freed;
+        }
         // …and the identity filters, for the same reason and by the same
         // rule. This is the gc hook `nameidx::CACHE` does not have.
         self.vid_filters
@@ -1552,7 +1666,9 @@ impl NativeStore {
         let staging = self.staging.heap_bytes()
             + (self.staged_closes.capacity()
                 * (std::mem::size_of::<Id96>() + std::mem::size_of::<i64>())
-                + self.pending_closes.capacity() * std::mem::size_of::<CloseRecord>())
+                + self.pending_closes.capacity() * std::mem::size_of::<CloseRecord>()
+                + self.pending_closed.iter().map(|s| s.capacity()).sum::<usize>()
+                    * std::mem::size_of::<(u64, u32)>())
                 as u64;
         let manifest = self.manifest.heap_bytes()
             + self
@@ -1748,13 +1864,17 @@ impl NativeStore {
     ///
     /// The open-version index is built per committed generation and does not
     /// know about an in-flight batch, so a mid-batch read subtracts these.
-    /// Bounded by the batch, not the store.
-    pub(crate) fn pending_closed_rows(&self, kind: RowKind) -> std::collections::HashSet<(u64, u32)> {
-        self.pending_closes
-            .iter()
-            .filter(|c| c.kind == kind)
-            .map(|c| (c.segment, c.row))
-            .collect()
+    /// Bounded by the batch, not the store; maintained as the batch closes
+    /// rows (`pending_closed`), not rebuilt per read.
+    pub(crate) fn pending_closed_rows(&self, kind: RowKind) -> &std::collections::HashSet<(u64, u32)> {
+        &self.pending_closed[Self::closed_slot(kind)]
+    }
+
+    fn closed_slot(kind: RowKind) -> usize {
+        match kind {
+            RowKind::Edge => 0,
+            RowKind::Node => 1,
+        }
     }
 
     pub(crate) fn edge_postings(&self) -> &std::sync::Mutex<Postings> {
@@ -1778,6 +1898,21 @@ impl NativeStore {
     /// than the full document — and the chain conveniently resets at exactly
     /// the point the store shrinks.
     pub(crate) fn install(&mut self, next: Manifest) -> Result<u64> {
+        self.install_carrying(next, None)
+    }
+
+    /// [`Self::install`], handing over the committed close index of `next`
+    /// when the caller already holds it (the close-run merge, `compact.rs`).
+    ///
+    /// It is cached for `next`'s generation only once `next` is published —
+    /// a failed publish must not leave an index keyed to a generation number
+    /// the next commit will reuse — and before `adopt`, whose re-pin would
+    /// otherwise rebuild it from every run file.
+    pub(crate) fn install_carrying(
+        &mut self,
+        next: Manifest,
+        carried: Option<std::sync::Arc<CloseIndex>>,
+    ) -> Result<u64> {
         if self.in_batch() {
             return Err(EngineError::invariant(
                 "cannot publish a generation while a batch is open",
@@ -1794,6 +1929,11 @@ impl NativeStore {
         )?;
         self.install_ns.0 = publish_t.ns();
         self.checkpoint_gen = ckpt;
+        if let Some(idx) = carried {
+            let last = next.close_runs.last().map(|r| (r.file.clone(), r.sha.clone()));
+            *self.close_cache.lock().expect("close-cache mutex poisoned") =
+                Some((next.generation, next.close_runs.len(), last, idx));
+        }
         let fresh = self.newly_named_segments(&next);
         let adopt_t = ingest_phase::Timer::start();
         self.adopt(next);
@@ -2441,6 +2581,14 @@ impl NativeStore {
         files
     }
 
+    /// Drop the cached committed close index. Used by the close-run merge
+    /// just before it edits the index it already holds, so that edit is in
+    /// place rather than a copy; nothing is lost, since the merge hands the
+    /// edited index back through [`Self::install_carrying`].
+    pub(crate) fn forget_close_cache(&self) {
+        *self.close_cache.lock().expect("close-cache mutex poisoned") = None;
+    }
+
     pub(crate) fn committed_close_index(&self) -> Result<std::sync::Arc<CloseIndex>> {
         if self.current_only {
             // the stripped configuration has no closes by construction; a
@@ -2526,11 +2674,16 @@ impl NativeStore {
             // index, and that pin is precisely when `make_mut`'s clone is
             // correct rather than waste.
             let target = std::sync::Arc::make_mut(&mut idx);
+            let mut records = Vec::new();
             for r in &runs[from..] {
-                for rec in read_close_run(&self.root.join(&r.file))? {
-                    target.close_row(rec.segment, rec.row, rec.tt_e);
-                }
+                records.extend(
+                    read_close_run(&self.root.join(&r.file))?
+                        .into_iter()
+                        .map(|rec| (rec.segment, rec.row, rec.tt_e)),
+                );
             }
+            // one sorted merge per segment, not an in-place insert per record
+            target.close_rows(records);
         }
         let last = runs.last().map(|r| (r.file.clone(), r.sha.clone()));
         *self.close_cache.lock().expect("close-cache mutex poisoned") =
@@ -2554,6 +2707,23 @@ impl NativeStore {
                 "transaction time must advance: batch tt={tt} is not after \
                  generation {}'s tt={}",
                 self.manifest.generation, self.manifest.created_tt
+            )));
+        }
+        self.batch_tt = Some(tt);
+        Ok(())
+    }
+
+    /// Advance the open batch's transaction time to `tt` (the small-commit
+    /// path, `designs::Designs::publish_per_transaction`): a later
+    /// transaction's rows join the open batch, and the generation the batch
+    /// publishes records the last of them as its `created_tt`, so the next
+    /// `begin` is held to it. Rows carry their own `tt_s`; only the batch's
+    /// bound moves. Time must advance, exactly as for `begin`.
+    pub fn advance_batch(&mut self, tt: i64) -> Result<()> {
+        let open_tt = self.require_batch()?;
+        if tt <= open_tt {
+            return Err(EngineError::invariant(format!(
+                "transaction time must advance: tt={tt} is not after the open batch's tt={open_tt}"
             )));
         }
         self.batch_tt = Some(tt);
@@ -2651,6 +2821,7 @@ impl NativeStore {
                     row,
                     tt_e,
                 });
+                self.pending_closed[Self::closed_slot(kind)].insert((segment, row));
                 if self.pending_overlay.is_none() {
                     let committed = self.committed_close_index()?;
                     self.pending_overlay =
@@ -2704,7 +2875,7 @@ impl NativeStore {
 
     /// Rows staged in the open batch — the read-your-own-writes overlay that
     /// `apply_ops` depends on.
-    pub fn staged_edges(&self) -> &[EdgeRow] {
+    pub fn staged_edges(&self) -> crate::staging::LiveEdges<'_> {
         self.staging.edges()
     }
 
@@ -2714,7 +2885,7 @@ impl NativeStore {
         &self.staged_closes
     }
 
-    pub fn staged_nodes(&self) -> &[NodeRow] {
+    pub fn staged_nodes(&self) -> crate::staging::LiveNodes<'_> {
         self.staging.nodes()
     }
 
@@ -2901,13 +3072,20 @@ impl NativeStore {
         phases.manifest_checkpoint = checkpoint_gen == self.manifest.generation;
         self.checkpoint_gen = checkpoint_gen;
         let pin_t = ingest_phase::Timer::start();
+        // The batch's close overlay layers over the committed close index and
+        // so holds a second reference to it; released before the re-pin
+        // extends that index, the extension edits it in place instead of
+        // copying every close the store has ever recorded, once per commit.
+        // Nothing reads the overlay past the publication point.
+        self.pending_overlay = None;
         self.repin(base.generation, self.manifest.generation);
-        // An ordinary commit only appends segments, but pin the new
-        // set anyway (cheap — it is only the newly sealed files that are not
-        // already pinned) so this handle's own reads never fall onto the
-        // lazy path just because they were staged in the batch that just
-        // published rather than seen by a prior `pin_generation_files` call.
-        self.pin_generation_files();
+        // An ordinary commit only appends segments, so the new
+        // generation's file set is the parent's plus `sealed_files`: extend
+        // the cached file map and the pinned sources by exactly those, so
+        // this handle's own reads never fall onto the lazy path for files the
+        // batch just published — in O(appended), where rebuilding both from
+        // the manifest was O(live segments) per commit.
+        self.pin_appended(base.generation, &sealed_files);
         pin_t.stop(ingest_phase::G::CommitPinNs);
         // Step 6 — the identity filters of the segments just sealed.
         // After the publication point, and deliberately: the filter is a
@@ -2921,7 +3099,7 @@ impl NativeStore {
         self.staging.clear();
         self.staged_closes.clear();
         self.pending_closes.clear();
-        self.pending_overlay = None;
+        self.pending_closed.iter_mut().for_each(|s| s.clear());
         self.batch_tt = None;
         phases.total_us = commit_start.elapsed().as_micros() as u64;
         self.last_commit = Some(*phases);
@@ -2936,6 +3114,7 @@ impl NativeStore {
         self.staging.clear();
         self.staged_closes.clear();
         self.pending_closes.clear();
+        self.pending_closed.iter_mut().for_each(|s| s.clear());
         self.pending_overlay = None;
         self.batch_tt = None;
         Ok(())
@@ -3063,6 +3242,7 @@ type CloseCacheEntry = (
 );
 
 /// `segment id -> filename`, per lane, for one manifest generation.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SegmentFiles {
     pub(crate) edge: std::collections::HashMap<u64, String>,
     pub(crate) node: std::collections::HashMap<u64, String>,
@@ -4017,7 +4197,118 @@ struct TcsrTarget {
     /// effective `tt_e` (`GNOMON_RANGE_VISIBILITY=0`) rather than the
     /// window-first one-row range.
     row_test: bool,
+    /// With `per_row`: the segment's committed effective-`tt_e` column, the
+    /// belief test then being `tt_s(r) <= as_of < tt_e[r]` after the open
+    /// batch's own pending closes ([`TtECols`]).
+    col: Option<std::sync::Arc<Vec<i64>>>,
+    /// With `col`: every row's `tt_s` is at or before the call's belief
+    /// time, so only `tt_e` is tested.
+    tt_all: bool,
 }
+
+/// Default byte budget of the traversal's effective-`tt_e` columns:
+/// `GNOMON_TT_E_COLUMN_BYTES`, else 256 MiB. A column is 8 bytes per row of a
+/// segment that carries closes; a segment whose column does not fit takes
+/// the per-call path instead, so the budget bounds memory and never changes
+/// an answer.
+pub const TT_E_COLUMN_DEFAULT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn tt_e_column_budget(env: Option<&str>) -> u64 {
+    env.and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(TT_E_COLUMN_DEFAULT_BYTES)
+}
+
+/// The traversal's per-segment effective-`tt_e` columns.
+///
+/// `neighbors_batch` decides belief once per adjacency row. On a segment
+/// with closes it used to do it either by building the segment's believed
+/// ranges per call — reading every close of the segment, whatever the
+/// frontier — or by a one-row range build per row, ~1 µs each. The effective
+/// `tt_e` of a row (its committed close, else its sidecar fold, else open)
+/// does not depend on the belief time, so it is materialized once per
+/// segment and the per-row test becomes two reads and two compares.
+///
+/// **Key.** A column holds the *committed* closes of one segment. A commit
+/// can only add closes to a live segment, never change or remove one, and a
+/// segment's sidecar is part of its immutable file, so `(committed close
+/// count, sidecar length)` changes exactly when the column's content would;
+/// compaction writes a new segment id. The open batch's pending closes are
+/// never in a column: the traversal consults them first
+/// ([`CloseIndex::pending_tt_e`]), so a rollback has nothing to undo.
+///
+/// **Budget.** LRU by segment under a byte budget. A column that cannot fit
+/// is not built and the segment takes the per-call path.
+pub(crate) struct TtECols {
+    map: HashMap<u64, TtECol>,
+    bytes: u64,
+    peak_bytes: u64,
+    budget: u64,
+    clock: u64,
+    builds: u64,
+    build_ns: u64,
+    build_rows: u64,
+    hits: u64,
+    evictions: u64,
+}
+
+struct TtECol {
+    key: (usize, usize),
+    col: std::sync::Arc<Vec<i64>>,
+    last_used: u64,
+}
+
+impl TtECols {
+    fn new(budget: u64) -> Self {
+        Self {
+            map: HashMap::new(),
+            bytes: 0,
+            peak_bytes: 0,
+            budget,
+            clock: 0,
+            builds: 0,
+            build_ns: 0,
+            build_rows: 0,
+            hits: 0,
+            evictions: 0,
+        }
+    }
+
+    fn get(&mut self, id: u64, key: (usize, usize)) -> Option<std::sync::Arc<Vec<i64>>> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.map.get_mut(&id)?;
+        if e.key != key {
+            return None;
+        }
+        e.last_used = clock;
+        self.hits += 1;
+        Some(e.col.clone())
+    }
+
+    fn insert(&mut self, id: u64, key: (usize, usize), col: std::sync::Arc<Vec<i64>>) {
+        let add = (col.len() * 8) as u64;
+        if let Some(old) = self.map.remove(&id) {
+            self.bytes -= (old.col.len() * 8) as u64;
+        }
+        while self.bytes + add > self.budget {
+            let Some(victim) = self.map.iter().min_by_key(|(_, e)| e.last_used).map(|(k, _)| *k)
+            else {
+                break;
+            };
+            let e = self.map.remove(&victim).expect("just found");
+            self.bytes -= (e.col.len() * 8) as u64;
+            self.evictions += 1;
+        }
+        self.clock += 1;
+        self.bytes += add;
+        self.peak_bytes = self.peak_bytes.max(self.bytes);
+        self.map.insert(id, TtECol { key, col, last_used: self.clock });
+    }
+}
+
+/// `(entries, bytes, peak bytes, budget, builds, build ns, rows built, hits,
+/// evictions)` of the traversal's effective-`tt_e` columns.
+pub type TtEColumnStats = (usize, u64, u64, u64, u64, u64, u64, u64, u64);
 
 /// Should this traversal call test belief per adjacency row rather
 /// than build the segment's believed ranges?
@@ -4099,6 +4390,10 @@ struct PerRow<'a> {
     rows: usize,
     /// The plain per-row test rather than [`believed_row`].
     exact: bool,
+    /// The segment's committed effective-`tt_e` column.
+    col: Option<&'a [i64]>,
+    /// Every `tt_s` of the segment is at or before the belief time.
+    tt_all: bool,
 }
 
 /// Is row `r` believed? A binary search over a list whose length is "one entry
@@ -4689,6 +4984,78 @@ impl NativeStore {
         self.neighbors_batch(&[u], direction, as_of_tt, vt_min, vt_max, rel_types)
     }
 
+    /// The committed effective-`tt_e` column of edge segment `id` from the
+    /// cache, built on a miss, or `None` when it cannot fit the budget
+    /// ([`TtECols`]). `committed` must be the committed close index (no
+    /// pending layer).
+    fn tt_e_column(
+        &self,
+        id: u64,
+        seg: &crate::segment::Segment<MmapSource>,
+        committed: &CloseIndex,
+    ) -> Option<std::sync::Arc<Vec<i64>>> {
+        let side = seg.sidecar();
+        let key = (committed.segment_close_count(id), side.slice().len());
+        let rows = seg.rows() as usize;
+        {
+            let mut c = self.tt_e_cols.lock().expect("tt_e column mutex poisoned");
+            if let Some(col) = c.get(id, key) {
+                return Some(col);
+            }
+            if (rows as u64) * 8 > c.budget {
+                return None;
+            }
+        }
+        // built outside the lock: another thread racing to the same column
+        // builds an identical one, and the second insert replaces the first
+        let t = std::time::Instant::now();
+        let mut col = vec![crate::OPEN_END; rows];
+        for &(r, tt_e) in side.slice() {
+            if let Some(x) = col.get_mut(r as usize) {
+                *x = tt_e;
+            }
+        }
+        // a committed close outranks the sidecar (`read::effective_tt_e`)
+        for &(r, tt_e) in committed.segment_closes(id).iter() {
+            if tt_e != crate::OPEN_END {
+                if let Some(x) = col.get_mut(r as usize) {
+                    *x = tt_e;
+                }
+            }
+        }
+        let col = std::sync::Arc::new(col);
+        let mut c = self.tt_e_cols.lock().expect("tt_e column mutex poisoned");
+        c.builds += 1;
+        c.build_rows += rows as u64;
+        c.build_ns += t.elapsed().as_nanos() as u64;
+        c.insert(id, key, col.clone());
+        Some(col)
+    }
+
+    /// Counters of the traversal's effective-`tt_e` columns
+    /// ([`TtEColumnStats`]).
+    pub fn tt_e_column_stats(&self) -> TtEColumnStats {
+        let c = self.tt_e_cols.lock().expect("tt_e column mutex poisoned");
+        (
+            c.map.len(),
+            c.bytes,
+            c.peak_bytes,
+            c.budget,
+            c.builds,
+            c.build_ns,
+            c.build_rows,
+            c.hits,
+            c.evictions,
+        )
+    }
+
+    /// Drop every cached effective-`tt_e` column (keeps the counters).
+    pub fn release_tt_e_columns(&self) {
+        let mut c = self.tt_e_cols.lock().expect("tt_e column mutex poisoned");
+        c.map.clear();
+        c.bytes = 0;
+    }
+
     /// The adjacency source for one traversal target: the segment's
     /// index, or under `GNOMON_TCSR=scan` a scan of its endpoint columns for
     /// the call's frontier.
@@ -4730,6 +5097,7 @@ impl NativeStore {
         self.assert_full_belief(as_of_tt)?;
         let as_of = crate::clamp_tt(as_of_tt);
         let closes = self.close_index()?;
+        let committed = self.committed_close_index()?;
         let dirs: &[crate::tcsr::Direction] = match direction {
             NeighborDir::Out => &[crate::tcsr::Direction::Out],
             NeighborDir::In => &[crate::tcsr::Direction::In],
@@ -4773,6 +5141,8 @@ impl NativeStore {
                     ranges: Vec::new(),
                     per_row: true,
                     row_test: true,
+                    col: None,
+                    tt_all: false,
                 });
                 continue;
             }
@@ -4814,7 +5184,33 @@ impl NativeStore {
                     .iter()
                     .map(|&u| dirs.iter().map(|&d| adj.slice(d, u).len()).sum::<usize>())
                     .sum();
-                if traversal_tests_rows(m, k, tt_items) {
+                let per_row = traversal_tests_rows(m, k, tt_items);
+                // A segment with closes decides belief from its cached
+                // effective-`tt_e` column — no per-call work in the number of
+                // closes — wherever the per-call path is the costly side: the
+                // per-row path would run (each of its tests is a one-row
+                // range build), or the closes outnumber the rows to test (the
+                // range build reads every one of them). A lightly corrected
+                // segment keeps its cheap ranges and costs no column memory.
+                // Reached only with window-first and range visibility on, so
+                // each of those switches keeps exactly its old path.
+                let tt_all = bounds.1 <= as_of;
+                if self.designs.tt_e_column && k > 0 && (per_row || k >= m) {
+                    if let Some(col) = self.tt_e_column(id, &seg, &committed) {
+                        targets.push(TcsrTarget {
+                            id,
+                            seg,
+                            adj,
+                            ranges: Vec::new(),
+                            per_row: true,
+                            row_test: false,
+                            col: Some(col),
+                            tt_all,
+                        });
+                        continue;
+                    }
+                }
+                if per_row {
                     targets.push(TcsrTarget {
                         id,
                         seg,
@@ -4822,6 +5218,8 @@ impl NativeStore {
                         ranges: Vec::new(),
                         per_row: true,
                         row_test: false,
+                        col: None,
+                        tt_all: false,
                     });
                     continue;
                 }
@@ -4837,6 +5235,8 @@ impl NativeStore {
                     ranges,
                     per_row: false,
                     row_test: false,
+                    col: None,
+                    tt_all: false,
                 });
                 continue;
             }
@@ -4853,6 +5253,8 @@ impl NativeStore {
                 ranges,
                 per_row: false,
                 row_test: false,
+                col: None,
+                tt_all: false,
             });
         }
 
@@ -4885,6 +5287,8 @@ impl NativeStore {
                         sidecar: seg.sidecar(),
                         rows: seg.rows() as usize,
                         exact: t.row_test,
+                        col: t.col.as_deref().map(Vec::as_slice),
+                        tt_all: t.tt_all,
                     })
                 } else {
                     None
@@ -4892,106 +5296,156 @@ impl NativeStore {
             });
         }
 
-        let mut out = NeighborRows {
-            offsets: Vec::with_capacity(us.len() + 1),
-            ..Default::default()
-        };
-        out.offsets.push(0);
-        let mut cands: Vec<Cand> = Vec::new();
-        let mut row_tests = 0usize;
-        for &u in us {
-            cands.clear();
-            for t in &views {
-                let (vt_s, vt_e_col) = (t.vt_s, t.vt_e);
-                let (src, dst) = (t.src, t.dst);
-                let (vid64, vid_lo32) = (t.vid64, t.vid_lo32);
-                let (rel_codes, rel_allowed) = (t.rel_codes, t.rel_allowed.as_ref());
-                let ranges = t.ranges;
+        // the per-vertex loop over one chunk of the frontier: its rows and
+        // offsets as the whole loop would write them for those vertices
+        let chunk = |us: &[u32]| -> Result<(NeighborRows, usize)> {
+            let mut out = NeighborRows {
+                offsets: Vec::with_capacity(us.len() + 1),
+                ..Default::default()
+            };
+            out.offsets.push(0);
+            let mut cands: Vec<Cand> = Vec::new();
+            let mut row_tests = 0usize;
+            for &u in us {
+                cands.clear();
+                for t in &views {
+                    let (vt_s, vt_e_col) = (t.vt_s, t.vt_e);
+                    let (src, dst) = (t.src, t.dst);
+                    let (vid64, vid_lo32) = (t.vid64, t.vid_lo32);
+                    let (rel_codes, rel_allowed) = (t.rel_codes, t.rel_allowed.as_ref());
+                    let ranges = t.ranges;
 
-                for &d in dirs {
-                    for &r in t.adj.slice(d, u) {
-                        let i = r as usize;
-                        // ---- belief -------------------------------------
-                        //
-                        // Both halves of the predicate, already decided for
-                        // the whole segment above (`close_view` +
-                        // `believed_ranges_closed`). The index
-                        // is built over *all stored rows* of an immutable
-                        // segment, so this is where — and the only place
-                        // where — belief enters a traversal.
-                        //
-                        // Or per adjacency row, through the same
-                        // primitives restricted to the row, when that is
-                        // cheaper than building the segment's ranges.
-                        let believed = match &t.per_row {
-                            None => in_ranges(r, ranges),
-                            Some(p) if p.exact => {
-                                row_tests += 1;
-                                p.tt.at(r)? <= as_of
-                                    && as_of
-                                        < crate::read::effective_tt_e(&closes, &p.sidecar, t.id, r)
+                    for &d in dirs {
+                        for &r in t.adj.slice(d, u) {
+                            let i = r as usize;
+                            // ---- rel type -----------------------------------
+                            //
+                            // First: one read of a code column, where belief
+                            // can cost a close lookup. A vertex's slice holds
+                            // every relationship's rows, so on a one-rel hop
+                            // over a hub most rows stop here. The three tests
+                            // are a conjunction; their order changes no row.
+                            if let (Some(codes), Some(allowed)) = (rel_codes, rel_allowed) {
+                                if !allowed.get(codes[i] as usize).copied().unwrap_or(false) {
+                                    continue;
+                                }
                             }
-                            Some(p) => believed_row(
-                                &p.tt, p.bounds, p.sidecar, &closes, t.id, p.rows, as_of, r,
-                            ),
-                        };
-                        if !believed {
-                            continue;
-                        }
-                        // ---- valid time ---------------------------------
-                        let row_vt_s = vt_s[i];
-                        let row_vt_e = match vt_e_col {
-                            Some(c) => c[i],
-                            None => row_vt_s + 1,
-                        };
-                        if vt_min.is_some_and(|t| row_vt_e <= t) {
-                            continue;
-                        }
-                        if vt_max.is_some_and(|t| row_vt_s >= t) {
-                            continue;
-                        }
-                        // ---- rel type -----------------------------------
-                        if let (Some(codes), Some(allowed)) = (rel_codes, rel_allowed) {
-                            if !allowed.get(codes[i] as usize).copied().unwrap_or(false) {
+                            // ---- belief -------------------------------------
+                            //
+                            // Both halves of the predicate, already decided for
+                            // the whole segment above (`close_view` +
+                            // `believed_ranges_closed`). The index
+                            // is built over *all stored rows* of an immutable
+                            // segment, so this is where — and the only place
+                            // where — belief enters a traversal.
+                            //
+                            // Or per adjacency row, through the same
+                            // primitives restricted to the row, when that is
+                            // cheaper than building the segment's ranges.
+                            let believed = match &t.per_row {
+                                None => in_ranges(r, ranges),
+                                // not the ablation's per-row belief test (`vis_rows`):
+                                // two reads of materialized state, counted by the
+                                // column's own `hits`
+                                Some(p) if p.col.is_some() => {
+                                    let col = p.col.expect("just matched");
+                                    let tt_e = closes.pending_tt_e(t.id, r).unwrap_or(col[i]);
+                                    as_of < tt_e && (p.tt_all || p.tt.at(r)? <= as_of)
+                                }
+                                Some(p) if p.exact => {
+                                    row_tests += 1;
+                                    p.tt.at(r)? <= as_of
+                                        && as_of
+                                            < crate::read::effective_tt_e(&closes, &p.sidecar, t.id, r)
+                                }
+                                Some(p) => believed_row(
+                                    &p.tt, p.bounds, p.sidecar, &closes, t.id, p.rows, as_of, r,
+                                ),
+                            };
+                            if !believed {
                                 continue;
                             }
+                            // ---- valid time ---------------------------------
+                            let row_vt_s = vt_s[i];
+                            let row_vt_e = match vt_e_col {
+                                Some(c) => c[i],
+                                None => row_vt_s + 1,
+                            };
+                            if vt_min.is_some_and(|t| row_vt_e <= t) {
+                                continue;
+                            }
+                            if vt_max.is_some_and(|t| row_vt_s >= t) {
+                                continue;
+                            }
+                            cands.push(Cand {
+                                vt_s: row_vt_s,
+                                vid: Id96 {
+                                    hi: vid64[i],
+                                    lo: vid_lo32[i],
+                                },
+                                nbr: if d == crate::tcsr::Direction::Out {
+                                    dst[i]
+                                } else {
+                                    src[i]
+                                },
+                                vt_e: row_vt_e,
+                                seg_id: t.id,
+                                seg_row: r,
+                            });
                         }
-                        cands.push(Cand {
-                            vt_s: row_vt_s,
-                            vid: Id96 {
-                                hi: vid64[i],
-                                lo: vid_lo32[i],
-                            },
-                            nbr: if d == crate::tcsr::Direction::Out {
-                                dst[i]
-                            } else {
-                                src[i]
-                            },
-                            vt_e: row_vt_e,
-                            seg_id: t.id,
-                            seg_row: r,
-                        });
                     }
                 }
+                // The scan's own order. Stable, so `Both`'s out-before-in
+                // concatenation survives an exact `(vt_s, vid)` tie — which only
+                // a self-loop can produce, and which `np.lexsort` breaks the
+                // same way.
+                cands.sort_by_key(|c| (c.vt_s, c.vid));
+                for c in &cands {
+                    out.nbr.push(c.nbr);
+                    out.vt_s.push(c.vt_s);
+                    out.vt_e.push(c.vt_e);
+                    out.seg_id.push(c.seg_id);
+                    out.seg_row.push(c.seg_row);
+                }
+                out.offsets.push(out.nbr.len() as u32);
             }
-            // The scan's own order. Stable, so `Both`'s out-before-in
-            // concatenation survives an exact `(vt_s, vid)` tie — which only
-            // a self-loop can produce, and which `np.lexsort` breaks the
-            // same way.
-            cands.sort_by_key(|c| (c.vt_s, c.vid));
-            for c in &cands {
-                out.nbr.push(c.nbr);
-                out.vt_s.push(c.vt_s);
-                out.vt_e.push(c.vt_e);
-                out.seg_id.push(c.seg_id);
-                out.seg_row.push(c.seg_row);
+            Ok((out, row_tests))
+        };
+        // a large frontier in chunks on the pool, concatenated in frontier
+        // order: the same rows and offsets whatever the thread count
+        let threads = self.designs.match_threads();
+        let (out, row_tests) = if threads > 1 && us.len() >= PAR_NEIGHBORS_MIN {
+            let width = threads.min(us.len() / PAR_NEIGHBORS_CHUNK).max(1);
+            let size = us.len().div_ceil(width);
+            let parts = crate::pool::run(width, |w| {
+                chunk(&us[(w * size).min(us.len())..((w + 1) * size).min(us.len())])
+            });
+            let mut out = NeighborRows { offsets: vec![0], ..Default::default() };
+            let mut tests = 0usize;
+            for part in parts {
+                let (p, n) = part?;
+                let base = out.nbr.len() as u32;
+                out.nbr.extend(p.nbr);
+                out.vt_s.extend(p.vt_s);
+                out.vt_e.extend(p.vt_e);
+                out.seg_id.extend(p.seg_id);
+                out.seg_row.extend(p.seg_row);
+                out.offsets.extend(p.offsets[1..].iter().map(|&o| o + base));
+                tests += n;
             }
-            out.offsets.push(out.nbr.len() as u32);
-        }
+            (out, tests)
+        } else {
+            chunk(us)?
+        };
         crate::vistouch::rows(row_tests);
         Ok(out)
     }
 }
+
+/// `neighbors_batch` splits a frontier over the pool from this many vertices,
+const PAR_NEIGHBORS_MIN: usize = 4096;
+/// in chunks of at least this many (a hub's slice is long, so they are small).
+const PAR_NEIGHBORS_CHUNK: usize = 128;
 
 /// An edge scan's selection, `(segment id, selected rows)` per segment
 /// with a selected row, and the scan's counters.
@@ -5228,6 +5682,49 @@ mod tests {
         assert!(root.join("CURRENT").exists());
         assert!(NativeStore::manifest_path(&root, 0).exists());
         assert_eq!(s.dict().len(), 0);
+    }
+
+    #[test]
+    fn the_commit_path_extends_the_file_map_and_pins_to_what_a_rebuild_gives() {
+        let root = tmp_root("pin-appended");
+        let mut s = NativeStore::open(&root).unwrap();
+        for k in 0..40u32 {
+            let tt = 10 + k as i64;
+            s.begin(tt).unwrap();
+            let a = s.ensure_entity(&format!("n{k}"), "Node").unwrap();
+            s.stage_edge(edge_row(a, a, k as i64, tt, k)).unwrap();
+            if k % 3 == 0 {
+                s.stage_node(NodeRow {
+                    vid: crate::derive::version_vid(&format!("{k:024x}"), tt, 0),
+                    uid_id: a,
+                    label: "Node".into(),
+                    vt_s: 0,
+                    vt_e: crate::OPEN_END,
+                    tt_s: tt,
+                    props: "{}".into(),
+                    source: "ingest".into(),
+                    provenance_ref: None,
+                })
+                .unwrap();
+            }
+            // half the time a reader holds the previous map across the commit,
+            // which must force a copy rather than an edit under its feet
+            let held = (k % 2 == 0).then(|| s.segment_files());
+            s.commit(EventLogRef::default()).unwrap();
+            let incremental = s.segment_files();
+            *s.files_cache.lock().unwrap() = None;
+            let rebuilt = s.segment_files();
+            assert_eq!(*incremental, *rebuilt, "file map diverged at generation {}", s.generation());
+            if let Some(h) = held {
+                assert_eq!(h.edge.len() + h.node.len() + 1 + usize::from(k % 3 == 0),
+                    rebuilt.edge.len() + rebuilt.node.len(), "a held map was edited in place");
+            }
+            let pinned: std::collections::HashSet<String> =
+                s.pinned_sources.lock().unwrap().keys().cloned().collect();
+            let named: std::collections::HashSet<String> =
+                rebuilt.edge.values().chain(rebuilt.node.values()).cloned().collect();
+            assert_eq!(pinned, named, "pinned set diverged at generation {}", s.generation());
+        }
     }
 
     #[test]
@@ -5737,7 +6234,7 @@ mod tests {
         // kernel manages -- so it is not charged here and not credited back
         // on eviction. Charging it was what made a 32 GB budget produce
         // 52.6 GB of residency at 1B.
-        let (_root, s, _rows) = store_with_overlapping_segments("w15-charge");
+        let (_root, s, _rows) = store_with_overlapping_segments("overlap-charge");
         touch_every_segment(&s);
 
         let accounted = component(&s, "segment_cache_accounted");
@@ -5758,7 +6255,7 @@ mod tests {
         // `file_mapped_total` is the store's own mapped bytes. They are
         // reported separately because they are bounded by different things
         // and land in different `/proc/self/status` fields.
-        let (_root, s, _rows) = store_with_overlapping_segments("w15-classes");
+        let (_root, s, _rows) = store_with_overlapping_segments("overlap-classes");
         touch_every_segment(&s);
         let got = s.memory_accounting().0;
         let get = |k: &str| got.iter().find(|(n, _)| *n == k).map(|(_, v)| *v).unwrap();
@@ -5795,7 +6292,7 @@ mod tests {
         // A budget of B bounds B bytes of decoded heap -- never B minus
         // something the operator was not told about. The cache never evicts
         // its last entry, so one segment's own heap is the whole allowance.
-        let (_root, s, _rows) = store_with_overlapping_segments("w15-binds");
+        let (_root, s, _rows) = store_with_overlapping_segments("overlap-binds");
         touch_every_segment(&s);
         let full = component(&s, "segment_cache_accounted");
         assert!(full > 0);
@@ -5823,7 +6320,7 @@ mod tests {
         // Correctness never depends on residency -- the property every
         // budget change in this engine has had to keep. A one-byte budget
         // and an unbounded one must locate every row identically.
-        let (_root, s, rows) = store_with_overlapping_segments("w15-answers");
+        let (_root, s, rows) = store_with_overlapping_segments("overlap-answers");
         s.set_segment_cache_budget(None);
         let unbounded: Vec<_> = rows
             .iter()
@@ -7574,6 +8071,161 @@ mod tests {
     /// Two batches, so the store holds two edge segments and the traversal
     /// has to merge across them. Vertex ids are the dictionary's dense ids
     /// for `n0..n{n-1}`.
+    /// A ring + chord store, two segments, with the rows kept so the
+    /// test can close them.
+    fn tt_e_store(root: &Path, n: u32) -> (NativeStore, Vec<EdgeRow>) {
+        let mut s = NativeStore::open(root).unwrap();
+        let mut ids = Vec::new();
+        let mut rows = Vec::new();
+        s.begin(100).unwrap();
+        for i in 0..n {
+            ids.push(s.ensure_entity(&format!("n{i}"), "Node").unwrap());
+        }
+        for i in 0..n {
+            let e = edge_row(ids[i as usize], ids[((i + 1) % n) as usize], 2 * i as i64, 100, i);
+            rows.push(e.clone());
+            s.stage_edge(e).unwrap();
+        }
+        s.commit(EventLogRef::default()).unwrap();
+        s.begin(200).unwrap();
+        for i in 0..n {
+            let e = edge_row(ids[i as usize], ids[((i + 2) % n) as usize], 2 * i as i64 + 1, 200, 100 + i);
+            rows.push(e.clone());
+            s.stage_edge(e).unwrap();
+        }
+        s.commit(EventLogRef::default()).unwrap();
+        (s, rows)
+    }
+
+    /// Close every `every`-th row from `offset` that is still open (a
+    /// version is closed at most once, as the write path guarantees).
+    fn close_rows(
+        s: &mut NativeStore,
+        rows: &[EdgeRow],
+        closed: &mut std::collections::HashSet<usize>,
+        tt: i64,
+        every: usize,
+        offset: usize,
+    ) {
+        for (i, r) in rows.iter().enumerate().skip(offset).step_by(every) {
+            if closed.insert(i) {
+                s.close_version_at(RowKind::Edge, r.vid, Some(r.vt_s), tt).unwrap();
+            }
+        }
+    }
+
+    fn close_some(
+        s: &mut NativeStore,
+        rows: &[EdgeRow],
+        closed: &mut std::collections::HashSet<usize>,
+        tt: i64,
+        every: usize,
+        offset: usize,
+    ) {
+        s.begin(tt).unwrap();
+        close_rows(s, rows, closed, tt, every, offset);
+        s.commit(EventLogRef::default()).unwrap();
+    }
+
+    /// The column path against the per-call path the switch restores, over
+    /// several frontiers, directions and belief times.
+    fn same_neighbors_either_way(s: &mut NativeStore, n: u32, tts: &[i64], what: &str) {
+        let on = s.designs();
+        let off = crate::designs::Designs { tt_e_column: false, ..on };
+        let fronts: Vec<Vec<u32>> = vec![
+            (0..n).collect(),
+            (0..n).step_by(7).collect(),
+            vec![3],
+            (0..n).rev().step_by(3).collect(),
+        ];
+        for dir in [NeighborDir::Out, NeighborDir::In, NeighborDir::Both] {
+            for &tt in tts {
+                for us in &fronts {
+                    s.set_designs(on);
+                    let a = s.neighbors_batch(us, dir, tt, None, None, None).unwrap();
+                    s.set_designs(off);
+                    let b = s.neighbors_batch(us, dir, tt, None, None, None).unwrap();
+                    assert_eq!(a, b, "{what}: column and per-call belief differ (dir {dir:?}, as_of {tt})");
+                }
+            }
+        }
+        s.set_designs(on);
+    }
+
+    #[test]
+    fn the_tt_e_column_answers_exactly_what_the_per_call_belief_answers() {
+        let n = 200;
+        let root = tmp_root("tt-e-col");
+        let (mut s, rows) = tt_e_store(&root, n);
+        let mut closed = std::collections::HashSet::new();
+        let tts = [100, 150, 200, 250, 300, 350, 400, 450, 500, OPEN_END];
+        // nothing closed: no column is built at all
+        same_neighbors_either_way(&mut s, n, &tts, "no closes");
+        assert_eq!(s.tt_e_column_stats().4, 0, "a segment without closes needs no column");
+        close_some(&mut s, &rows, &mut closed, 300, 5, 0);
+        same_neighbors_either_way(&mut s, n, &tts, "after the first closes");
+        let built = s.tt_e_column_stats().4;
+        assert!(built >= 2, "both segments carry closes now: {built} builds");
+        // a second, warm pass builds nothing
+        same_neighbors_either_way(&mut s, n, &tts, "warm");
+        assert_eq!(s.tt_e_column_stats().4, built, "a warm column was rebuilt");
+        // a commit adding closes to a cached segment invalidates its column
+        close_some(&mut s, &rows, &mut closed, 400, 7, 1);
+        same_neighbors_either_way(&mut s, n, &tts, "after more closes");
+        assert!(s.tt_e_column_stats().4 > built, "the new closes did not rebuild the column");
+        // the open batch's pending closes are seen through the overlay,
+        // without touching the committed column, and a rollback undoes them
+        let before = s.tt_e_column_stats().4;
+        s.begin(500).unwrap();
+        let mut pending = closed.clone();
+        close_rows(&mut s, &rows, &mut pending, 500, 11, 2);
+        same_neighbors_either_way(&mut s, n, &tts, "inside the batch");
+        assert_eq!(s.tt_e_column_stats().4, before, "pending closes rebuilt a committed column");
+        s.rollback().unwrap();
+        same_neighbors_either_way(&mut s, n, &tts, "after the rollback");
+        // compaction (new segment ids, closes folded into sidecars) and gc
+        while s.needs_compaction() {
+            s.compact_incremental(None).unwrap();
+        }
+        same_neighbors_either_way(&mut s, n, &tts, "after incremental compaction");
+        close_some(&mut s, &rows, &mut closed, 600, 13, 3);
+        s.compact().unwrap();
+        same_neighbors_either_way(&mut s, n, &[650, 700, OPEN_END], "after whole-store compaction");
+        s.gc(1).unwrap();
+        same_neighbors_either_way(&mut s, n, &[650, 700, OPEN_END], "after gc");
+        let st = s.tt_e_column_stats();
+        assert!(st.1 <= st.3, "over budget: {st:?}");
+    }
+
+    #[test]
+    fn a_column_that_cannot_fit_the_budget_takes_the_per_call_path() {
+        let n = 120;
+        let root = tmp_root("tt-e-col-budget");
+        let (mut s, rows) = tt_e_store(&root, n);
+        close_some(&mut s, &rows, &mut Default::default(), 300, 3, 0);
+        *s.tt_e_cols.lock().unwrap() = TtECols::new(8);
+        same_neighbors_either_way(&mut s, n, &[250, 350, OPEN_END], "budget too small");
+        let st = s.tt_e_column_stats();
+        assert_eq!((st.0, st.4), (0, 0), "a column was built over budget: {st:?}");
+    }
+
+    #[test]
+    fn the_switches_that_predate_the_column_keep_their_paths() {
+        let n = 120;
+        let root = tmp_root("tt-e-col-switches");
+        let (mut s, rows) = tt_e_store(&root, n);
+        close_some(&mut s, &rows, &mut Default::default(), 300, 3, 0);
+        let all = s.designs();
+        for d in [
+            crate::designs::Designs { range_visibility: false, ..all },
+            crate::designs::Designs { window_first: false, ..all },
+        ] {
+            s.set_designs(d);
+            let _ = s.neighbors_batch(&(0..n).collect::<Vec<_>>(), NeighborDir::Both, 350, None, None, None).unwrap();
+            assert_eq!(s.tt_e_column_stats().4, 0, "{d:?} reached the column path");
+        }
+    }
+
     fn tcsr_store(root: &Path, n: u32) -> NativeStore {
         let mut s = NativeStore::open(root).unwrap();
         let mut ids = Vec::new();

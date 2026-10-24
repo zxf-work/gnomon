@@ -29,7 +29,7 @@ fixture-is-real assertion before the timed section; (iv)
 `pytest.importorskip("gnomon.storage.native", ...)`, `adapter.paranoid =
 False`, a fresh store per configuration.
 
-**Threshold provenance (measured on this machine, 2026-09-19, this file's
+**Threshold provenance (measured on this machine, this file's
 own fixture and statistic, native engine built from this worktree):**
 
     n_rows   lookup_name (exact)   resolve_entities (substr)   speedup

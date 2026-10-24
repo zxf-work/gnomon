@@ -29,7 +29,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Whether the timers are compiled in. Recorded in the build record so a
-/// reader can tell the control arm from the instrumented one.
+/// reader can tell the control configuration from the instrumented one.
 pub const ENABLED: bool = cfg!(feature = "ingest-timers");
 
 /// One timed row in this many inside `stage_edges`/`stage_nodes`.
@@ -312,9 +312,36 @@ pub enum G {
     IngestRawNodeRows,
     /// Count: calls that fell back to the Python path (shape not accepted).
     IngestRawFallbacks,
+    // --- the write path's windowed point read (`pointread.rs`) -----------
+    // Appended. The binding's body of `believed_window`; its own
+    // `correct.*` timers run inside it, exactly as for `believed`.
+    PyBelievedWindow,
+    // --- A transaction applied from its record --------------
+    // Appended. `py_apply_raw_ns` is the binding's body of `apply_ops_raw`;
+    // the slots below divide it. Its point reads run the `correct.*` timers
+    // and its closes the `close_*` timers, exactly as through
+    // `believed_window` / `stage_closes`; an `ingest_events` op inside it
+    // runs the `ingest_raw_*` timers.
+    PyApplyRaw,
+    /// Parsing the record and checking every op's shape.
+    ApplyRawParseNs,
+    /// `ensure_entity` calls.
+    ApplyRawEnsureNs,
+    /// The windowed point reads.
+    ApplyRawReadNs,
+    /// Retires and closes (`_supersede_*`).
+    ApplyRawSupersedeNs,
+    /// Staging the built rows.
+    ApplyRawStageNs,
+    /// `ingest_events` ops inside a record (the raw ingest path).
+    ApplyRawIngestNs,
+    /// Count: records applied / declined / refused.
+    ApplyRawApplied,
+    ApplyRawDeclined,
+    ApplyRawRefused,
 }
 
-pub const G_COUNT: usize = 87;
+pub const G_COUNT: usize = 98;
 pub const G_NAMES: [&str; G_COUNT] = [
     "py_begin_ns",
     "py_stage_edges_ns",
@@ -403,6 +430,17 @@ pub const G_NAMES: [&str; G_COUNT] = [
     "ingest_raw_edge_rows",
     "ingest_raw_node_rows",
     "ingest_raw_fallbacks",
+    "py_believed_window_ns",
+    "py_apply_raw_ns",
+    "apply_raw_parse_ns",
+    "apply_raw_ensure_ns",
+    "apply_raw_read_ns",
+    "apply_raw_supersede_ns",
+    "apply_raw_stage_ns",
+    "apply_raw_ingest_ns",
+    "apply_raw_applied",
+    "apply_raw_declined",
+    "apply_raw_refused",
 ];
 
 #[cfg(feature = "ingest-timers")]
@@ -604,7 +642,7 @@ mod tests {
 
     #[test]
     fn names_cover_every_slot() {
-        assert_eq!(G_NAMES.len(), G::IngestRawFallbacks as usize + 1);
+        assert_eq!(G_NAMES.len(), G::ApplyRawRefused as usize + 1);
         assert_eq!(S_NAMES.len(), S::EncWinRaw as usize + 1);
         assert_eq!(CTX_NAMES.len(), Ctx::Vidfilter as usize + 1);
         let mut all: Vec<&str> = G_NAMES.iter().chain(S_NAMES.iter()).copied().collect();

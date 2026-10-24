@@ -25,7 +25,8 @@ bypasses it).
   operator except `compute`.
 * **Pagination:** list results carry `rows`, `rows_total`, `truncated` and an
   opaque `cursor`; pass the cursor back to get the next page. `limit`
-  defaults to 100 and is capped at 10,000.
+  defaults to 100 and is capped at 10,000 (`match` pages hold up to
+  1,000,000 rows, and its `uids` lists up to 1,000,000 seeds).
 * **Determinism:** the same store state and arguments give a byte-identical
   canonical result and `result_digest`.
 
@@ -45,7 +46,7 @@ range over: **VT** = valid time (what was true in the world, via `window`,
 | `temporal_paths` | up to `k` node-simple time-respecting paths between two nodes inside a window, ordered by arrival, hops, edge sequence | `src`*, `dst`*, `window`*, `k`, `max_hops`, `as_of_tt` | VT window, TT |
 | `temporal_reachability` | earliest arrival time at every node reachable from (or, with `direction: "in"`, able to reach) a source via time-respecting paths | `src`*, `window`*, `delta_max_wait`, `direction`, `as_of_tt` | VT window, TT |
 | `graph_metric_timeseries` | a per-bucket metric series over a window (instant metrics sampled at bucket starts, event metrics aggregated within buckets) | `metric`*, `window`*, `stride`*, `as_of_tt` | VT window, TT |
-| `aggregate_events` | grouped aggregation over edge events in a window: group by time bucket, calendar unit, relation type, endpoint or label; count, count-distinct, sum, min, max, mean | `group_by`*, `aggregates`*, `window`*, `stride`, `rel_types`, `prop_filter`, `endpoint_filter`, `pair_mode`, `as_of_tt` | VT window, TT |
+| `aggregate_events` | grouped aggregation over edge events in a window: group by time bucket, calendar unit, relation type, endpoint or label; count, count-distinct, min, max, mean, and the gap and session statistics (`sum` is an engine-level aggregate, below) | `group_by`*, `aggregates`*, `window`*, `stride`, `rel_types`, `prop_filter`, `endpoint_filter`, `pair_mode`, `as_of_tt` | VT window, TT |
 | `burst_detection` | buckets of an event-rate series flagged as bursts (z-score against a trailing mean, or ratio against a trailing median) | `target`*, `window`*, `stride`*, `method`, `params`, `as_of_tt` | VT window, TT |
 | `co_active` | an interval join between two edge-version sets under an Allen relation (`overlaps`, `during`, `meets`, `before`) | `a_spec`*, `b_spec`*, `allen_relation`*, `as_of_tt` | VT intervals, TT |
 | `count_temporal_motifs` | the exact number of δ-temporal motif instances among edge events in a window | `motif`*, `delta`*, `window`*, `node_filter`, `as_of_tt` | VT window, TT |
@@ -57,18 +58,72 @@ The full argument schema of each operator, with descriptions, is in the
 registry: `gnomon.temporal.algebra.REGISTRY[name].args_schema` and
 `.description`.
 
+## Engine-level operators and arguments
+
+The fifteen operators above are the **base operator set**
+(`gnomon.temporal.algebra.BASE_OPERATORS`), and `args_schema` is their
+**base schema**. The registry also holds four engine-level operators, and
+some base operators accept engine-level arguments; both are validated
+against a wider **engine schema** (`REGISTRY[name].engine_schema`).
+`call_operator` uses the engine schema by default; a caller that should see
+only the base set passes `base_schema=True`, and then an engine-level
+operator or argument is refused exactly as an unknown one. An engine-level
+argument has no default, so a call that does not use it is filled, echoed
+and digested exactly as before it existed.
+
+| operator | answers | key parameters (* required) | clocks |
+|---|---|---|---|
+| `match` | typed pattern matching: node variables (by label or uid), steps of one hop, exactly `k` hops, a bounded or unbounded closure, or a regular path expression over relation types; predicates, `optional` and `not` sub-patterns, lookups and unions; then a projection or one or two aggregation stages, an order and a limit, fused into one plan | `pattern`, `return`*, `scope`* (`vt`: an `instant` or a `window`; `as_of_tt`; `belief` = `current` / `superseded` / `all`; `co_valid`), `params`, `limit` | VT instant or window, TT |
+| `paths` | paths between sources and targets: hop or weight distances (`metric`), one or all optimal paths, the `k` best or all simple paths (`result`), optionally time-respecting (`non_strict` / `strict`); sources, targets and weights from uid lists, properties or inline `match` patterns; per-vertex truncation; a window form (`valid_window`) in which a path is valid at one shared instant | `sources`*, `targets`, `t_valid` or `valid_window`, `window`, `metric`, `result`, `k`, `min_hops`, `max_hops`, `rel_types`, `edge_where`, `truncate`, `as_of_tt` | VT instant or window, TT |
+| `state_series` | an aggregate (`count`, `sum`, `min`, `max`, `mean`, optionally of a property, optionally grouped) over the node or edge versions alive in each bucket of a window: valid at the bucket's start or time-weighted over it (`axis: "valid"`), or believed at each bucket of a transaction-time window about one valid instant (`axis: "transaction"`) | `kind`*, `window`*, `stride`*, `agg`*, `axis`, `at`, `t_valid`, `labels`, `rel_types`, `where`, `group_by`, `as_of_tt` | VT window or TT window |
+| `diff_belief` | the belief diff: every node and edge version whose belief state changed between transaction times `t1` and `t2`, inside a valid-time window. A version is `added` when its `tt_s` falls in `(t1, t2]` and `retracted` when its effective `tt_e` does; `added_total` and `retracted_total` count the whole population | `t1`*, `t2`*, `window`* | two TT points, VT window |
+
+Engine-level arguments of base operators:
+
+| operator | argument | effect |
+|---|---|---|
+| `aggregate_events` | `{"agg": "sum", "of": ...}` | an **exact** sum over `vt_s`, `duration` or a numeric property: an integer total over integers, and a correctly rounded total (`math.fsum`) once a float takes part, so no summation order moves it |
+| `aggregate_events` | `valid_at` | keep only the events whose version is valid at that instant |
+| `version_history` | `ref`, `include_props` | the belief log of **one** node (`{"uid"}`) or edge (`{"eid"}` or `{"src", "dst", "rel_type", "disc"}`): every version ever written, with both clocks, optionally with its props; versions closed by a bare retraction are included |
+| `entity_history` | `t_valid` or `window` | only the believed versions valid at the instant or overlapping the window, found by a windowed point read instead of the whole history |
+
+A `match` call, for example, finds whom `alice` reaches over one or two
+`KNOWS` edges at valid time 500:
+
+```json
+{"pattern": {"nodes": [{"var": "a", "uids": ["alice"]}, {"var": "b"}],
+             "steps": [{"from": "a", "to": "b", "rel_type": "KNOWS",
+                        "hops": {"min": 1, "max": 2}}]},
+ "return": {"rows": [{"as": "who", "expr": {"col": "b.uid"}}],
+            "order_by": [{"expr": {"col": "who"}}]},
+ "scope": {"vt": {"instant": 500}}}
+```
+
+Under a valid instant with current belief, a node variable binds the one
+version valid at the instant, and the pattern is matched in the snapshot
+graph at that instant. Under a window (with `co_valid: ["valid"]`), or under
+a belief mode other than `current`, variables bind **versions**, and walks
+and sub-patterns obey the **shared-instant rule**: every node and edge of a
+binding, walks included, must be valid at one common instant, and the
+answer is the union over those instants, one row per version tuple. No two
+single-hop edges of one pattern bind the same edge identity; a bounded
+closure `{min: a, max: b}` keeps each target once, at its shortest
+distance. The order is completed with every output column and bound version
+id, so it is total and a `limit` cuts it the same way on every executor.
+
 ## Engine calls outside the registry
 
-Two engine capabilities are exposed on the native adapter rather than as
-registered operators, and the benchmark harness calls them directly:
+One engine capability is exposed on the native adapter rather than as a
+registered operator, and the benchmark harness calls it directly:
 
 | call | answers | clocks |
 |---|---|---|
 | `adapter.lookup_name(query, mode, as_of_tt=OPEN_END, limit=None)` | nodes whose uid equals `query`, or whose `name` property equals (`mode="exact"`) or starts with (`mode="prefix"`) it, case-insensitively, through the per-segment name index | TT |
-| `adapter.diff_belief(t1, t2, t_a, t_b, limit)` | every version whose belief state changed between transaction times `t1` and `t2`, inside the valid-time window `[t_a, t_b)`; cost `O(segments × (runs + closes))`, independent of the store size | two TT points, VT window |
 
-See `scripts/eval_harness.py` (`_lookup_name_dispatch`,
-`_diff_belief_dispatch`) for their exact argument shapes.
+See `scripts/eval_harness.py` (`_lookup_name_dispatch`) for its exact
+argument shape. The adapter also keeps `adapter.diff_belief(t1, t2, t_a,
+t_b, limit)`, the engine call behind the `diff_belief` operator, which the
+harness calls directly as well (`_diff_belief_dispatch`).
 
 ## The result envelope
 

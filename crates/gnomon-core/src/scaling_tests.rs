@@ -78,7 +78,7 @@ const OFF: Designs = Designs { adjacency_filtered_scan: false, ..Designs::ALL };
 #[test]
 fn a_filtered_scan_answers_identically_with_the_adjacency_path_on_and_off() {
     for layout in LAYOUTS {
-        let mut f = build("w30-id", layout);
+        let mut f = build("scaling-id", layout);
         let reqs = requests(&f);
         f.s.set_designs(OFF);
         let want: Vec<String> = reqs.iter().map(|(_, r)| answer(&f.s, r)).collect();
@@ -104,7 +104,7 @@ fn a_filtered_scan_answers_identically_with_the_adjacency_path_on_and_off() {
 #[test]
 fn a_one_node_filter_walks_postings_and_examines_fewer_rows_than_the_scan() {
     for layout in LAYOUTS {
-        let mut f = build("w30-work", layout);
+        let mut f = build("scaling-work", layout);
         let mut walked_any = false;
         for (name, req) in requests(&f) {
             let ids = req.touching_ids.clone().unwrap();
@@ -142,7 +142,7 @@ fn a_one_node_filter_walks_postings_and_examines_fewer_rows_than_the_scan() {
 fn a_filter_wider_than_the_cap_or_the_segment_takes_the_scan() {
     let cap = crate::defaults::ADJ_FILTER_MAX_IDS;
     for layout in LAYOUTS {
-        let mut f = build("w30-cap", layout);
+        let mut f = build("scaling-cap", layout);
         f.s.set_designs(Designs::ALL);
         // every entity: each segment's postings cover each row twice, never
         // fewer than the rows the scan examines
@@ -167,7 +167,7 @@ fn a_filter_wider_than_the_cap_or_the_segment_takes_the_scan() {
 #[test]
 fn without_the_index_the_filtered_scan_takes_the_scanned_adjacency() {
     for layout in LAYOUTS {
-        let mut f = build("w30-tcsr-scan", layout);
+        let mut f = build("scaling-tcsr-scan", layout);
         f.s.set_designs(Designs { adjacency_index: false, ..Designs::ALL });
         crate::vistouch::take();
         let (_, st) = f.s.select_edges(&ScanRequest::current().touching(vec![f.ids[3]])).unwrap();

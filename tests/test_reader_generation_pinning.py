@@ -11,7 +11,7 @@ This test does not emulate anything: it spawns a real subprocess reader,
 which has its own, separate `PINS` table (a fresh process loading its own
 copy of `_engine`'s statics) that the writer's `gc()` -- run in this, the
 parent, process -- never sees at all. That is the actual production shape
-`ops/failure_ledger.jsonl`'s entry measured in the 72h soak: a
+a 72-hour soak test measured: a
 `read_only=True` reader reopening its handle across a writer that compacts
 and collects generations underneath it.
 

@@ -238,6 +238,8 @@ _ADAPTER_METHODS = (
     ("retire_node_versions", "python.batch_conversion"),
     ("believed_edge_versions", "python.batch_conversion"),
     ("believed_node_versions", "python.batch_conversion"),
+    ("believed_edge_versions_overlapping", "python.batch_conversion"),
+    ("believed_node_versions_overlapping", "python.batch_conversion"),
     ("note_event_cursor", "python.batch_conversion"),
     ("commit", "python.batch_conversion"),
 )
@@ -342,6 +344,7 @@ _BODY = {
     "ensure_entities": "py_ensure_entities_ns",
     "believed_any": "py_believed_any_ns",
     "believed": "py_believed_ns",
+    "believed_window": "py_believed_window_ns",
     "stage_closes": "py_stage_closes_ns",
     "stage_retires": "py_stage_retires_ns",
     "commit": "py_commit_ns",
@@ -350,6 +353,7 @@ _BODY = {
     "compact": "py_compact_ns",
     "gc": "py_gc_ns",
     "stage_ingest_events_raw": "py_ingest_raw_ns",
+    "apply_ops_raw": "py_apply_raw_ns",
 }
 
 _WRITE_SLOTS = ("column_fill", "encode", "string_heap", "header_checksum",
@@ -431,8 +435,21 @@ def compose(py: dict[str, int], r: dict[str, int],
     for k, v in r_parts.items():
         put(k, v)
     put("staging.dictionary_insert", g("ingest_raw_ensure_ns"))
-    put("ingest_raw.other", g("py_ingest_raw_ns") - sum(r_parts.values())
-        - g("ingest_raw_ensure_ns") - g("ingest_raw_probe_ns"))
+    # an `ingest_events` op inside an engine-applied transaction runs the same
+    # timers inside `apply_ops_raw`'s body, under `apply_raw_ingest_ns`
+    put("ingest_raw.other", g("py_ingest_raw_ns") + g("apply_raw_ingest_ns")
+        - sum(r_parts.values()) - g("ingest_raw_ensure_ns") - g("ingest_raw_probe_ns"))
+
+    # -- A transaction applied by the engine from its record -----
+    # Its reads and closes run the correction timers below and are summed into
+    # those phases' bodies; ensure and staging join the staging phases; the
+    # row build (vid hashing, the rows themselves) is what is left.
+    put("apply_raw.parse_check", g("apply_raw_parse_ns"))
+    put("staging.dictionary_insert", g("apply_raw_ensure_ns"))
+    put("staging.row_build_push", g("apply_raw_stage_ns"))
+    put("apply_raw.row_build", g("py_apply_raw_ns") - g("apply_raw_parse_ns")
+        - g("apply_raw_ensure_ns") - g("apply_raw_read_ns") - g("apply_raw_supersede_ns")
+        - g("apply_raw_stage_ns") - g("apply_raw_ingest_ns"))
 
     # -- correction resolution -----------------------------------------------
     c_locate, c_fold = g("correct.locate_ns"), g("correct.fold_ns")
@@ -441,11 +458,12 @@ def compose(py: dict[str, int], r: dict[str, int],
     put("correction.postings_lookup", c_locate - c_fold)
     put("correction.rows_materialize", c_mat)
     put("correction.staged_rows", c_staged)
-    put("correction.read_other", g("py_believed_ns") - c_locate - c_mat - c_staged)
+    put("correction.read_other", g("py_believed_ns") + g("py_believed_window_ns")
+        + g("apply_raw_read_ns") - c_locate - c_mat - c_staged)
     put("correction.close_locate", g("close_locate_ns"))
     put("correction.close_overlay", g("close_overlay_ns"))
     put("correction.close_other", g("py_stage_closes_ns") - g("close_locate_ns")
-        - g("close_overlay_ns") + g("py_stage_retires_ns"))
+        - g("close_overlay_ns") + g("py_stage_retires_ns") + g("apply_raw_supersede_ns"))
 
     # -- commit: CommitPhases, with the seal split by the seal context --------
     seal_parts = {
@@ -536,6 +554,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("python.", "Python row build and batch conversion"),
     ("pyo3.", "PyO3 call boundary"),
     ("ingest_raw.", "raw-record ingest (engine row build)"),
+    ("apply_raw.", "transaction applied from its record (engine row build)"),
     ("engine.", "engine (timers compiled out)"),
     ("staging.", "staging (dictionary, row build)"),
     ("probe.", "endpoint existence probe"),

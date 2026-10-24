@@ -405,8 +405,7 @@ def test_tcsr_rebuilds_after_the_upgrade(tmp_path, fixture, format_version,
     assert index.exists(), "the permutation should have been persisted"
     # Not mtime: inode timestamps can have jiffy granularity (4 ms on Linux
     # 5.4/HZ=250), and on tmpfs the whole close->reopen->upgrade->rebuild
-    # round trip fits inside one tick, so two samples can collide (triage
-    # memo of 2026-09-19). What the stamp check actually guarantees is
+    # round trip fits inside one tick, so two samples can collide. What the stamp check actually guarantees is
     # checked directly: the persisted (generation, manifest_sha) and the
     # inode identity of the file that was `os.replace`'d into place.
     with np.load(index) as z:

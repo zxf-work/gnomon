@@ -31,7 +31,7 @@ const SPAN: i64 = 1_000_000;
 
 fn tmp_root(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("gnomon-w19-{name}-{}", std::process::id()));
+    p.push(format!("gnomon-vidfilter-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     p
 }
@@ -246,8 +246,8 @@ fn digest_is_unchanged_by_building_filters() {
 /// The mechanism gate, at unit scale: a correction's identity probe folds
 /// **one** segment, not the store.
 ///
-/// Stated as `folds ÷ probes ≤ 1.1`, which is the same inequality the Arm M
-/// pre-registration scores on the development machine — here with `S` in the single digits
+/// Stated as `folds ÷ probes ≤ 1.1`, which is the same inequality the
+/// pre-registered gate scores on the development machine — here with `S` in the single digits
 /// rather than the hundreds, so it pins the shape and not the magnitude.
 #[test]
 fn a_correction_folds_one_segment_not_the_store() {
