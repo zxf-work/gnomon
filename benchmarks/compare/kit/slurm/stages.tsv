@@ -1,0 +1,17 @@
+# Campaign stages on the evaluation host, in the order: the external
+# comparison first, then the per-switch study.
+# name  node class (shared | whole | bigmem)  jobs  limit_h  state_key  command (run with $KIT and $EXTCMP_ENGINE_COMMIT set)
+# A stage of several jobs is resumable: each job restores the stage's state
+# (server data dirs, stores) from $PROJECT, continues, and persists it again.
+# `later:` stages are separate decisions, submitted only with --with-later;
+# `optional:` only with --with-optional.
+build	shared	1	2	-	$KIT/slurm/build_engine.sh
+ext1m	whole	1	10	-	$KIT/run_campaign.sh --sizes 1000000 --steps freeze,loads,verify,timed,tables
+ext10m	whole	1	45	-	$KIT/run_campaign.sh --sizes 10000000 --steps freeze,loads,verify,timed,tables
+beliefq10m	whole	2	70	K10M-beliefq	$KIT/run_beliefq.sh --sizes 10000000 --steps freeze,inject,loads,verify,timed,tables
+series	whole	1	45	-	$KIT/run_engine_series.sh --steps ingest,report
+readlat	whole	1	20	-	$KIT/run_engine_series.sh --steps readlat
+ablation10m	whole	1	45	-	$KIT/run_ablation.sh --sizes 10000000 --steps logs,stores,timed,ingest,report
+ext100m	bigmem	2	70	K100M	later:EXTCMP_MEM_CAP=400g EXTCMP_MG_MEMORY_LIMIT_MB=400000 EXTCMP_XTDB_HEAP=64g EXTCMP_WIPE_AFTER=1 $KIT/run_campaign.sh --sizes 100000000 --steps freeze,loads,verify,timed,tables
+beliefq100m	bigmem	4	70	K100M-beliefq	later:EXTCMP_MEM_CAP=400g EXTCMP_MG_MEMORY_LIMIT_MB=400000 EXTCMP_XTDB_HEAP=64g EXTCMP_WIPE_AFTER=1 $KIT/run_beliefq.sh --sizes 100000000 --steps freeze,inject,loads,verify,timed,tables
+ablation100m	whole	5	70	K100M-ablation	optional:$KIT/run_ablation.sh --sizes 100000000 --ingest-sizes 100000000 --ingest-reps 2 --label ablation100m --steps logs,stores,timed,ingest,report

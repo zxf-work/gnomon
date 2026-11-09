@@ -148,7 +148,11 @@ def _work(calls: list[dict[str, Any]]) -> dict[str, int]:
 # --------------------------------------------------------------------- #
 
 
-def test_neighborhood_evolution_examines_the_nodes_rows_not_the_stores(stores, monkeypatch):
+@pytest.mark.parametrize("one_read", ["1", "0"])
+def test_neighborhood_evolution_examines_the_nodes_rows_not_the_stores(stores, monkeypatch, one_read):
+    # One touching read by default, the three reads under
+    # GNOMON_NBR_EVOLUTION_ONE_READ=0
+    monkeypatch.setenv("GNOMON_NBR_EVOLUTION_ONE_READ", one_read)
     work = {}
     for n, (path, data) in stores.items():
         q = _query(data, "nbr.evolution")
@@ -158,7 +162,7 @@ def test_neighborhood_evolution_examines_the_nodes_rows_not_the_stores(stores, m
         finally:
             store.close()
         scans = [c for c in calls if c["op"] == "scan_edges"]
-        assert len(scans) == 3, calls
+        assert len(scans) == (1 if one_read == "1" else 3), calls
         for c in scans:
             assert c["kw"].get("touching_ids"), c
             # falsifier: a filtered scan over one node that walked no postings
@@ -176,25 +180,42 @@ def test_neighborhood_evolution_examines_the_nodes_rows_not_the_stores(stores, m
 # --------------------------------------------------------------------- #
 
 
-def test_snapshot_subgraph_expands_from_its_seeds(stores, monkeypatch):
+@pytest.mark.parametrize("one_call", ["0", "1"])
+def test_snapshot_subgraph_expands_from_its_seeds(stores, monkeypatch, one_call):
+    # The expansion runs as one engine call by default; its
+    # scans are then inside that call, so the per-scan work is asserted on
+    # the Python expansion (GNOMON_SNAPSHOT_ONECALL=0), which issues the same
+    # scan requests, and the one-call answer is checked against it
+    H = _harness()
+    monkeypatch.setenv("GNOMON_SNAPSHOT_ONECALL", one_call)
     work = {}
     for n, (path, data) in stores.items():
         q = _query(data, "snap.hop2")
         store = _open(path, monkeypatch)
         try:
             out, calls = _spied(store, q.op, q.args)
+            if one_call == "1":
+                monkeypatch.setenv("GNOMON_SNAPSHOT_ONECALL", "0")
+                ref, _ = _spied(store, q.op, q.args)
+                monkeypatch.setenv("GNOMON_SNAPSHOT_ONECALL", "1")
         finally:
             store.close()
         assert out["nodes_total"] > 10 and out["rows_total"] > 10, out
         ops = [c["op"] for c in calls]
         # falsifier: the whole graph's nodes, or an edge scan with no filter
         assert "scan_nodes" not in ops, ops
+        if one_call == "1":
+            assert ops.count("snapshot_scan_page") == 1 and "scan_edges" not in ops, ops
+            assert H.canonical_hash(out) == H.canonical_hash(ref)
+            continue
         scans = [c for c in calls if c["op"] == "scan_edges"]
         assert scans and all(c["kw"].get("touching_ids") for c in scans), calls
         # one scan per hop plus the induced edges
         assert len(scans) == q.args["hops"] + 1, calls
         assert all(c["adj_segments"] > 0 for c in scans), scans
         work[n] = _work(calls)
+    if one_call == "1":
+        return
     # falsifier (design note): rows examined, or the scans' whole work, grow
     # more than 1.5x from one size to the next.
     #
@@ -249,9 +270,21 @@ def test_a_frontier_past_the_cap_takes_the_engines_frontier_and_answers_the_same
         finally:
             store.close()
         ops = [c["op"] for c in calls]
-        assert ops.count("snapshot_expand") == 1, ops
+        # The page form of the frontier by default, the full
+        # frontier under GNOMON_SNAPSHOT_PAGE=0; either way one engine call
+        assert ops.count("snapshot_expand_page") + ops.count("snapshot_expand") == 1, ops
         assert "scan_nodes" not in ops, ops
         assert H.canonical_hash(got) == H.canonical_hash(ref)
+        store = _open(path, monkeypatch)
+        try:
+            with monkeypatch.context() as m:
+                m.setattr(ops_snapshot, "SEED_EXPANSION_MAX_IDS", 5)
+                m.setenv("GNOMON_SNAPSHOT_PAGE", "0")
+                full, calls = _spied(store, q.op, q.args)
+        finally:
+            store.close()
+        assert [c["op"] for c in calls].count("snapshot_expand") == 1
+        assert H.canonical_hash(full) == H.canonical_hash(ref)
 
 
 def test_the_operator_cap_is_the_engines(stores):

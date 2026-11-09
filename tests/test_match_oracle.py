@@ -554,7 +554,7 @@ def test_unsupported_shapes_refuse_loudly(social):
     a, _ = social
     window = {"vt": {"window": {"t_a": 0, "t_b": 100}}}
     for args in (
-        # a closure under a non-sequenced window (the shared-instant rule needs co_valid: [valid])
+        # a closure under a non-sequenced window
         {"pattern": {"nodes": [{"var": "p"}, {"var": "q"}],
                      "steps": [{"from": "p", "to": "q", "hops": {"min": 1, "max": 2}}]},
          "return": {"rows": [{"as": "q", "expr": {"col": "q.uid"}}]}, "scope": window},

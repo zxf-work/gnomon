@@ -7,9 +7,7 @@
 //! which would change the store digest and break replay against previously
 //! recorded digests.
 //!
-//! The parity fixture in `tests/fixtures/derive_vectors.json` is generated
 //! from the Python functions themselves (`make derive-vectors`) and asserted
-//! in `tests/derive.rs`. Python is the source of truth; this is the copy.
 
 use sha2::{Digest, Sha256};
 

@@ -1,0 +1,950 @@
+{
+ "row": "BI14",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "union": [
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "cn1",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "ci1",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "p1",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "p2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci2",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn2",
+        "labels": [
+         "Country"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "ci1",
+        "to": "cn1",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "ci1",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "p2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "p2",
+        "to": "ci2",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci2",
+        "to": "cn2",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn1",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country1"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn2",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country2"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "p1.uid"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "p2.uid"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "tprop": [
+         "ci1",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "lit": 0
+       }
+      },
+      {
+       "as": "points",
+       "expr": {
+        "lit": 0
+       }
+      }
+     ]
+    },
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "cn1",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "ci1",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "p1",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "p2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci2",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn2",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "c",
+        "labels": [
+         "Comment"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "ci1",
+        "to": "cn1",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "ci1",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "p2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "p2",
+        "to": "ci2",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci2",
+        "to": "cn2",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "c",
+        "to": "p1",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "c",
+        "to": "m",
+        "rel_type": "REPLY_OF",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "p2",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn1",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country1"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn2",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country2"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "p1.uid"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "p2.uid"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "tprop": [
+         "ci1",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "lit": 1
+       }
+      },
+      {
+       "as": "points",
+       "expr": {
+        "lit": 4
+       }
+      }
+     ]
+    },
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "cn1",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "ci1",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "p1",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "p2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci2",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn2",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "c",
+        "labels": [
+         "Comment"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "ci1",
+        "to": "cn1",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "ci1",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "p2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "p2",
+        "to": "ci2",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci2",
+        "to": "cn2",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "c",
+        "to": "p2",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "c",
+        "to": "m",
+        "rel_type": "REPLY_OF",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "p1",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn1",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country1"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn2",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country2"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "p1.uid"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "p2.uid"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "tprop": [
+         "ci1",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "lit": 2
+       }
+      },
+      {
+       "as": "points",
+       "expr": {
+        "lit": 1
+       }
+      }
+     ]
+    },
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "cn1",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "ci1",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "p1",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "p2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci2",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn2",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "ci1",
+        "to": "cn1",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "ci1",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "p2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "p2",
+        "to": "ci2",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci2",
+        "to": "cn2",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "m",
+        "rel_type": "LIKES",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "p2",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn1",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country1"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn2",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country2"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "p1.uid"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "p2.uid"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "tprop": [
+         "ci1",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "lit": 3
+       }
+      },
+      {
+       "as": "points",
+       "expr": {
+        "lit": 10
+       }
+      }
+     ]
+    },
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "cn1",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "ci1",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "p1",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "p2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci2",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn2",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "ci1",
+        "to": "cn1",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "ci1",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "p1",
+        "to": "p2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "p2",
+        "to": "ci2",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci2",
+        "to": "cn2",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "p2",
+        "to": "m",
+        "rel_type": "LIKES",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "p1",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn1",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country1"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn2",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country2"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "p1.uid"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "p2.uid"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "tprop": [
+         "ci1",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "lit": 4
+       }
+      },
+      {
+       "as": "points",
+       "expr": {
+        "lit": 1
+       }
+      }
+     ]
+    }
+   ],
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "person1Id",
+       "expr": {
+        "col": "person1Id"
+       }
+      },
+      {
+       "as": "person2Id",
+       "expr": {
+        "col": "person2Id"
+       }
+      },
+      {
+       "as": "city1Name",
+       "expr": {
+        "col": "city1Name"
+       }
+      },
+      {
+       "as": "kind",
+       "expr": {
+        "col": "kind"
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "points",
+       "fn": "max",
+       "of": {
+        "col": "points"
+       }
+      }
+     ],
+     "then": {
+      "by": [
+       {
+        "as": "person1Id",
+        "expr": {
+         "col": "person1Id"
+        }
+       },
+       {
+        "as": "person2Id",
+        "expr": {
+         "col": "person2Id"
+        }
+       },
+       {
+        "as": "city1Name",
+        "expr": {
+         "col": "city1Name"
+        }
+       }
+      ],
+      "aggs": [
+       {
+        "as": "score",
+        "fn": "sum",
+        "of": {
+         "col": "points"
+        }
+       }
+      ]
+     }
+    },
+    "top_per": {
+     "by": [
+      {
+       "col": "city1Name"
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "score"
+       },
+       "dir": "desc"
+      },
+      {
+       "expr": {
+        "cast": {
+         "col": "person1Id"
+        },
+        "to": "int"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "cast": {
+         "col": "person2Id"
+        },
+        "to": "int"
+       },
+       "dir": "asc"
+      }
+     ],
+     "k": 1
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "score"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "person1Id"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "person2Id"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     }
+    ],
+    "limit": 100
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "country1": {
+     "pick": [
+      "countries",
+      0
+     ]
+    },
+    "country2": {
+     "pick": [
+      "countries",
+      1
+     ]
+    }
+   }
+  }
+ ]
+}

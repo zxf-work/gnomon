@@ -160,7 +160,7 @@ pub enum Phase {
     /// count-by-bucket path); zero under `GNOMON_AGG_RANGE_COUNT=0`.
     AggRangeCounts,
     /// The reachability kernel's stages — the window's believed
-    /// edges gathered from the planner's ranges, the CSR, the label-setting
+    /// edges gathered from the match plan's ranges, the CSR, the label-setting
     /// search, and the `(arrival, uid)` page.
     ReachEdges,
     ReachCsr,

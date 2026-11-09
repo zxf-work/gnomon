@@ -1,0 +1,9 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ # MemGraph CMake configuration
+-SET(CMAKE_BUILD_TYPE "Debug")  
++SET(CMAKE_BUILD_TYPE "Release")  # extcmp: upstream forces Debug here  
+ SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g2 -ggdb")  
+ #SET(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3 -Wall") 
+ cmake_minimum_required(VERSION 3.8)

@@ -126,8 +126,8 @@ def inject(store_path: Path, density_pct: float, seed: int, chunk_rows: int,
                 if not dry_run:
                     ref = EntityRef(kind="edge", src=e.src, dst=e.dst,
                                     rel_type=e.rel_type, disc=e.disc)
-                    props = {**e.props, "correction_seed": seed,
-                             "correction_density_pct": density_pct}
+                    props = {**e.props, "w5_correction_seed": seed,
+                             "w5_correction_density_pct": density_pct}
                     if batch <= 1:
                         store.correct(ref, props, vt_s=e.vt_s, vt_e=e.vt_e)
                         commits += 1

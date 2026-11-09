@@ -27,7 +27,14 @@ from gnomon.temporal.algebra import (
     paginate,
     required,
 )
-from gnomon.temporal.guardrails import coeff_scale, rel_rows, scan_estimate, touching_read_ms
+from gnomon.temporal import guardrails as _G
+from gnomon.temporal.guardrails import (
+    coeff_scale,
+    rel_rows,
+    scan_estimate,
+    touching_read_ms,
+    zone_rows,
+)
 
 MAX_BUCKETS = 2_000
 METRICS = ["node_count", "edge_event_count", "active_edge_count",
@@ -386,17 +393,30 @@ def _co_active_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, in
     without a rel_type); then the page. `scan_estimate` priced every version
     of the store for both, 80 to 1,700 times the time of a point-anchored
     call, and below the time of a whole-relation one."""
-    rows, ms = 0, 0.0
+    rows, ms, c5 = 0, 0.0, 0.0
+    # on the engine (a zone summary), an endpoint side is priced
+    # at the engine's measured rate per incident version (at most every edge
+    # version); a whole-relation side and the page keep the whole-store price
+    za = zone_rows(stats, int(stats.get("vt_max") or 0))
     for side in (args["a_spec"], args["b_spec"]):
         if side.get("src") or side.get("dst"):
             rows += 2 * int(stats.get("max_out_degree") or 0)
             ms += touching_read_ms(stats)
+            if za is not None:
+                per = min(2 * int(stats.get("max_out_degree") or 0),
+                          int(stats.get("n_edge_versions") or 0))
+                c5 += _G.TOUCHING_READ_MS + per * _G.C5_TOUCH_COACTIVE_MS_PER_M / 1e6
+            else:
+                c5 += touching_read_ms(stats)
         else:
             n = rel_rows(stats, side.get("rel_type"))
             rows += n
             ms += n * CO_SIDE_MS_PER_M / 1e6
+            c5 += n * CO_SIDE_MS_PER_M / 1e6
     ms += int(args.get("limit") or 0) * CO_ROW_MS
-    return {"rows_scanned_est": rows, "expansions_est": 0, "time_est_ms": int(ms * coeff_scale()) + 1}
+    c5 += int(args.get("limit") or 0) * CO_ROW_MS
+    return {"rows_scanned_est": rows, "expansions_est": 0,
+            "time_est_ms": min(int(ms * coeff_scale()) + 1, int(c5 * coeff_scale()) + 1)}
 
 
 @operator(

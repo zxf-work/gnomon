@@ -36,6 +36,7 @@ and a props column would put a JSON blob on every row of a whole-store scan.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from gnomon.core.errors import InvalidArgError
@@ -56,6 +57,7 @@ from gnomon.temporal.guardrails import (
     ROUTES_KEY,
     coeff_scale,
     point_read_estimate,
+    pure_cost,
     rel_rows,
 )
 
@@ -100,6 +102,12 @@ def _ref_key(kind: str, ref: dict[str, Any]) -> str:
         raise InvalidArgError("an edge ref is {src, dst, rel_type, disc?} or {eid}")
     return edge_eid(ref["src"], ref["dst"], ref["rel_type"], ref.get("disc", ""))
 
+def _version_cost_constants() -> tuple[float, ...]:
+    return (VERSION_PAGE_MS_PER_M, VERSION_SWEEP_MS_PER_M, VERSION_PAGE_ROW_MS,
+            VERSION_PAGE_CALL_MS)
+
+
+@pure_cost(constants=_version_cost_constants)
 def _version_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
     """This operator is in a different cost class from the rest of the
     algebra, and the guardrail has to know it.
@@ -284,6 +292,34 @@ def _identity_log(adapter: StorageAdapter, args: dict[str, Any],
     t_a, t_b = args["window"]["t_a"], args["window"]["t_b"]
     belief, rel_types = args["belief"], args["rel_types"]
     names = adapter.VERSION_COLS[kind]
+    cols_of = getattr(adapter, "identity_version_cols", None)
+    if cols_of is not None and not args.get("include_props") and \
+            os.environ.get("GNOMON_IDENTITY_LOG_COLS", "1") != "0":
+        # The same rows from the engine's columns, without a
+        # version object and a props parse per row; props are not returned
+        # here. `GNOMON_IDENTITY_LOG_COLS=0` reads version objects.
+        cols = cols_of(kind, _ref_key(kind, args["ref"]))
+        rows = []
+        n = 0 if cols is None else len(cols["vid"])
+        for i in range(n):
+            tt_s, tt_e = cols["tt_s"][i], cols["tt_e"][i]
+            if tt_s > as_of:
+                continue
+            superseded = tt_e <= as_of
+            if (belief == "current" and superseded) or \
+                    (belief == "superseded" and not superseded):
+                continue
+            if not (cols["vt_s"][i] < t_b and t_a < cols["vt_e"][i]):
+                continue
+            if rel_types is not None and cols["rel_type"][i] not in rel_types:
+                continue
+            r = {c: cols[c][i] for c in names}
+            if "disc" in r:
+                r["disc"] = r["disc"] or ""
+            r["tt_e"] = int(tt_e) if superseded else OPEN_END
+            rows.append(r)
+        rows.sort(key=lambda r: (r["tt_s"], r["vid"]))
+        return paginate(rows, args["limit"], args["cursor"])
     rows = []
     for v in adapter.identity_versions(kind, _ref_key(kind, args["ref"])):
         if v.tt_s > as_of:

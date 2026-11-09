@@ -348,7 +348,6 @@ class StorageAdapter(ABC):
         this store's 100M gate.
 
         **This default is the definition.** It is the arithmetic the frozen
-        digest `84e8853c…be78fbfd` was captured over, moved here verbatim from
         `ops_versions.version_history`, and an overriding backend agrees with
         it row for row and position for position or the digest moves.
         """

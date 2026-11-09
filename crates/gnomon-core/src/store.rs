@@ -139,6 +139,10 @@ pub struct NativeStore {
     /// Node versions written per label, of one generation: the `match`
     /// compiler's step-order estimates. Derived, never persisted.
     pub(crate) match_labels: std::sync::Mutex<Option<crate::matcher::LabelCounts>>,
+    /// Per relationship type, its edge versions and distinct end
+    /// identities, of one generation: the `match` compiler's second-anchor
+    /// estimates. Derived, never persisted.
+    pub(crate) match_rel_ends: std::sync::Mutex<Option<crate::matcher::RelEnds>>,
     /// Per node segment (by segment id), its rows by label: the `match`
     /// executor's label scans. Derived and rebuildable; segments are
     /// immutable, so an entry stays valid while its segment lives.
@@ -300,6 +304,8 @@ pub struct NativeStore {
     /// contract) — always populated, since every live handle came from a
     /// successful `open`.
     open_phases: OpenPhases,
+    /// The warm open's phases (`GNOMON_STORE_WARM_OPEN`), when it ran.
+    warm_phases: Option<crate::warm::WarmPhases>,
     /// How this handle's segment opens resolved (instrumentation, not
     /// contract) — see [`OpenPathCounters`].
     open_counters: OpenPathCounters,
@@ -606,7 +612,7 @@ impl CommitBase {
 
 impl NativeStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
-        Self::open_with(root.into(), false)
+        Self::open_with(root.into(), false, false)
     }
 
     /// Open an existing store as a **reader that never writes** under its
@@ -633,11 +639,23 @@ impl NativeStore {
     ///
     /// Answers are identical to a read-write handle's: the sidecars are
     /// derived, never authoritative.
+    ///
+    /// Unless `GNOMON_STORE_WARM_OPEN=0`, the handle is warmed before it is
+    /// returned: the store-wide, query-independent structures a first query
+    /// would otherwise build lazily are built here, in parallel
+    /// ([`crate::warm`]).
     pub fn open_read_only(root: impl Into<PathBuf>) -> Result<Self> {
-        Self::open_with(root.into(), true)
+        Self::open_with(root.into(), true, crate::warm::warm_open_on())
     }
 
-    fn open_with(root: PathBuf, read_only: bool) -> Result<Self> {
+    /// [`Self::open_read_only`] with the warm open chosen by the caller
+    /// rather than by `GNOMON_STORE_WARM_OPEN` (an A/B of the two paths in
+    /// one process).
+    pub fn open_read_only_with(root: impl Into<PathBuf>, warm: bool) -> Result<Self> {
+        Self::open_with(root.into(), true, warm)
+    }
+
+    fn open_with(root: PathBuf, read_only: bool, warm: bool) -> Result<Self> {
         let open_start = std::time::Instant::now();
         if read_only {
             if !root.join(CURRENT).is_file() {
@@ -702,7 +720,7 @@ impl NativeStore {
             other_us: total_us.saturating_sub(named_us),
             total_us,
         };
-        let store = Self {
+        let mut store = Self {
             root,
             pin_key,
             dict,
@@ -722,6 +740,7 @@ impl NativeStore {
             match_props: crate::matcher::PropsCache::default(),
             match_node_map: std::sync::Mutex::new(None),
             match_labels: std::sync::Mutex::new(None),
+            match_rel_ends: std::sync::Mutex::new(None),
             match_label_rows: std::sync::Mutex::new(Default::default()),
             match_rel_rows: std::sync::Mutex::new(Default::default()),
             edge_postings: std::sync::Mutex::new(Postings::new(postings_budget(
@@ -766,6 +785,7 @@ impl NativeStore {
             last_commit: None,
             install_ns: (0, 0, 0),
             open_phases,
+            warm_phases: None,
             open_counters: OpenPathCounters::default(),
         };
         // Pin every file this generation's manifest names before
@@ -776,7 +796,18 @@ impl NativeStore {
         // lazy fallback (and the reopen-on-ENOENT net above the engine) is
         // what actually surfaces a real problem.
         store.pin_generation_files();
+        // the store-wide, query-independent structures every query's first
+        // touch used to build lazily: built now, in parallel, on a reader
+        // (`warm.rs`; `GNOMON_STORE_WARM_OPEN=0` keeps the lazy path)
+        if read_only && warm {
+            store.warm_phases = Some(store.warm_open());
+        }
         Ok(store)
+    }
+
+    /// The warm open's phases, when this handle was warmed at open.
+    pub fn warm_phases(&self) -> Option<crate::warm::WarmPhases> {
+        self.warm_phases
     }
 
     /// Where the last commit spent its time, if this handle has committed.
@@ -2186,7 +2217,7 @@ impl NativeStore {
     /// the cache, because it will come back to the same segment; a read that
     /// walks *every segment once* does not, because caching it makes peak RSS
     /// grow with the store instead of with one segment. `stats_accum` adopted
-    /// that discipline first (`read.rs`, "Streaming, addendum 2"); this is the
+    /// that discipline first; this is the
     /// same choice, made a parameter so the whole-store paths can share it.
     pub(crate) fn open_segment_mode(&self, file: &str, mode: OpenMode) -> Result<SegmentHandle> {
         match mode {
@@ -4131,6 +4162,17 @@ impl TargetAdj {
             TargetAdj::Scan(s) => s.slice(d, u),
         }
     }
+
+    /// [`TargetAdj::slice`] for ascending lookups: the index searches
+    /// forward from `hint` ([`crate::tcsr::DirIndex::slice_from`]); the
+    /// same rows.
+    #[inline]
+    fn slice_from(&self, d: crate::tcsr::Direction, u: u32, hint: &mut usize) -> &[u32] {
+        match self {
+            TargetAdj::Index(i) => i.dir(d).slice_from(u, hint),
+            TargetAdj::Scan(s) => s.slice(d, u),
+        }
+    }
 }
 
 /// Adjacency found by scanning a segment's endpoint columns
@@ -4236,10 +4278,19 @@ fn tt_e_column_budget(env: Option<&str>) -> u64 {
 /// never in a column: the traversal consults them first
 /// ([`CloseIndex::pending_tt_e`]), so a rollback has nothing to undo.
 ///
-/// **Budget.** LRU by segment under a byte budget. A column that cannot fit
-/// is not built and the segment takes the per-call path.
+/// **Budget.** A byte budget, filled in first-use order: a column that does
+/// not fit in what is left is not built and its segment takes the per-call
+/// path. `neighbors_batch` visits every edge segment in the same order
+/// on every call, so an LRU over a working set past the budget missed on
+/// every segment of every call and rebuilt each column (8 B a row): at SF10
+/// that was an O(store) rebuild per point read (IS1 1.4 -> 133 ms, IS2
+/// 9 -> 1,215 ms on the evaluation host; reproduced at SF1 with a 100 MB budget, IS1
+/// 1.2 -> 34 ms). A column of a segment gc removed is still dropped
+/// (`evict_segments_not_in`), and a column whose key changed is replaced in
+/// place. `GNOMON_TT_E_COLUMN_EVICT=lru` restores the LRU.
 pub(crate) struct TtECols {
     map: HashMap<u64, TtECol>,
+    evict: bool,
     bytes: u64,
     peak_bytes: u64,
     budget: u64,
@@ -4259,8 +4310,14 @@ struct TtECol {
 
 impl TtECols {
     fn new(budget: u64) -> Self {
+        let evict = std::env::var("GNOMON_TT_E_COLUMN_EVICT").is_ok_and(|v| v.trim() == "lru");
+        Self::with_policy(budget, evict)
+    }
+
+    fn with_policy(budget: u64, evict: bool) -> Self {
         Self {
             map: HashMap::new(),
+            evict,
             bytes: 0,
             peak_bytes: 0,
             budget,
@@ -4285,8 +4342,28 @@ impl TtECols {
         Some(e.col.clone())
     }
 
+    /// Whether a column of `rows` rows for segment `id` may be built: under
+    /// the LRU, whenever it fits the budget alone; otherwise when it fits
+    /// what is left (the segment's own stale column counted as free).
+    fn admits(&self, id: u64, rows: usize) -> bool {
+        let add = (rows as u64) * 8;
+        if add > self.budget {
+            return false;
+        }
+        if self.evict {
+            return true;
+        }
+        let own = self.map.get(&id).map_or(0, |e| (e.col.len() * 8) as u64);
+        self.bytes - own + add <= self.budget
+    }
+
     fn insert(&mut self, id: u64, key: (usize, usize), col: std::sync::Arc<Vec<i64>>) {
         let add = (col.len() * 8) as u64;
+        if !self.evict && !self.admits(id, col.len()) {
+            // a racing build filled the budget first: the caller still uses
+            // the column it built, the cache does not keep it
+            return;
+        }
         if let Some(old) = self.map.remove(&id) {
             self.bytes -= (old.col.len() * 8) as u64;
         }
@@ -5002,7 +5079,7 @@ impl NativeStore {
             if let Some(col) = c.get(id, key) {
                 return Some(col);
             }
-            if (rows as u64) * 8 > c.budget {
+            if !c.admits(id, rows) {
                 return None;
             }
         }
@@ -5098,6 +5175,7 @@ impl NativeStore {
         let as_of = crate::clamp_tt(as_of_tt);
         let closes = self.close_index()?;
         let committed = self.committed_close_index()?;
+        let seek_from = neighbors_seek_from_on();
         let dirs: &[crate::tcsr::Direction] = match direction {
             NeighborDir::Out => &[crate::tcsr::Direction::Out],
             NeighborDir::In => &[crate::tcsr::Direction::In],
@@ -5180,10 +5258,21 @@ impl NativeStore {
             // something is believed).
             if self.designs.window_first && k + tt_items > 0 {
                 let adj = self.target_adjacency(&file, &seg, us, dirs)?;
-                let m: usize = us
-                    .iter()
-                    .map(|&u| dirs.iter().map(|&d| adj.slice(d, u).len()).sum::<usize>())
-                    .sum();
+                let m: usize = if seek_from {
+                    let mut hint = [0usize; 2];
+                    us.iter()
+                        .map(|&u| {
+                            dirs.iter()
+                                .enumerate()
+                                .map(|(j, &d)| adj.slice_from(d, u, &mut hint[j]).len())
+                                .sum::<usize>()
+                        })
+                        .sum()
+                } else {
+                    us.iter()
+                        .map(|&u| dirs.iter().map(|&d| adj.slice(d, u).len()).sum::<usize>())
+                        .sum()
+                };
                 let per_row = traversal_tests_rows(m, k, tt_items);
                 // A segment with closes decides belief from its cached
                 // effective-`tt_e` column — no per-call work in the number of
@@ -5306,17 +5395,25 @@ impl NativeStore {
             out.offsets.push(0);
             let mut cands: Vec<Cand> = Vec::new();
             let mut row_tests = 0usize;
+            // Each (segment, direction)'s position in its active list,
+            // carried from one vertex of the chunk to the next
+            let mut hints: Vec<[usize; 2]> = vec![[0, 0]; views.len()];
             for &u in us {
                 cands.clear();
-                for t in &views {
+                for (ti, t) in views.iter().enumerate() {
                     let (vt_s, vt_e_col) = (t.vt_s, t.vt_e);
                     let (src, dst) = (t.src, t.dst);
                     let (vid64, vid_lo32) = (t.vid64, t.vid_lo32);
                     let (rel_codes, rel_allowed) = (t.rel_codes, t.rel_allowed.as_ref());
                     let ranges = t.ranges;
 
-                    for &d in dirs {
-                        for &r in t.adj.slice(d, u) {
+                    for (j, &d) in dirs.iter().enumerate() {
+                        let slice = if seek_from {
+                            t.adj.slice_from(d, u, &mut hints[ti][j])
+                        } else {
+                            t.adj.slice(d, u)
+                        };
+                        for &r in slice {
                             let i = r as usize;
                             // ---- rel type -----------------------------------
                             //
@@ -5413,25 +5510,64 @@ impl NativeStore {
         };
         // a large frontier in chunks on the pool, concatenated in frontier
         // order: the same rows and offsets whatever the thread count
+        //
+        // From `PAR_NEIGHBORS_MIN_SMALL` vertices, in up to
+        // `PAR_NEIGHBORS_PARTS` chunks a thread of at least
+        // `PAR_NEIGHBORS_CHUNK_SMALL`, which the pool's threads claim as they
+        // free up: a frontier of a few thousand hubs holds millions of rows,
+        // which the 4096-vertex rule read on one thread.
+        // `GNOMON_NEIGHBORS_SPLIT=keys` (read per call) restores that rule.
         let threads = self.designs.match_threads();
-        let (out, row_tests) = if threads > 1 && us.len() >= PAR_NEIGHBORS_MIN {
-            let width = threads.min(us.len() / PAR_NEIGHBORS_CHUNK).max(1);
-            let size = us.len().div_ceil(width);
-            let parts = crate::pool::run(width, |w| {
-                chunk(&us[(w * size).min(us.len())..((w + 1) * size).min(us.len())])
-            });
+        let by_work = neighbors_split_by_work_on();
+        let min = if by_work { PAR_NEIGHBORS_MIN_SMALL } else { PAR_NEIGHBORS_MIN };
+        let append = |out: &mut NeighborRows, p: NeighborRows| {
+            let base = out.nbr.len() as u32;
+            out.nbr.extend(p.nbr);
+            out.vt_s.extend(p.vt_s);
+            out.vt_e.extend(p.vt_e);
+            out.seg_id.extend(p.seg_id);
+            out.seg_row.extend(p.seg_row);
+            out.offsets.extend(p.offsets[1..].iter().map(|&o| o + base));
+        };
+        let (out, row_tests) = if threads > 1 && us.len() >= min {
+            // Below the 4,096-vertex rule, the first PAR_NEIGHBORS_HEAD
+            // vertices run here first, and the rest is split only when, at
+            // their pace, it would take past PAR_NEIGHBORS_GATE_NS: a small
+            // store's hop is cheaper than waking the pool
+            // (`GNOMON_NEIGHBORS_SPLIT=eager`: always split)
+            let gate = by_work && us.len() < PAR_NEIGHBORS_MIN && neighbors_split_gate_on();
+            let head = if gate { PAR_NEIGHBORS_HEAD.min(us.len()) } else { 0 };
             let mut out = NeighborRows { offsets: vec![0], ..Default::default() };
             let mut tests = 0usize;
-            for part in parts {
-                let (p, n) = part?;
-                let base = out.nbr.len() as u32;
-                out.nbr.extend(p.nbr);
-                out.vt_s.extend(p.vt_s);
-                out.vt_e.extend(p.vt_e);
-                out.seg_id.extend(p.seg_id);
-                out.seg_row.extend(p.seg_row);
-                out.offsets.extend(p.offsets[1..].iter().map(|&o| o + base));
+            let mut split = true;
+            if head > 0 {
+                let t0 = std::time::Instant::now();
+                let (h, n) = chunk(&us[..head])?;
+                let rest_ns = t0.elapsed().as_nanos().saturating_mul((us.len() - head) as u128) / head as u128;
+                append(&mut out, h);
                 tests += n;
+                split = rest_ns >= PAR_NEIGHBORS_GATE_NS;
+            }
+            let rest = &us[head..];
+            if !split || rest.is_empty() {
+                let (p, n) = chunk(rest)?;
+                append(&mut out, p);
+                tests += n;
+            } else {
+                let width = if by_work {
+                    (threads * PAR_NEIGHBORS_PARTS).min(rest.len() / PAR_NEIGHBORS_CHUNK_SMALL).max(1)
+                } else {
+                    threads.min(rest.len() / PAR_NEIGHBORS_CHUNK).max(1)
+                };
+                let size = rest.len().div_ceil(width);
+                let parts = crate::pool::run(width, |w| {
+                    chunk(&rest[(w * size).min(rest.len())..((w + 1) * size).min(rest.len())])
+                });
+                for part in parts {
+                    let (p, n) = part?;
+                    append(&mut out, p);
+                    tests += n;
+                }
             }
             (out, tests)
         } else {
@@ -5446,6 +5582,37 @@ impl NativeStore {
 const PAR_NEIGHBORS_MIN: usize = 4096;
 /// in chunks of at least this many (a hub's slice is long, so they are small).
 const PAR_NEIGHBORS_CHUNK: usize = 128;
+/// The split by work: from this many vertices,
+const PAR_NEIGHBORS_MIN_SMALL: usize = 64;
+/// in chunks of at least this many,
+const PAR_NEIGHBORS_CHUNK_SMALL: usize = 8;
+/// and up to this many chunks a thread, claimed as threads free up.
+const PAR_NEIGHBORS_PARTS: usize = 4;
+/// Below `PAR_NEIGHBORS_MIN`, this many vertices run on the calling
+/// thread first,
+const PAR_NEIGHBORS_HEAD: usize = 32;
+/// and the rest is split only when it would take this long at their pace.
+const PAR_NEIGHBORS_GATE_NS: u128 = 1_000_000;
+
+/// `GNOMON_NEIGHBORS_SPLIT=eager` (read per call): the split by work
+/// without the head's gate.
+fn neighbors_split_gate_on() -> bool {
+    std::env::var("GNOMON_NEIGHBORS_SPLIT").map_or(true, |v| v.trim() != "eager")
+}
+
+/// `GNOMON_NEIGHBORS_SPLIT=keys` (read per call): `neighbors_batch`
+/// splits a frontier over the pool from 4,096 vertices, one chunk a thread
+///.
+fn neighbors_split_by_work_on() -> bool {
+    std::env::var("GNOMON_NEIGHBORS_SPLIT").map_or(true, |v| v.trim() != "keys")
+}
+
+/// `GNOMON_NEIGHBORS_SEEK=bisect` (read per call): each vertex's slot in
+/// a sparse adjacency direction is found by a search over the whole active
+/// list, not forward from the previous vertex's.
+fn neighbors_seek_from_on() -> bool {
+    std::env::var("GNOMON_NEIGHBORS_SEEK").map_or(true, |v| v.trim() != "bisect")
+}
 
 /// An edge scan's selection, `(segment id, selected rows)` per segment
 /// with a selected row, and the scan's counters.
@@ -8195,6 +8362,34 @@ mod tests {
         same_neighbors_either_way(&mut s, n, &[650, 700, OPEN_END], "after gc");
         let st = s.tt_e_column_stats();
         assert!(st.1 <= st.3, "over budget: {st:?}");
+    }
+
+    #[test]
+    fn a_budget_under_the_need_admits_first_and_never_rebuilds() {
+        // Repeated traversals over more column bytes than the budget
+        // build each admitted column once and evict nothing; the LRU
+        // (`GNOMON_TT_E_COLUMN_EVICT=lru`) rebuilt on every pass
+        let n = 120;
+        let root = tmp_root("tt-e-col-admit");
+        let (mut s, rows) = tt_e_store(&root, n);
+        close_some(&mut s, &rows, &mut Default::default(), 300, 3, 0);
+        same_neighbors_either_way(&mut s, n, &[350], "unbounded");
+        let need = s.tt_e_column_stats();
+        assert!(need.0 >= 2, "the fixture needs two columns: {need:?}");
+        for evict in [false, true] {
+            *s.tt_e_cols.lock().unwrap() = TtECols::with_policy(need.1 - 1, evict);
+            same_neighbors_either_way(&mut s, n, &[250, 350, OPEN_END], "first pass");
+            let first = s.tt_e_column_stats();
+            same_neighbors_either_way(&mut s, n, &[250, 350, OPEN_END], "second pass");
+            let second = s.tt_e_column_stats();
+            assert!(second.1 <= second.3, "over budget: {second:?}");
+            if evict {
+                assert!(second.4 > first.4, "the LRU no longer rebuilds: {first:?} {second:?}");
+            } else {
+                assert_eq!((second.4, second.8), (first.4, 0), "rebuilt or evicted: {first:?} {second:?}");
+                assert!(first.0 >= 1, "nothing admitted: {first:?}");
+            }
+        }
     }
 
     #[test]

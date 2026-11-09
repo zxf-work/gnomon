@@ -1,5 +1,8 @@
-"""Query-registry harness: a fixed set of named queries, a result
-canonicalizer, and a run manifest.
+"""Phase 0 evaluation harness: query registry, result canonicalizer, run manifest.
+
+The evaluation plan compares systems that format results differently, express
+different subsets of the semantics, and cannot be trusted to agree on field
+order. So a comparison needs three things before it needs a second system:
 
 * a **query registry** — one stable identifier per logical question, so a
   result can be attributed to a query rather than to a code path;
@@ -8,13 +11,13 @@ canonicalizer, and a run manifest.
 * a **run manifest** — enough environment to make a number reproducible, and
   to know when two numbers are not comparable.
 
-It runs the registry on the native engine and, optionally, on the DuckDB
-reference backend. The two have identical semantics, so any hash mismatch
-between them is a bug.
+Today it runs the two Gnomon backends. That is deliberately the smallest
+interesting matrix: they have identical semantics, so any hash mismatch is a
+bug rather than an expressiveness gap, which is exactly the property Phase 0's
+exit criterion depends on. Adding PostgreSQL or Neo4j means adding a runner
+that answers the same registry, not changing anything here.
 
-    python scripts/eval_harness.py --scale 200000
-    python scripts/eval_harness.py --scale 200000 --systems native,duckdb
-    python scripts/eval_harness.py --store <store dir> --log <its eventlog.jsonl> --json out.json
+    uv run python scripts/eval_harness.py --scale 200000
 """
 
 from __future__ import annotations
@@ -46,17 +49,30 @@ def measurement_host() -> str:
     """The host whose numbers are comparable to each other.
 
     Reported numbers come from one host, so that two rows of a table are
-    always comparable.
+    always comparable. A laptop run is for development; it differs by 5x in
+    cores and 6x in RAM, and macOS pins effective_io_concurrency to 0 for
+    want of posix_fadvise, so the PostgreSQL baseline cannot prefetch there
+    at all.
 
-    Defaulting to the current host makes an un-configured run "on the
-    measurement host" by definition. A deliberate cross-host comparison is
-    pinned with `GNOMON_MEASUREMENT_HOST=<name>`.
+    This used to be hard-coded, which meant
+    every receipt taken on any *other* host — including a brand-new
+    development host nobody had measured on yet — read
+    was simply not the host it ran on, which is true of almost every host
+    and therefore tells you nothing. Defaulting to the current host makes an
+    un-configured run "on the measurement host" by definition: whatever host
+    you're on is presumed to be the one your own numbers should be compared
+    against. A deliberate cross-host comparison — the case the flag actually
+    exists to catch — is still pinned on purpose with
+    `GNOMON_MEASUREMENT_HOST=<name>`.
     """
     return os.environ.get("GNOMON_MEASUREMENT_HOST",
                           platform.node().split(".")[0])
 
 
-#: Computed once at import time.
+#: Module-level for `import scripts.eval_harness as H; H.MEASUREMENT_HOST`
+#: — kept
+#: as a plain name, computed once at import time, rather than a function
+#: those callers would need to be updated to call.
 MEASUREMENT_HOST = measurement_host()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -65,8 +81,17 @@ import provenance  # noqa: E402
 #: Fields that describe the *call* rather than the answer. They legitimately
 #: differ between systems and runs, so they are excluded from the hash: the
 #: dataset extent moves as a store grows, and the digest is itself derived.
-#: Derived from the operator layer's own `ENVELOPE_META_FIELDS`, so an
-#: envelope key added there cannot reach this hash.
+#: is *by construction* the moment of the read, so a cross-run hash that
+#: included it would never agree with itself.
+#:
+#: Derived from the operator layer's own `ENVELOPE_META_FIELDS` rather than
+#: listed here, so an envelope key added there cannot reach this hash. It
+#: drifted once: `plan_ir` (the R-tuple metadata block — plan/node digests,
+#: canonical args, provenance) joined the envelope with `EMIT_PLAN_IR_META` and
+#: was hashed here as if it were answer, so every native cell differed from
+#: every baseline cell (PostgreSQL, ClickHouse, Neo4j, ... produce no such
+#: block) and a cross-system run reported 13 of 13 mismatches on agreeing
+#: answers.
 VOLATILE = tuple(dict.fromkeys(ENVELOPE_META_FIELDS + ("result_digest", "cursor")))
 
 
@@ -429,7 +454,16 @@ def _diff_belief_dispatch(adapter: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 
 #: Backends that load in-process; their `load` block reads `runtime: embedded`.
-EMBEDDED_SYSTEMS = ("native", "duckdb")
+#: item 5): which mechanism actually hosted the system while it loaded.
+#: Embedded backends run in this same process; the four SQL/Cypher
+#: and this script has no reliable way to
+#: tell which from inside the process, so it is a recorded fact
+#: (`GNOMON_EXTERNAL_RUNTIME`), not a guess.
+EMBEDDED_SYSTEMS = ("native", "duckdb", "kuzu")
+
+
+def _external_runtime() -> str:
+    return os.environ.get("GNOMON_EXTERNAL_RUNTIME", "docker")
 
 
 def _dir_bytes(path: Path) -> int | None:
@@ -504,8 +538,332 @@ def run_system(name: str, store_path: Path,
     return out
 
 
-#: The engine's ablation switches. A run records what was set; a store
-#: receipt records what the opened handle actually ran with
+def run_postgres(store_path: Path, queries: list[Query],
+                 load_receipt: dict[str, Any] | None = None) -> list[Result]:
+    """Answer the registry with SQL instead of with Gnomon operators.
+
+    Only the queries in `pg_queries.QUERIES` are attempted. A missing entry is
+    reported as *not yet written*, which is deliberately not the same as
+    `eval_semantics`'s `unsupported` verdict: that one asserts a system cannot
+    express the query, and nothing here has established it. Conflating the two
+    would let unfinished work read as a limitation of PostgreSQL.
+
+    `load_receipt`: the *real* load,
+    unlike `main()`'s outer timer which only measures replaying the log into
+    the native reference store this loader reads from, is `pg_baseline.load`
+    itself -- timed here, around that one call, and nowhere else.
+    """
+    import pg_baseline
+    import pg_queries
+
+    adapter = gnomon.open(store_path, backend="native").adapter
+    pg_baseline.ensure_database()
+    conn = pg_baseline.connect()
+    pg_baseline.apply_tuning(conn)
+    conn.execute(pg_baseline.SCHEMA)
+    t0 = time.perf_counter()
+    pg_baseline.load(conn, adapter)
+    load_s = time.perf_counter() - t0
+    conn.execute(pg_baseline.INDEXES)
+    conn.execute("ANALYZE edge_versions")
+    conn.execute("ANALYZE node_versions")
+    if load_receipt is not None:
+        rows = bytes_ = None
+        try:
+            rows = conn.execute(
+                "SELECT (SELECT count(*) FROM edge_versions) "
+                "+ (SELECT count(*) FROM node_versions)").fetchone()[0]
+        except Exception:                                  # noqa: BLE001
+            pass
+        try:
+            bytes_ = conn.execute(
+                "SELECT pg_database_size(current_database())").fetchone()[0]
+        except Exception:                                  # noqa: BLE001
+            pass
+        load_receipt["postgres"] = {"load_s": round(load_s, 3), "rows": rows,
+                                    "bytes": bytes_, "runtime": _external_runtime()}
+
+    out: list[Result] = []
+    for q in queries:
+        fn = pg_queries.QUERIES.get(q.id)
+        if fn is None:
+            out.append(Result(q.id, False, error="no SQL written yet (not a verdict)"))
+            continue
+        try:
+            payload, timings = _measure(lambda: fn(conn, **q.args))
+            p50, p95 = _p50_p95(timings)
+            out.append(Result(q.id, True, canonical_hash(payload), p50, p95,
+                              _answer_size(payload),
+                              timings_ms=[round(t, 3) for t in timings]))
+        except Exception as e:
+            out.append(Result(q.id, False, error=f"{type(e).__name__}: {e}"[:160]))
+    conn.close()
+    return out
+
+
+def run_clickhouse(store_path: Path, queries: list[Query],
+                   load_receipt: dict[str, Any] | None = None) -> list[Result]:
+    """Answer the registry with ClickHouse SQL — same contract as postgres.
+
+    `load_receipt`: see `run_postgres`'s docstring — same idea, timed around
+    `ch_baseline.load` alone.
+    """
+    import ch_baseline
+    import ch_queries
+
+    adapter = gnomon.open(store_path, backend="native").adapter
+    client = ch_baseline.connect()
+    ch_baseline.create_schema(client)
+    t0 = time.perf_counter()
+    ch_baseline.load(client, adapter)
+    load_s = time.perf_counter() - t0
+    if load_receipt is not None:
+        rows = bytes_ = None
+        try:
+            rows = client.query(
+                "SELECT (SELECT count() FROM edge_versions) "
+                "+ (SELECT count() FROM node_versions)").result_rows[0][0]
+        except Exception:                                  # noqa: BLE001
+            pass
+        try:
+            bytes_ = client.query(
+                "SELECT sum(bytes_on_disk) FROM system.parts WHERE active"
+                ).result_rows[0][0]
+        except Exception:                                  # noqa: BLE001
+            pass
+        load_receipt["clickhouse"] = {"load_s": round(load_s, 3), "rows": rows,
+                                      "bytes": bytes_, "runtime": _external_runtime()}
+
+    out: list[Result] = []
+    for q in queries:
+        fn = ch_queries.QUERIES.get(q.id)
+        if fn is None:
+            out.append(Result(q.id, False, error="no SQL written yet (not a verdict)"))
+            continue
+        try:
+            payload, timings = _measure(lambda: fn(client, **q.args))
+            p50, p95 = _p50_p95(timings)
+            out.append(Result(q.id, True, canonical_hash(payload), p50, p95,
+                              _answer_size(payload),
+                              timings_ms=[round(t, 3) for t in timings]))
+        except Exception as e:
+            out.append(Result(q.id, False, error=f"{type(e).__name__}: {e}"[:160]))
+    return out
+
+
+def run_neo4j(store_path: Path, queries: list[Query],
+              flavor: str = "neo4j",
+              load_receipt: dict[str, Any] | None = None) -> list[Result]:
+    """Answer the registry in Cypher — same contract as the SQL baselines.
+
+    `flavor` picks neo4j or memgraph: same driver, same loader, different
+    connection and DDL, one query override (see memgraph_queries).
+
+    `load_receipt`: see `run_postgres`'s docstring — timed around
+    `baseline.load` alone; row/byte counts are best-effort Cypher (no
+    portable "database size" call across neo4j/memgraph, so `bytes` is
+    `None` when the introspection query itself is unsupported).
+    """
+    if flavor == "memgraph":
+        import memgraph_baseline as baseline
+        import memgraph_queries as neo4j_queries
+    else:
+        import neo4j_baseline as baseline
+        import neo4j_queries
+
+    adapter = gnomon.open(store_path, backend="native").adapter
+    drv = baseline.connect()
+    baseline.create_schema(drv)
+    t0 = time.perf_counter()
+    baseline.load(drv, adapter)
+    load_s = time.perf_counter() - t0
+    if load_receipt is not None:
+        rows = None
+        try:
+            with drv.session() as session:
+                rows = session.run("MATCH (n) RETURN count(n) AS c").single()["c"]
+        except Exception:                                  # noqa: BLE001
+            pass
+        load_receipt[flavor] = {"load_s": round(load_s, 3), "rows": rows,
+                                "bytes": None, "runtime": _external_runtime()}
+    out: list[Result] = []
+    for q in queries:
+        fn = neo4j_queries.QUERIES.get(q.id)
+        if fn is None:
+            out.append(Result(q.id, False, error="no Cypher written yet (not a verdict)"))
+            continue
+        try:
+            payload, timings = _measure(lambda: fn(drv, **q.args))
+            p50, p95 = _p50_p95(timings)
+            out.append(Result(q.id, True, canonical_hash(payload), p50, p95,
+                              _answer_size(payload),
+                              timings_ms=[round(t, 3) for t in timings]))
+        except Exception as e:
+            out.append(Result(q.id, False, error=f"{type(e).__name__}: {e}"[:160]))
+    return out
+
+
+#: "the registry queries expressible in Raphtory's Python API
+#: (time-window degree/neighbourhood, temporal reachability if available;
+#: id not in this set raises `NotImplementedError` from `_raphtory_dispatch`
+#: -- caught the same way `run_system`'s own `except Exception` turns an
+#: unsupported op into `Result(ok=False)`, never a crash.
+RAPHTORY_SUPPORTED_OPS = frozenset({
+    "snapshot_subgraph", "neighborhood_evolution", "temporal_reachability",
+})
+
+
+def _raphtory_graph(adapter: Any):
+    """Build a Raphtory `PersistentGraph` from a native store's canonical
+    rows -- same source `run_postgres`/`run_clickhouse`/`run_neo4j` load
+    from (`adapter.all_edge_versions()`/`all_node_versions()`).
+
+    **Only the currently-believed version of each fact is loaded**
+    (`tt_e == OPEN_END`). Raphtory has a valid-time axis (which is what
+    `PersistentGraph.window`/`.snapshot_at` operate over) but no
+    transaction-time axis at all -- there is no Raphtory notion of "what
+    was believed as of tt X" to load a superseded version *into*. This is
+    why every belief-probing op (`hist.asof`, and anything else that reads
+    `as_of_tt` or compares two belief states) is unsupported by
+    construction here, not merely unimplemented: loading corrected-away
+    rows would not make them answerable, only wrong.
+
+    `PersistentGraph` (not the event-only `Graph`) because Gnomon edges and
+    node facts are **interval**-valid (`[vt_s, vt_e)`), which
+    `add_edge(vt_s, ...)` + `delete_edge(vt_e, ...)` reproduces directly --
+    `Graph.add_edge` alone is a single timestamped event with no interval.
+    An open `vt_e` (`OPEN_END`) is simply never deleted, i.e. it stays
+    valid through the graph's own latest time, matching Gnomon's own "no
+    retraction yet" meaning for that sentinel.
+    """
+    import raphtory
+
+    g = raphtory.PersistentGraph()
+    for v in adapter.all_node_versions():
+        if v.tt_e != OPEN_END:
+            continue
+        g.add_node(v.vt_s, v.uid)
+    for v in adapter.all_edge_versions():
+        if v.tt_e != OPEN_END:
+            continue
+        g.add_edge(v.vt_s, v.src, v.dst, layer=v.rel_type)
+        if v.vt_e < OPEN_END:
+            g.delete_edge(v.vt_e, v.src, v.dst, layer=v.rel_type)
+    return g
+
+
+def _raphtory_snapshot_subgraph(g: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """`snapshot_subgraph` (`snap.hop2`): the `hops`-hop neighbourhood of
+    `seeds`, as the graph stood at the instant `t_valid`
+    (`PersistentGraph.snapshot_at`, "all events not explicitly deleted at
+    `time`" -- exactly Gnomon's own `[vt_s, vt_e)`-contains-`t_valid` test).
+    Undirected: a node's Raphtory `.neighbours` is already the union of its
+    in- and out-edges, matching `snapshot_subgraph`'s own "neighbourhood",
+    not a one-directional traversal.
+    """
+    snap = g.snapshot_at(int(args["t_valid"]))
+    frontier = {str(s) for s in args["seeds"]}
+    seen = set(frontier)
+    for _ in range(int(args.get("hops", 1))):
+        nxt: set[str] = set()
+        for uid in frontier:
+            node = snap.node(uid)
+            if node is None:
+                continue
+            nxt.update(n.name for n in node.neighbours)
+        frontier = nxt - seen
+        seen.update(nxt)
+        if not frontier:
+            break
+    rows = sorted(seen)
+    return {"rows": rows, "rows_total": len(rows)}
+
+
+def _raphtory_neighborhood_evolution(g: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """`neighborhood_evolution` (`nbr.evolution`): the neighbour set of
+    `uid` at instant `t1` vs. at instant `t2` (`snapshot_at`, same
+    instant-semantics as above), diffed."""
+    uid = str(args["uid"])
+
+    def neighbours_at(t: int) -> set[str]:
+        node = g.snapshot_at(int(t)).node(uid)
+        return {n.name for n in node.neighbours} if node is not None else set()
+
+    before, after = neighbours_at(args["t1"]), neighbours_at(args["t2"])
+    gained, lost = sorted(after - before), sorted(before - after)
+    return {"gained": gained, "lost": lost,
+            "gained_total": len(gained), "lost_total": len(lost)}
+
+
+def _raphtory_temporal_reachability(g: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """`temporal_reachability` (`reach.window`): nodes reachable from `src`
+    by a time-respecting path starting no earlier than `window.t_a`, using
+    only edges inside `[t_a, t_b)` (`PersistentGraph.window`, then
+    Raphtory's own `algorithms.temporally_reachable_nodes`). `max_hops` is
+    left unbounded (node count) since the registry query's own bound is the
+    window, not a hop count -- `temporal_reachability`'s Gnomon semantics has
+    no separate hop cap either."""
+    from raphtory import algorithms
+
+    src = str(args["src"])
+    window = args["window"]
+    w = g.window(int(window["t_a"]), int(window["t_b"]))
+    state = algorithms.temporally_reachable_nodes(
+        w, w.count_nodes(), int(window["t_a"]), [src])
+    # Every node in the windowed graph appears in `state.items()`, even one
+    # never reached at all -- its own history is simply empty
+    # (`{"reachable_nodes": []}`). Only a non-empty history means "actually
+    # reached by a time-respecting path", which is what this op reports.
+    rows = sorted(n.name for n, hist in state.items()
+                  if n.name != src and hist.get("reachable_nodes"))
+    return {"rows": rows, "rows_total": len(rows)}
+
+
+_RAPHTORY_DISPATCH = {
+    "snapshot_subgraph": _raphtory_snapshot_subgraph,
+    "neighborhood_evolution": _raphtory_neighborhood_evolution,
+    "temporal_reachability": _raphtory_temporal_reachability,
+}
+
+
+def run_raphtory(store_path: Path, queries: list[Query],
+                 load_receipt: dict[str, Any] | None = None) -> list[Result]:
+    """Answer the registry queries expressible in Raphtory's Python API
+    — everything else reports `unsupported`
+    such, never as slow"), never a crash and never silently skipped.
+
+    `raphtory` is imported lazily (inside `_raphtory_graph`, not at module
+    scope) so it stays an optional dependency of this harness — `--systems`
+    without `raphtory` in the list never needs it installed at all.
+    """
+    adapter = gnomon.open(store_path, backend="native").adapter
+    t0 = time.perf_counter()
+    g = _raphtory_graph(adapter)
+    load_s = time.perf_counter() - t0
+    if load_receipt is not None:
+        load_receipt["raphtory"] = {
+            "load_s": round(load_s, 3), "rows": g.count_edges(),
+            "bytes": None, "runtime": "embedded"}
+
+    out: list[Result] = []
+    for q in queries:
+        fn = _RAPHTORY_DISPATCH.get(q.op)
+        if fn is None:
+            out.append(Result(q.id, False,
+                              error=f"unsupported: raphtory has no {q.op} mapping"))
+            continue
+        try:
+            payload, timings = _measure(lambda: fn(g, dict(q.args)))
+            p50, p95 = _p50_p95(timings)
+            out.append(Result(q.id, True, canonical_hash(payload), p50, p95,
+                              _answer_size(payload),
+                              timings_ms=[round(t, 3) for t in timings]))
+        except Exception as e:  # a system that cannot answer is data, not a crash
+            out.append(Result(q.id, False, error=f"{type(e).__name__}: {e}"[:160]))
+    return out
+
+
+#: store receipt records what the opened handle actually ran with
 #: (`NativeAdapter.designs()`), since the engine reads them at open.
 ABLATION_VARS = ("GNOMON_RANGE_VISIBILITY", "GNOMON_WINDOW_FIRST", "GNOMON_SEGMENT_PRUNE",
                  "GNOMON_TCSR", "GNOMON_VIDFILTER", "GNOMON_EXISTENCE_PROBE",
@@ -1034,9 +1392,13 @@ def measure_as_of_sweep(store_path: Path, log_path: Path, distances: list[int],
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=int, default=200_000, help="events to generate")
-    ap.add_argument("--systems", default="native",
-                    help="comma-separated: native,duckdb (duckdb is the "
-                         "optional reference backend)")
+    ap.add_argument("--systems", default="native,duckdb",
+                    help="comma-separated: native,duckdb,kuzu,postgres,"
+                         "clickhouse,neo4j,memgraph,raphtory. raphtory "
+                         "answers only snapshot_subgraph/neighborhood_"
+                         "evolution/temporal_reachability (see run_raphtory's "
+                         "docstring); needs 'uv pip install raphtory' first, "
+                         "imported lazily so it stays optional otherwise")
     ap.add_argument("--log", type=Path,
                     help="replay this pre-recorded event log instead of "
                          "generating synthetic data (e.g. "
@@ -1121,10 +1483,20 @@ def main() -> int:
     for name in systems:
         path = Path(tempfile.mkdtemp()) / "store"
         t0 = time.perf_counter()
-        load_store(path, name, log)
+        # PostgreSQL is a baseline, not a backend: it cannot replay the log,
+        # so it is loaded from a native store's canonical rows instead.
+        # Raphtory is the same shape: no replay of Gnomon's
+        # own bi-temporal event log, built from a native store's canonical
+        # rows by `_raphtory_graph` instead.
+        baseline = name in ("postgres", "clickhouse", "neo4j", "memgraph", "raphtory")
+        load_store(path, "native" if baseline else name, log)
         load_s = time.perf_counter() - t0
-        results[name] = run_system(name, path, queries, load_receipt=load,
-                                   load_s=round(load_s, 3))
+        results[name] = (run_postgres(path, queries, load_receipt=load) if name == "postgres"
+                         else run_clickhouse(path, queries, load_receipt=load) if name == "clickhouse"
+                         else run_neo4j(path, queries, load_receipt=load) if name == "neo4j"
+                         else run_neo4j(path, queries, "memgraph", load_receipt=load) if name == "memgraph"
+                         else run_raphtory(path, queries, load_receipt=load) if name == "raphtory"
+                         else run_system(name, path, queries, load_receipt=load, load_s=round(load_s, 3)))
         shown = load.get(name, {}).get("load_s", load_s)
         print(f"  {name}: loaded in {shown:.1f}s")
 
@@ -1188,7 +1560,8 @@ def report_results(systems: list[str], results: dict[str, list[Result]],
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"  wrote {json_path}")
 
-    # Exit criterion: identical hashes across the backends that ran.
+    # Phase 0's exit criterion: identical hashes across the Gnomon backends.
+    # A PostgreSQL gap is expressiveness, not a bug, so it must not fail here.
     return 1 if mismatches else 0
 
 

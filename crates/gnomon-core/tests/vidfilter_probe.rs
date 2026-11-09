@@ -247,7 +247,7 @@ fn digest_is_unchanged_by_building_filters() {
 /// **one** segment, not the store.
 ///
 /// Stated as `folds ÷ probes ≤ 1.1`, which is the same inequality the
-/// pre-registered gate scores on the development machine — here with `S` in the single digits
+/// gate scores on the development machine — here with `S` in the single digits
 /// rather than the hundreds, so it pins the shape and not the magnitude.
 #[test]
 fn a_correction_folds_one_segment_not_the_store() {
@@ -280,7 +280,6 @@ fn a_correction_folds_one_segment_not_the_store() {
     assert_eq!(fa, 1, "the filtered probe folded {fa} segments, not one");
     assert_eq!(fb, segments as u64, "the unfiltered probe folds the store");
 
-    // and the gate as the pre-registration states it, over a burst: `folds
     // / probes <= 1.1`, with `probes` the corrections rather than the
     // per-segment filter lookups
     let mut corrections = 1u64;

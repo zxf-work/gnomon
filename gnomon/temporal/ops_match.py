@@ -28,7 +28,6 @@ Semantics the compiler fixes, beyond the plan IR's own rules:
   version does not bind (the snapshot graph `G(t)`);
 - under a window, or any belief mode other than `current`, variables bind
   **versions**, joined on identity (non-sequenced);
-- under the shared-instant rule (a window with `co_valid: [valid]`, or an instant with a
   belief mode other than `current`), walks and `optional`/`not` sub-patterns
   share one valid instant with the binding: the answer is the union over the
   instants of the instant answers, one row per version tuple;
@@ -43,7 +42,9 @@ Semantics the compiler fixes, beyond the plan IR's own rules:
 from __future__ import annotations
 
 import json
+import os
 import re
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -373,22 +374,17 @@ class _Ctx:
     lookup_on: dict[str, set[str]] = field(default_factory=dict)
     #: the scope's `co_valid` axes
     axes: tuple[str, ...] = ()
-    #: under the shared-instant rule: each walk's fragment columns (start, end)
     walks: list[tuple[str, str]] = field(default_factory=list)
-    #: under the shared-instant rule: each walk target's depth column (least per version tuple)
     depth_cols: list[str] = field(default_factory=list)
     #: shared variables a sub-pattern reads through key columns only
     key_vars: set[str] = field(default_factory=set)
     #: the orientation column of each `dir: both` hop (a self-loop read both ways
     #: is two bindings, as `Expand` counts it)
     orient_cols: list[str] = field(default_factory=list)
-    #: under the shared-instant rule, a walk or a sub-pattern can split a binding's valid set
     fragmented: bool = False
-    #: under the shared-instant rule, the columns of the binding's current fragment
     seq_iv: tuple[str, str] = ("valid.s", "valid.e")
     #: label and relationship counts for the step order (`plan_order`)
     card: dict[str, Any] | None = None
-    #: under the shared-instant rule with fragments: the running common interval while the
     #: pattern binds, and what it already covers
     run_iv: tuple[str, str] | None = None
     carried: set[str] = field(default_factory=set)
@@ -410,8 +406,7 @@ class _Ctx:
 
     @property
     def shared_instant(self) -> bool:
-        """The shared-instant rule (one shared valid instant) holds for walks and
-        sub-patterns: a window in overlap mode with `co_valid: [valid]`, or an
+        """        sub-patterns: a window in overlap mode with `co_valid: [valid]`, or an
         instant with a belief mode other than current."""
         return not self.expand_path and self.vt_mode == "overlap" and \
             "transaction" not in self.axes and (self.instant or "valid" in self.axes)
@@ -547,6 +542,15 @@ class _Builder:
         self.qual = qual or {}
         #: lookups not yet joined: each joins once its `on` is bound
         self.lookups: list[dict[str, Any]] = []
+        #: shared variables of a decorrelated `not` sub-pattern (`_decorrelation`):
+        #: each is the far end of one single hop and binds as that hop's endpoint
+        #: uid only, exactly as a key variable (no node version, no interval)
+        self.proxies: set[str] = set()
+
+    def _bind_proxy(self, var: str, uid_col: str) -> None:
+        self.ctx.kinds[var] = "node"
+        self.ctx.uid_col[var] = uid_col
+        self.ctx.key_vars.add(var)
 
     # -- helpers -----------------------------------------------------------
     def _bound(self, var: str) -> bool:
@@ -656,8 +660,7 @@ class _Builder:
         self._carry()
 
     def _carry(self) -> None:
-        """Under the shared-instant rule with fragments: narrow the binding's running common
-        interval by every version and walk fragment bound since the last
+        """        interval by every version and walk fragment bound since the last
         step, and drop the rows where it is empty, so no combination that
         cannot share an instant is carried into the next step."""
         c = self.ctx
@@ -810,7 +813,8 @@ class _Builder:
         elif st.get("var"):
             raise InvalidArgError("match: only a single-hop step binds an edge variable")
         closing = self._bound(dst)
-        into = c.name("c") if closing else dst
+        proxy = not closing and dst in self.proxies
+        into = c.name("c") if closing or proxy else dst
         rel_type, alternatives = _rel_choice(st, single)
         self.rel = Expand(self.rel, c.uid_col[src], into, hops,
                           rel_type=rel_type, dir=direction,
@@ -820,6 +824,10 @@ class _Builder:
             self._filter(_one_of(f"{edge_var}.rel_type", alternatives))
         if closing:
             self._filter(Cmp("=", Col(f"{into}.uid"), Col(c.uid_col[dst])))
+        elif proxy:
+            # the closing hop's own expansion, its far end left free: the
+            # key join after the sub-pattern is the closing test
+            self._bind_proxy(dst, f"{into}.uid")
         else:
             c.kinds[dst] = "node" if not hops.variable_length else "target"
             c.uid_col[dst] = f"{dst}.uid"
@@ -889,7 +897,11 @@ class _Builder:
             if self._bound(other_end):
                 on += ((c.uid_col[other_end], other_col),)
             self.rel = Join(self.rel, scan, on, "inner", sigma_=c.sigma)
-        if not self._bound(other_end):
+        if not self._bound(other_end) and other_end in self.proxies:
+            # the closing hop joined on its bound end only: the key join after
+            # the sub-pattern is the other end's test (`_decorrelation`)
+            self._bind_proxy(other_end, other_col)
+        elif not self._bound(other_end):
             node = nodes.get(other_end, {"var": other_end})
             self.rel = Join(self.rel, self._scan(node), ((other_col, f"{other_end}.uid"),),
                             "inner", sigma_=c.sigma)
@@ -898,8 +910,7 @@ class _Builder:
             self._distinct_edges(e)
 
     def _step_unrolled(self, st: dict[str, Any], nodes: dict[str, dict], k: int) -> None:
-        """`{exact: k}` under the shared-instant rule: k hops through anonymous node and edge
-        variables, each binding a version (a walk counted once per version
+        """        variables, each binding a version (a walk counted once per version
         tuple of its elements), exempt from the distinct-edge rule."""
         c = self.ctx
         a, b = st["from"], st["to"]
@@ -914,8 +925,7 @@ class _Builder:
             cur = nxt
 
     def _step_covalid(self, st: dict[str, Any], nodes: dict[str, dict], hops: Any) -> None:
-        """`{min, max}` under the shared-instant rule: `CoValidExpand` from the bound end; its
-        fragment joins the binding's common interval."""
+        """        fragment joins the binding's common interval."""
         c = self.ctx
         src, dst = st["from"], st["to"]
         direction = st.get("dir", "out")
@@ -1196,8 +1206,14 @@ def _sub(ctx: _Ctx, left: Node, sub: dict[str, Any], join_type: str,
             raise InvalidArgError(why)
     sub_ctx = _Ctx(ctx.sigma, ctx.vt_mode, ctx.belief, fresh=ctx.fresh, axes=ctx.axes)
     sub_ctx.fragmented = ctx.fragmented
+    every = shared
+    anchor = _sub_anchor(sub, shared)
+    proxies = list(shared) if anchor is not None else _decorrelation(sub, shared, join_type)
+    if proxies:
+        shared = [v for v in shared if v not in proxies]
     keys = tuple((sub_ctx.name("k"), Col(ctx.uid_col[v])) for v in shared)
-    right: Node = Aggregate(left, group_by=keys, sigma_=ctx.sigma)
+    right: Node | None = None if anchor is not None else \
+        Aggregate(left, group_by=keys, sigma_=ctx.sigma)
     for (k, _), v in zip(keys, shared):
         sub_ctx.kinds[v] = "node"
         sub_ctx.uid_col[v] = k
@@ -1214,16 +1230,17 @@ def _sub(ctx: _Ctx, left: Node, sub: dict[str, Any], join_type: str,
                     raise InvalidArgError(
                         "match: a sub-pattern predicate may not read a shared variable's props")
     b = _Builder(sub_ctx, right)
+    b.proxies = set(proxies)
     for n in nodes:
-        if n["var"] in shared and (n.get("labels") or n.get("uids")):
+        if n["var"] in every and (n.get("labels") or n.get("uids")):
             raise InvalidArgError("match: constrain a shared variable in the pattern, not in "
                                   "the sub-pattern")
-    b.pattern([n for n in nodes if n["var"] not in shared] or [{"var": shared[0]}],
-              steps, sub.get("where", []))
-    on = tuple((ctx.uid_col[v], k) for (k, _), v in zip(keys, shared))
+    b.pattern([n for n in nodes if n["var"] not in every] or [{"var": shared[0]}],
+              steps, sub.get("where", []), anchor_var=anchor)
+    on = tuple((ctx.uid_col[v], k) for (k, _), v in zip(keys, shared)) + \
+        tuple((ctx.uid_col[v], sub_ctx.uid_col[v]) for v in proxies)
     right_rel = b.rel
     if ctx.fragmented:
-        # shared-instant: the extension's own common interval (carried while it bound),
         # then the per-instant join
         b._carry()
         assert sub_ctx.run_iv is not None, "a sub-pattern step binds a version"
@@ -1232,9 +1249,9 @@ def _sub(ctx: _Ctx, left: Node, sub: dict[str, Any], join_type: str,
     ctx.fresh = sub_ctx.fresh
     if join_type == "left_outer":
         for v, kind in sub_ctx.kinds.items():
-            if v not in shared:
+            if v not in every:
                 ctx.kinds[v] = kind
-        ctx.vid_cols.extend(c for c in sub_ctx.vid_cols if _var_of(c) not in shared)
+        ctx.vid_cols.extend(c for c in sub_ctx.vid_cols if _var_of(c) not in every)
         ctx.depth_cols.extend(sub_ctx.depth_cols)
         ctx.orient_cols.extend(sub_ctx.orient_cols)
     if ctx.fragmented:
@@ -1244,6 +1261,164 @@ def _sub(ctx: _Ctx, left: Node, sub: dict[str, Any], join_type: str,
         ctx.seq_iv = out_iv
         return rel
     return Join(left, b.rel, on, join_type, sigma_=ctx.sigma)
+
+
+def _implied_on() -> bool:
+    return os.environ.get("GNOMON_MATCH_IMPLIED", "1") != "0"
+
+
+def _flat(w: Any, op: str) -> list[Any]:
+    """The operands of a chain of `bool: op` (one item when `w` is not one)."""
+    if isinstance(w, dict) and w.get("bool") == op and "l" in w and "r" in w:
+        return _flat(w["l"], op) + _flat(w["r"], op)
+    return [w]
+
+
+def _fold(items: list[Any], op: str) -> Any:
+    out = items[0]
+    for x in items[1:]:
+        out = {"bool": op, "l": out, "r": x}
+    return out
+
+
+def _implied(where: list[Any]) -> list[Any]:
+    """The single-variable predicates a disjunction over several
+    variables implies. When every disjunct of `a OR b OR ...` holds
+    conjuncts reading one variable `v` alone, any binding the disjunction
+    keeps passes the disjunction of those conjunct groups (the disjunct it
+    passes passes its group), so adding that predicate keeps the same rows,
+    NULLs included; the step order may then anchor on `v` (BI16: the tag by
+    `name = $tagA OR name = $tagB`, where the pattern walked every person's
+    every message: SF10 31.5M messages, 36.8M tags, 57 s, before 5,919
+    rows passed). `GNOMON_MATCH_IMPLIED=0` adds none."""
+    if not _implied_on():
+        return []
+    out: list[Any] = []
+    for w in where:
+        disj = _flat(w, "or")
+        if len(disj) < 2 or len(_vars_in(w)) < 2:
+            continue
+        groups = []
+        for d in disj:
+            g: dict[str, list[Any]] = {}
+            for c in _flat(d, "and"):
+                vs = _vars_in(c)
+                if len(vs) == 1:
+                    g.setdefault(next(iter(vs)), []).append(c)
+            groups.append(g)
+        for v in sorted(set.intersection(*(set(g) for g in groups))):
+            out.append(_fold([_fold(g[v], "and") for g in groups], "or"))
+    return out
+
+
+def _eq_literals(w: Any) -> int:
+    """The number of values when `w` is `x = lit OR x = lit ...` on one
+    variable's property or column (`0` otherwise)."""
+    parts = _flat(w, "or")
+    for c in parts:
+        if not (isinstance(c, dict) and c.get("cmp") == "=" and
+                any(isinstance(c.get(side), dict) and "lit" in c[side] for side in ("l", "r"))):
+            return 0
+    return len(parts)
+
+
+def _sub_anchor(sub: dict[str, Any], shared: list[str]) -> str | None:
+    """The variable an `optional` or `not` sub-pattern is grown from instead
+    of the outer rows' keys: a node of its own with uids or an
+    equality predicate reading it alone (BI16: the tag by name), when every
+    shared variable is the far end of exactly one plain single hop and read
+    by no predicate of the sub-pattern. The shared variables then bind as
+    those hops' endpoint uids (key variables, as `_decorrelation`'s), and the
+    join reads them all; the sub-pattern's bindings for a key do not depend
+    on the outer rows, so the rows are the same. Grown from the keys, BI16
+    walked every friend's every message (SF1: 34,918 keys -> 20.7M rows
+    before the one-day, one-tag filters). `GNOMON_MATCH_SUB_ANCHOR=0` grows it
+    from the keys."""
+    if os.environ.get("GNOMON_MATCH_SUB_ANCHOR", "1") == "0" or not shared:
+        return None
+    steps = sub.get("steps", [])
+    where = sub.get("where", [])
+    read = set().union(*(_vars_in(w) for w in where)) if where else set()
+
+    def plain(st: dict[str, Any]) -> bool:
+        if "regex" in st or {"order", "edge_where", "truncate"} & set(st):
+            return False
+        h = _hops(st.get("hops"))
+        return isinstance(h, Exact) and h.k == 1
+
+    for v in shared:
+        if v in read or sum(v in (st["from"], st["to"]) for st in steps) != 1:
+            return None
+    own = [n for n in sub.get("nodes", []) if n["var"] not in shared]
+    cands = [n["var"] for n in own if n.get("uids")] + [
+        n["var"] for n in own if not n.get("uids") and any(
+            isinstance(w, dict) and w.get("cmp") == "=" and _vars_in(w) == {n["var"]} for w in where)]
+    for a in cands:
+        bound, todo, ok = {a}, list(steps), True
+        while todo and ok:
+            pos = next((k for k, st in enumerate(todo) if st["from"] in bound or st["to"] in bound), None)
+            if pos is None:
+                ok = False
+                break
+            st = todo.pop(pos)
+            far = {st["from"], st["to"]} - bound
+            if (far & set(shared) and not plain(st)) or (set(shared) & {st["from"], st["to"]} & bound):
+                ok = False
+            bound |= {st["from"], st["to"]}
+        if ok and set(shared) <= bound:
+            return a
+    return None
+
+
+def _decorrelation(sub: dict[str, Any], shared: list[str], join_type: str) -> list[str]:
+    """The shared variables a `not` sub-pattern need not be grown from: each is the far end of exactly one plain single hop and is read by
+    no predicate of the sub-pattern, so in the correlated form it is only that
+    hop's closing test. The sub-pattern is then grown from the distinct keys
+    of the other shared variables alone, the hop leaves the variable free (its
+    endpoint uid, bound as a key variable: no node version, no interval, as
+    the closing test binds none), and the anti-join reads it with the rest.
+    The rows the anti-join keeps are the same; the binding table no longer
+    repeats the sub-pattern once per value of the variable (IC4: once per
+    tag, 695M-1.1B rows at SF10). `[]` keeps the correlated form:
+    `GNOMON_MATCH_DECORRELATE=0`, an optional sub-pattern (its rows are the
+    answer's), one shared variable, or no seed from which every step is
+    reached in the builder's order with each such variable a far end."""
+    if join_type != "anti" or len(shared) < 2 or os.environ.get("GNOMON_MATCH_DECORRELATE", "1") == "0":
+        return []
+    steps = sub.get("steps", [])
+    read = set().union(*(_vars_in(w) for w in sub.get("where", []))) if sub.get("where") else set()
+
+    def plain(st: dict[str, Any]) -> bool:
+        if "regex" in st or {"order", "edge_where", "truncate"} & set(st):
+            return False
+        h = _hops(st.get("hops"))
+        return isinstance(h, Exact) and h.k == 1
+
+    # the seeds: the shared variables of the step the correlated form expands
+    # first (every shared variable bound, the first step in order touching
+    # one), and every shared variable that cannot be left free; growing from
+    # another one could expand far more (IC4's tag: every post of the tag)
+    first = next((st for st in steps if st["from"] in shared or st["to"] in shared), None)
+    if first is None:
+        return []
+    seeds = {v for v in (first["from"], first["to"]) if v in shared}
+    for v in shared:
+        if v in read or sum(v in (st["from"], st["to"]) for st in steps) != 1:
+            seeds.add(v)
+    cand = [v for v in shared if v not in seeds]
+    if not cand:
+        return []
+    bound, todo = set(seeds), list(steps)
+    while todo:
+        pos = next((k for k, st in enumerate(todo) if st["from"] in bound or st["to"] in bound), None)
+        if pos is None:
+            return []
+        st = todo.pop(pos)
+        far = {st["from"], st["to"]} - bound
+        if far & set(cand) and not plain(st):
+            return []
+        bound |= {st["from"], st["to"]}
+    return cand if set(cand) <= bound else []
 
 
 def _cols_in(spec: Any) -> list[str]:
@@ -1485,7 +1660,6 @@ def _sequenced(ctx: _Ctx, rel: Node, axes: list[str],
     """Sequenced semantics: every bound version's interval on each named
     axis shares an instant; the common interval is projected (its start is
     the greatest start, its end the least end) and must be non-empty. (Under
-    shared-instant with fragments the interval is carried while the pattern binds,
     `_Builder._carry`.)"""
     bound = [v for v, k in ctx.kinds.items()
              if not v.startswith(("_c", "_u", "_k")) and k in ("node", "edge", "target")
@@ -1610,7 +1784,9 @@ def _tree_reduction(pat: dict[str, Any], keep: set[str], ctx: _Ctx
 
 def _pattern_rel(pat: dict[str, Any], sigma: Sigma, vt_mode: str, belief: str,
                  axes: list[str], keep_only: set[str] | None = None,
-                 card: dict[str, Any] | None = None) -> tuple[_Ctx, Node]:
+                 card: dict[str, Any] | None = None,
+                 qual: dict[str, Node] | None = None,
+                 ends: dict[str, Any] | None = None) -> tuple[_Ctx, Node]:
     """One pattern (with its sequenced projection and sub-patterns) lowered
     onto a relation, and the context that names its variables. With
     `card`, the steps may be reordered by estimated cardinality
@@ -1625,6 +1801,10 @@ def _pattern_rel(pat: dict[str, Any], sigma: Sigma, vt_mode: str, belief: str,
             return ctx, b.rel
     seq_names = {c for ax in axes for c in SEQUENCED_COLS[ax]}
     where = pat.get("where", [])
+    implied = [w for w in _implied(where) if not set(_cols_in(w)) & seq_names]
+    if implied:
+        where = list(where) + implied
+        pat = {**pat, "where": where}
     looks = {lk["as"] for lk in pat.get("lookups", [])}
     deferred = [w for w in where if set(_cols_in(w)) & seq_names]
     walks = any("min" in (st.get("hops") or {}) for st in pat.get("steps", [])
@@ -1632,16 +1812,24 @@ def _pattern_rel(pat: dict[str, Any], sigma: Sigma, vt_mode: str, belief: str,
     if ctx.shared_instant and (walks or pat.get("optional") or pat.get("not")):
         ctx.fragmented = True
     b = _Builder(ctx, None, keep_only if not axes and not deferred and not pat.get("succ")
-                 and not looks else None)
+                 and not looks else None, qual)
     b.lookups = list(pat.get("lookups", []))
     planned = plan_order(pat, card)
-    anchor_var, steps = planned if planned is not None else (None, pat.get("steps", []))
-    b.pattern(pat["nodes"], steps, [w for w in where if w not in deferred],
-              pat.get("succ"), anchor_var=anchor_var)
-    rel = b.rel
+    split = None
+    if planned is None and ends is not None and b.keep_only is None and not b.lookups \
+            and not deferred and ctx.belief == "current" and ctx.vt_mode == "overlap" \
+            and set(axes) <= {"valid"}:
+        split = second_anchor(pat, ends)
+    if split is not None:
+        rel = _second_anchor_rel(ctx, pat, [w for w in where if w not in deferred], split)
+        b.rel = rel
+    else:
+        anchor_var, steps = planned if planned is not None else (None, pat.get("steps", []))
+        b.pattern(pat["nodes"], steps, [w for w in where if w not in deferred],
+                  pat.get("succ"), anchor_var=anchor_var)
+        rel = b.rel
     main_vars = set(ctx.kinds)
     if ctx.fragmented:
-        # shared-instant with walks or sub-patterns: the valid set may split; it is
         # carried as fragments and collapsed to one row per version tuple
         if deferred:
             _check_col(sorted(set(_cols_in(deferred)) & seq_names)[0], ctx, None)
@@ -1681,8 +1869,23 @@ def _lookup(ctx: _Ctx, rel: Node, lk: dict[str, Any]) -> Node:
         last = last["then"]
     if lk["key"] not in [b["as"] for b in last["by"]]:
         raise InvalidArgError("match: a lookup's key is a group key of its last stage")
+    seed = _lookup_seed(lk)
+    if seed is not None:
+        # only where the sub-match binds the key variable first: joined later,
+        # the semijoin prunes nothing and costs a key aggregate and a join
+        # (TCR8 on the corpus store: +28 %)
+        planned = plan_order(sub["pattern"], ctx.card)
+        first = planned[0] if planned is not None else _anchor(sub["pattern"].get("nodes", []))["var"]
+        if first != seed:
+            seed = None
+    qual = None
+    if seed is not None:
+        # The sub-match's key variable bound to the outer rows' distinct keys
+    # only (a semijoin as it binds; the step order stays the match plan's)
+        qual = {seed: Aggregate(rel, group_by=((ctx.name("lq"), _expr(lk["on"], ctx)),),
+                                sigma_=ctx.sigma)}
     _sctx, srel = _pattern_rel(sub["pattern"], ctx.sigma, ctx.vt_mode, ctx.belief, [],
-                               card=ctx.card)
+                               card=ctx.card, qual=qual)
     grouped, cols = _group(_sctx, srel, sub["group"], True, None)
     right = Project(grouped, bindings=tuple((f"{alias}.{c}", Col(c)) for c in cols),
                     sigma_=ctx.sigma)
@@ -1697,6 +1900,50 @@ def _lookup(ctx: _Ctx, rel: Node, lk: dict[str, Any]) -> Node:
                "inner" if lk.get("join") == "inner" else "left_outer", sigma_=ctx.sigma)
     ctx.lookup_cols |= {f"{alias}.{c}" for c in cols}
     return out
+
+
+def _lookup_seed(lk: dict[str, Any]) -> str | None:
+    """The node variable a lookup's sub-match may be restricted to the outer
+    rows' keys by, or None. Its group stages must carry the key from a
+    first stage keyed by `<v>.uid` (each later stage keyed by the previous
+    stage's key column) with nothing that ranks or cuts across keys; then
+    the rows of a key are those of the bindings with that `v`, and the
+    sub-match binds `v` only to keys the outer rows hold. `_lookup` applies
+    it only when the match plan's own anchor of the sub-match is `v` (anchoring
+    it there by force made BI8 6x slower; joined after other steps it prunes
+    nothing). BI6's `pop` counted the
+    likes of every person's every message (SF10: 31.5M messages, 26.8M
+    likes, ~30 s) to read 6,825 persons. `GNOMON_MATCH_LOOKUP_SEED=0` reads
+    every key."""
+    if os.environ.get("GNOMON_MATCH_LOOKUP_SEED", "1") == "0":
+        return None
+    sub = lk["match"]
+    pat = sub.get("pattern") or {}
+    stages, g = [], sub.get("group")
+    while isinstance(g, dict):
+        if set(g) - {"by", "aggs", "project", "having", "then"}:
+            return None
+        stages.append(g)
+        g = g.get("then")
+    if not stages:
+        return None
+    first = [b for b in stages[0].get("by", []) if isinstance(b.get("expr"), dict)
+             and set(b["expr"]) == {"col"} and str(b["expr"]["col"]).endswith(".uid")]
+    nodes = {n["var"]: n for n in pat.get("nodes", [])}
+    for b in first:
+        v = b["expr"]["col"][: -len(".uid")]
+        if v not in nodes or nodes[v].get("uids"):
+            continue
+        name, ok = b["as"], True
+        for st in stages[1:]:
+            nxt = [c for c in st.get("by", []) if c.get("expr") == {"col": name}]
+            if not nxt:
+                ok = False
+                break
+            name = nxt[0]["as"]
+        if ok and name == lk["key"]:
+            return v
+    return None
 
 
 def _union_rel(args: dict[str, Any], sigma: Sigma, vt_mode: str, belief: str,
@@ -1733,16 +1980,20 @@ def _union_rel(args: dict[str, Any], sigma: Sigma, vt_mode: str, belief: str,
     return Union(tuple(branches), sigma_=sigma), names
 
 
-def compile_match(args: dict[str, Any], card: dict[str, Any] | None = None) -> Compiled:
+def compile_match(args: dict[str, Any], card: dict[str, Any] | None = None,
+                  ends: dict[str, Any] | None = None) -> Compiled:
     """The filled argument (`validate`) -> its plan. `card` (label and
     relationship counts, `cardinalities`) lets the compiler order a
-    pattern's steps by estimated size (`plan_order`)."""
+    pattern's steps by estimated size (`plan_order`). `ends` (the counts
+    with each relationship's distinct end identities, `anchor_cardinalities`)
+    lets it grow a uid-anchored pattern from a second anchor
+    (`second_anchor`)."""
     from gnomon.plan.node import schema_memo
 
     if card is not None:
         card = {**card, "walks_movable": _reads_no_depth(args)}
     with schema_memo():
-        return _compile_match(args, card)
+        return _compile_match(args, card, ends)
 
 
 def _reads_no_depth(args: dict[str, Any]) -> bool:
@@ -1751,7 +2002,8 @@ def _reads_no_depth(args: dict[str, Any]) -> bool:
     return ".depth" not in json.dumps(args, default=str)
 
 
-def _compile_match(args: dict[str, Any], card: dict[str, Any] | None = None) -> Compiled:
+def _compile_match(args: dict[str, Any], card: dict[str, Any] | None = None,
+                   ends: dict[str, Any] | None = None) -> Compiled:
     sigma, vt_mode = _sigma_of(args["scope"])
     belief = args["scope"].get("belief", "current")
     axes = args["scope"].get("co_valid") or []
@@ -1765,7 +2017,8 @@ def _compile_match(args: dict[str, Any], card: dict[str, Any] | None = None) -> 
         group = ret.get("group")
         keep = _set_semantics(args["pattern"], group, [b["expr"] for b in group["by"]]) \
             if group is not None and not ret.get("top_per") else None
-        ctx, rel = _pattern_rel(args["pattern"], sigma, vt_mode, belief, axes, keep, card)
+        ctx, rel = _pattern_rel(args["pattern"], sigma, vt_mode, belief, axes, keep, card,
+                                ends=ends if _order_free(ret) else None)
         expr_ctx, stage = ctx, None
 
     if "rows" in ret:
@@ -1902,7 +2155,13 @@ def plan_order(pat: dict[str, Any], card: dict[str, Any] | None,
         if len(vs) == 1:
             v = next(iter(vs))
             if v in sel:
-                sel[v] *= _SEL_EQ if w.get("cmp") == "=" else _SEL_OTHER
+                k = _eq_literals(w) if _implied_on() else 0
+                if k:
+                    # A value list on one variable (BI16's tag names):
+                    # about one node per value, never above the 50 % rule
+                    sel[v] *= min(_SEL_OTHER, k / n_of(v))
+                else:
+                    sel[v] *= _SEL_EQ if w.get("cmp") == "=" else _SEL_OTHER
 
     def fan(st: dict[str, Any], src: str) -> float:
         rt = st.get("rel_type")
@@ -1994,6 +2253,526 @@ def plan_order(pat: dict[str, Any], card: dict[str, Any] | None,
     if best is None or not given_cost > REORDER_FACTOR * best[0]:
         return remember(None)
     return remember((best[1], best[2]))
+
+
+# ---------------------------------------------------------------------------
+# the second anchor
+# ---------------------------------------------------------------------------
+
+#: A pattern is grown from a second anchor only when its given plan is
+#: estimated this many times costlier than the two sides and their join
+#: parameter sets, three settings, untimed): estimated ratios 3.2-18 ran
+#: 1.3-6x faster split, 1.4 and 2.3 ran slower or mixed.
+SECOND_ANCHOR_FACTOR = 3.0
+
+
+def _second_anchor_mode() -> str:
+    """`GNOMON_MATCH_SECOND_ANCHOR` (read per call): `0` keeps every pattern's
+    given plan; `force` takes the split whenever one is eligible, whatever
+    the estimates say (the tests); otherwise the estimates decide."""
+    v = os.environ.get("GNOMON_MATCH_SECOND_ANCHOR", "1").strip()
+    return "off" if v == "0" else "force" if v == "force" else "on"
+
+
+def _order_free(ret: dict[str, Any]) -> bool:
+    """Whether the answer is the same for any row order of the binding table:
+    no `collect` at any group stage (its list follows the rows), so the only
+    order is the answer's own, completed by every bound version."""
+    g = ret.get("group")
+    while g is not None:
+        if any(a.get("fn") == "collect" for a in g.get("aggs", [])):
+            return False
+        g = g.get("then")
+    return True
+
+
+#: the keys of a predicate `second_anchor` moves: comparisons, connectives,
+#: null tests, columns, properties, literals
+_PLAIN_KEYS = {"cmp", "l", "r", "bool", "not", "is_null", "col", "lit", "tau", "prop", "tprop"}
+
+
+def _plain_pred(w: Any) -> bool:
+    """A predicate of comparisons and boolean connectives over columns,
+    properties and literals alone (no arithmetic, cast or function, which
+    could raise on a row the given plan never tested)."""
+    if isinstance(w, list):
+        return all(_plain_pred(x) for x in w)
+    if not isinstance(w, dict):
+        return True
+    if not set(w) <= _PLAIN_KEYS:
+        return False
+    return all(_plain_pred(v) for k, v in w.items() if k not in ("lit", "tau", "col", "prop", "tprop"))
+
+
+def _second_anchor_shape(pat: Any) -> bool:
+    """The shape `second_anchor` considers, from the pattern alone (cheap):
+    one node pinned by uids, every other node free, no sub-pattern, lookup
+    or `succ`, at least two steps."""
+    if not isinstance(pat, dict) or not isinstance(pat.get("nodes"), list):
+        return False
+    if pat.get("optional") or pat.get("not") or pat.get("lookups") or pat.get("succ"):
+        return False
+    if len(pat.get("steps") or []) < 2:
+        return False
+    return sum(1 for n in pat["nodes"] if n.get("uids")) == 1
+
+
+def _pinned_free_node(pat: dict[str, Any]) -> bool:
+    """Whether a node without uids is pinned to literal values by a predicate
+    of its own (`x = lit OR ...`, the implied ones included): the second
+    anchor `second_anchor` needs (a cheap test before any count is read)."""
+    free = {n["var"] for n in pat["nodes"] if not n.get("uids")}
+    where = list(pat.get("where") or [])
+    for w in where + _implied(where):
+        vs = _vars_in(w)
+        if len(vs) == 1 and next(iter(vs)) in free and _eq_literals(w):
+            return True
+    return False
+
+
+def anchor_cardinalities(adapter: Any, args: dict[str, Any]) -> dict[str, Any] | None:
+    """`cardinalities` plus, per relationship type, its edge versions and the
+    distinct identities at its source and target ends (`match_rel_ends`),
+    for a call `second_anchor` may split: current belief (at any `as_of_tt`),
+    an instant or an overlap window (`co_valid` at most `["valid"]`), over a
+    pattern of its shape; `None` otherwise, when the adapter cannot say, or
+    under `GNOMON_MATCH_SECOND_ANCHOR=0`."""
+    if _second_anchor_mode() == "off" or "union" in args:
+        return None
+    scope = args.get("scope") or {}
+    if scope.get("belief", "current") != "current" or not set(scope.get("co_valid") or []) <= {"valid"} or \
+            scope.get("mode", "overlap") != "overlap":
+        return None
+    if not _second_anchor_shape(args.get("pattern")) or not _order_free(args.get("return") or {}):
+        return None
+    if not _pinned_free_node(args["pattern"]):
+        return None
+    if ".depth" in json.dumps(args, default=str):
+        return None
+    # the store's generation (a property of the native handle)
+    gen_of = getattr(adapter, "generation", None)
+    gen_v = gen_of() if callable(gen_of) else gen_of
+    gen = gen_v if isinstance(gen_v, int) and not isinstance(gen_v, bool) else None
+    # the counts are the store's: kept per handle and generation (a call
+    # pays a dictionary lookup, not a stats read and a conversion)
+    held = _ANCHOR_CARDS.get(adapter) if gen is not None else None
+    if held is not None and held[0] == gen:
+        out: dict[str, Any] = dict(held[1])
+    else:
+        base = cardinalities(adapter)
+        ends_of = getattr(adapter, "match_rel_ends", None)
+        if base is None or ends_of is None:
+            return None
+        ends = {str(r): (float(c), float(s), float(d)) for r, c, s, d in ends_of()}
+        out = {**base, "ends": ends}
+        # the counts' text, once: part of `second_anchor`'s memo keys
+        out["counts_key"] = json.dumps(out, sort_keys=True, default=str)
+        if gen is not None:
+            _ANCHOR_CARDS[adapter] = (gen, dict(out))
+    if hasattr(adapter, "match_adjacency_rows"):
+        out["probe"] = _anchor_probe(adapter, args, out.get("labels") or {}, gen)
+        if gen is not None:
+            try:
+                out["probe_key"] = (id(adapter), gen, json.dumps(scope, sort_keys=True, default=str))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+#: `anchor_cardinalities`' counts per handle: (generation, counts).
+_ANCHOR_CARDS: "weakref.WeakKeyDictionary[Any, tuple[int, dict[str, Any]]]" = weakref.WeakKeyDictionary()
+#: probe answers by (handle, generation, the anchor's node and predicates, the
+#: scope, the direction): estimates only, never an answer; cleared when full
+_PROBE_MEMO: dict[tuple[int, int, str, str], float | None] = {}
+
+
+def _anchor_probe(adapter: Any, args: dict[str, Any], labels: dict[str, Any], gen: int | None = None) -> Any:
+    """`second_anchor`'s probe: `(var, direction) -> rows`, the adjacency-index
+    rows of the variable's identities in that direction (every relationship
+    type and version: an upper bound of its first hop), or None. A variable
+    pinned by uids reads them; one pinned by a literal predicate is found by
+    a match on its label (under the call's scope; at most 64 identities, on
+    a label of at most `PROBE_LABEL_MAX` versions). An answer is kept per
+    handle and store generation, by the anchor's node, its predicates, the
+    scope and the direction (a repeated call does not probe again)."""
+    pat = args["pattern"]
+    nodes = {n["var"]: n for n in pat["nodes"]}
+    where = pat.get("where", [])
+
+    def probe(var: str, way: str) -> float | None:
+        if gen is None:
+            return probe_store(var, way)
+        try:
+            spec = json.dumps([nodes[var], [w for w in where if _vars_in(w) == {var}], args["scope"]],
+                              sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return probe_store(var, way)
+        key = (id(adapter), gen, spec, way)
+        if key not in _PROBE_MEMO:
+            if len(_PROBE_MEMO) >= _PLAN_ORDER_MEMO_MAX:
+                _PROBE_MEMO.clear()
+            _PROBE_MEMO[key] = probe_store(var, way)
+        return _PROBE_MEMO[key]
+
+    def probe_store(var: str, way: str) -> float | None:
+        node = nodes[var]
+        uids = list(node.get("uids") or [])
+        if not uids:
+            ls = node.get("labels")
+            if not ls or sum(int(labels.get(x, 0)) for x in ls) > PROBE_LABEL_MAX:
+                return None
+            preds = [w for w in where if _vars_in(w) == {var}]
+            if not any(_eq_literals(w) for w in preds):
+                return None
+            q = {"pattern": {"nodes": [node], "steps": [], "where": preds},
+                 "return": {"rows": [{"as": "u", "expr": {"col": f"{var}.uid"}}]},
+                 "scope": args["scope"], "limit": 65}
+            got = run(adapter, validate(q))
+            if got["rows_total"] > 64:
+                return None
+            uids = [r["u"] if isinstance(r, dict) else r[0] for r in got["rows"]]
+            if not uids:
+                return 0.0
+        return float(adapter.match_adjacency_rows(uids, way))
+
+    return probe
+
+
+def second_anchor(pat: dict[str, Any], card: dict[str, Any]) -> dict[str, Any] | None:
+    """A uid-anchored pattern grown from two anchors and joined at one
+    variable, when the estimates say so; None keeps the given plan.
+
+    The shape: one node `A` pinned by uids (the given plan's anchor, its
+    steps bound in the given order), and a node variable `J` whose removal
+    cuts `A`'s part of the pattern from the rest. Side A is every step
+    touching `A`'s part (bound from `A` in the given order, `J` under a
+    fresh name); side B is every other step, each a single hop, grown from a
+    node `B` of its own that a predicate pins to literal values (`x = lit
+    OR ...`), in the cheapest order of its steps; the two sides join on
+    `J`'s identity and version. Every predicate stays exact: one reading a
+    side's variables alone is tested in that side, any other after the join
+    (only predicates that cannot raise, so the rows they see do not
+    matter).
+
+    The estimate: a node variable's rows are its labels' version counts
+    times its predicates' selectivity (`plan_order`'s, a literal list by
+    its values), and a hop multiplies the rows by the relationship's
+    edge versions over its distinct identities at the end it is read from
+    (`card["ends"]`, every relationship of the pattern needed: none missing,
+    none zero). A plan's cost is the sum of its intermediate rows; the
+    split's is both sides' plus the join's rows.
+
+    Averages miss skew (a hub country holds millions of a relationship's
+    rows, another a few thousand), so the decision is taken in two passes.
+    The first, on the averages alone (memoised by pattern, counts and mode),
+    keeps a split only where it is estimated cheaper at all. The second
+    replaces, for each anchor, its first hop's rows by a probe of the store
+    (`card["probe"]`: the adjacency-index rows of the anchor's identities in
+    that hop's direction, every type and version, an upper bound; a
+    literal-pinned anchor's identities found by a match on its label, at
+    most 64 of them on a label of at most `PROBE_LABEL_MAX` versions), and
+    takes the split when the given plan is then estimated
+    `SECOND_ANCHOR_FACTOR` times costlier. No probe, a probe that cannot
+    answer, or a missing count keeps the given plan (`GNOMON_MATCH_SECOND_ANCHOR`:
+    `0` never, `force` whenever the shape allows)."""
+    mode = _second_anchor_mode()
+    if mode == "off" or not _second_anchor_shape(pat):
+        return None
+    base = {k: v for k, v in card.items() if k not in ("probe", "probe_key", "counts_key")}
+    # the first pass is a function of the pattern, the counts and the mode
+    # alone: a repeated call reuses it
+    try:
+        counts = card.get("counts_key") or json.dumps(base, sort_keys=True, default=str)
+        key: str | None = json.dumps([pat, mode], sort_keys=True, default=str) + "|" + counts
+    except (TypeError, ValueError):
+        key = None
+    if key is not None and key in _SECOND_ANCHOR_MEMO:
+        got = _SECOND_ANCHOR_MEMO[key]
+    else:
+        got = _second_anchor(pat, base, mode, None, 1.0)
+        if key is not None:
+            if len(_SECOND_ANCHOR_MEMO) >= _PLAN_ORDER_MEMO_MAX:
+                _SECOND_ANCHOR_MEMO.clear()
+            _SECOND_ANCHOR_MEMO[key] = got
+    if got is None or mode == "force":
+        return None if got is None else dict(got)
+    probe = card.get("probe")
+    if probe is None:
+        return None
+    # the second pass is a function of the first's key and the probes' store
+    # (handle, generation) and scope: a repeated call reuses it
+    key2 = (key, card.get("probe_key")) if key is not None and card.get("probe_key") is not None else None
+    if key2 is not None and key2 in _SECOND_ANCHOR_MEMO2:
+        got2 = _SECOND_ANCHOR_MEMO2[key2]
+        return None if got2 is None else dict(got2)
+    seen: dict[tuple[str, str], float | None] = {}
+
+    def first(var: str, st: dict[str, Any]) -> float | None:
+        d = st.get("dir", "out")
+        way = d if st["from"] == var else _REVERSE[d]
+        if (var, way) not in seen:
+            try:
+                seen[(var, way)] = probe(var, way)
+            except Exception:  # noqa: BLE001 - a probe that cannot answer: no estimate
+                seen[(var, way)] = None
+        return seen[(var, way)]
+
+    got2 = _second_anchor(pat, base, mode, first, SECOND_ANCHOR_FACTOR)
+    if key2 is not None:
+        if len(_SECOND_ANCHOR_MEMO2) >= _PLAN_ORDER_MEMO_MAX:
+            _SECOND_ANCHOR_MEMO2.clear()
+        _SECOND_ANCHOR_MEMO2[key2] = got2
+    return None if got2 is None else dict(got2)
+
+
+#: `second_anchor`'s first pass by (pattern, counts, mode). Cleared when full.
+_SECOND_ANCHOR_MEMO: dict[str, dict[str, Any] | None] = {}
+#: its second pass by (the first's key, the probes' handle, generation and
+#: scope). Cleared when full.
+_SECOND_ANCHOR_MEMO2: dict[tuple[str, Any], dict[str, Any] | None] = {}
+
+#: A literal-pinned anchor is probed only on a label of at most this many
+#: versions (the probe is a match over its label's rows).
+PROBE_LABEL_MAX = 1_000_000
+
+
+def _second_anchor(pat: dict[str, Any], card: dict[str, Any], mode: str,
+                   first: Any, factor: float) -> dict[str, Any] | None:
+    """`second_anchor`'s search: the cheapest split by the estimates, taken
+    when the given plan costs `factor` times more; with `first`, each
+    anchor's first hop rows are its probe's (None: no estimate)."""
+    nodes = {n["var"]: n for n in pat["nodes"]}
+    steps = list(pat["steps"])
+    where = list(pat.get("where", []))
+    if not all(_plain_pred(w) for w in where):
+        return None
+    for st in steps:
+        if "regex" in st or any(k in st for k in ("order", "edge_where", "truncate")):
+            return None
+        if st["from"] not in nodes or st["to"] not in nodes:
+            return None
+        h = _hops(st.get("hops"))
+        if isinstance(h, Exact) and h.k > 1:
+            return None
+        rt = st.get("rel_type")
+        if not rt or (isinstance(rt, list) and not all(isinstance(r, str) for r in rt)):
+            return None
+    a = next(v for v, n in nodes.items() if n.get("uids"))
+    labels: dict[str, float] = card.get("labels") or {}
+    ends: dict[str, tuple[float, float, float]] = card.get("ends") or {}
+
+    def rels_of(st: dict[str, Any]) -> list[str]:
+        rt = st["rel_type"]
+        return list(rt) if isinstance(rt, list) else [rt]
+
+    if any(ends.get(r, (0.0, 0.0, 0.0))[1] <= 0 or ends.get(r, (0.0, 0.0, 0.0))[2] <= 0
+           for st in steps for r in rels_of(st)):
+        return None
+    if any(n.get("labels") and not all(labels.get(x, 0) > 0 for x in n["labels"])
+           for n in nodes.values()):
+        return None
+    total_n = float(card.get("nodes") or sum(labels.values()) or 1.0)
+
+    def n_of(v: str) -> float:
+        ls = nodes[v].get("labels")
+        return max(1.0, float(sum(labels.get(x, 0) for x in ls)) if ls else total_n)
+
+    sel: dict[str, float] = {v: 1.0 for v in nodes}
+    pinned: set[str] = set()
+    for w in where:
+        vs = _vars_in(w)
+        if len(vs) == 1 and next(iter(vs)) in sel:
+            # (a predicate on an edge variable is not a node's selectivity)
+            v = next(iter(vs))
+            k = _eq_literals(w)
+            if k:
+                sel[v] *= min(_SEL_OTHER, k / n_of(v))
+                pinned.add(v)
+            else:
+                sel[v] *= _SEL_EQ if w.get("cmp") == "=" else _SEL_OTHER
+
+    def fan(st: dict[str, Any], src: str) -> float:
+        d = st.get("dir", "out")
+        f = 0.0
+        for r in rels_of(st):
+            c, ns, nd = ends[r]
+            if d == "both":
+                f += c / ns + c / nd
+            elif (d == "out") == (src == st["from"]):
+                f += c / ns
+            else:
+                f += c / nd
+        hops = st.get("hops") or {"exact": 1}
+        if "exact" in hops:
+            return f ** int(hops["exact"])
+        lo, hi = int(hops.get("min", 1)), hops.get("max")
+        hi = min(3, int(hi) if hi is not None else 3)
+        return max(sum(f ** k for k in range(lo, max(hi, lo) + 1)), 1e-9)
+
+    def cost_of(anchor: str, order: list[dict[str, Any]]) -> tuple[float, float] | None:
+        """The cost and the last rows of binding `order` from `anchor`, each
+        step taken as `pattern` takes them (the first with a bound end); with
+        `first`, the anchor's first hop reads its probed rows (a longer
+        step: those rows, then the average fan for each further hop)."""
+        rows = n_of(anchor) * sel[anchor]
+        bound, cost, todo = {anchor}, rows, list(order)
+        while todo:
+            i = next((k for k, st in enumerate(todo) if st["from"] in bound or st["to"] in bound), None)
+            if i is None:
+                return None
+            st = todo.pop(i)
+            src, dst = (st["from"], st["to"]) if st["from"] in bound else (st["to"], st["from"])
+            if first is not None and bound == {anchor}:
+                deg = first(anchor, st)
+                if deg is None:
+                    return None
+                hops = st.get("hops") or {"exact": 1}
+                f1 = fan({**st, "hops": {"exact": 1}}, src)
+                if "exact" in hops:
+                    rows = deg * f1 ** (int(hops["exact"]) - 1)
+                else:
+                    lo, hi = int(hops.get("min", 1)), hops.get("max")
+                    hi = min(3, int(hi) if hi is not None else 3)
+                    rows = sum(1.0 if k == 0 else deg * f1 ** (k - 1) for k in range(lo, max(hi, lo) + 1))
+            else:
+                rows *= fan(st, src)
+            rows *= (1.0 / n_of(dst)) if dst in bound else sel[dst]
+            rows = max(rows, 1e-9)
+            cost += rows
+            bound |= {st["from"], st["to"]}
+        return cost, rows
+
+    given = cost_of(a, steps)
+    if given is None:
+        return None
+    best: tuple[float, str, str, list[int], list[int]] | None = None
+    for j in nodes:
+        if j == a:
+            continue
+        # A's part: the variables reached from A without passing through J
+        part, grow = {a}, True
+        while grow:
+            grow = False
+            for st in steps:
+                ends_ = {st["from"], st["to"]}
+                if ends_ & part and j not in ends_ and not ends_ <= part:
+                    part |= ends_
+                    grow = True
+        side_a = [i for i, st in enumerate(steps) if {st["from"], st["to"]} & part]
+        side_b = [i for i in range(len(steps)) if i not in side_a]
+        vars_b = {v for i in side_b for v in (steps[i]["from"], steps[i]["to"])}
+        if not side_b or j not in vars_b or any(v in part for v in vars_b):
+            continue
+        if not any(j in {steps[i]["from"], steps[i]["to"]} for i in side_a):
+            continue
+        if not all(_single_hop(steps[i]) for i in side_b):
+            continue
+        cost_a = cost_of(a, [steps[i] for i in side_a])
+        if cost_a is None:
+            continue
+        for bv in sorted(vars_b - {j}):
+            if bv not in pinned:
+                continue
+            from itertools import permutations
+
+            # every order of a short side (up to four steps), else as given
+            perms = permutations(side_b) if len(side_b) <= 4 else [tuple(side_b)]
+            for perm in perms:
+                got = cost_of(bv, [steps[i] for i in perm])
+                if got is None:
+                    continue
+                join_rows = max(cost_a[1] * got[1] / n_of(j), 1e-9)
+                total = cost_a[0] + got[0] + join_rows
+                if best is None or total < best[0]:
+                    best = (total, j, bv, side_a, list(perm))
+    if best is None:
+        return None
+    if mode != "force" and not given[0] > factor * best[0]:
+        return None
+    return {"a": a, "j": best[1], "b": best[2], "side_a": best[3], "side_b": best[4],
+            "given_cost": given[0], "cost": best[0]}
+
+
+def _single_hop(st: dict[str, Any]) -> bool:
+    h = _hops(st.get("hops"))
+    return isinstance(h, Exact) and h.k == 1
+
+
+def _second_anchor_rel(ctx: _Ctx, pat: dict[str, Any], where: list[Any],
+                       split: dict[str, Any]) -> Node:
+    """The plan of `second_anchor`'s split: side B grown from its anchor,
+    side A from the uid anchor with `J` under a fresh name, joined on `J`'s
+    identity and then its version, the predicates over both sides and the
+    distinct-edge tests across them after the join. The bound versions'
+    order (`vid_cols`, which completes the answer's order) is the given
+    plan's, so ties fall the same way."""
+    import copy
+
+    nodes = {n["var"]: n for n in pat["nodes"]}
+    j, bv, a = split["j"], split["b"], split["a"]
+    # every unnamed single hop named up front, so the given plan's binding
+    # order and this plan's name the same edge variables
+    steps = []
+    for st in pat["steps"]:
+        if not st.get("var") and _single_hop(st):
+            st = {**st, "var": ctx.name("e")}
+        steps.append(st)
+    # the given plan's binding order, from a dry run of it
+    dry = copy.deepcopy(ctx)
+    _Builder(dry, None).pattern(pat["nodes"], steps, where)
+    order = list(dry.vid_cols)
+    # each side's variables: its steps' ends and edge variables
+    vars_b = {v for i in split["side_b"] for v in (steps[i]["from"], steps[i]["to"], steps[i].get("var")) if v}
+    vars_a = {v for i in split["side_a"] for v in (steps[i]["from"], steps[i]["to"], steps[i].get("var")) if v} | {a}
+    # J's name in side A: a pattern variable's form (a letter first), one no
+    # variable of the call uses
+    taken = set(nodes) | set(ctx.kinds) | {st.get("var") for st in steps}
+    k, jj = 0, f"{j}_j"
+    while jj in taken:
+        k += 1
+        jj = f"{j}_j{k}"
+    ren = lambda v: jj if v == j else v  # noqa: E731
+    start_iv = ctx.run_iv
+    where_b = [w for w in where if _vars_in(w) and _vars_in(w) <= vars_b]
+    where_a = [w for w in where if w not in where_b and _vars_in(w) <= vars_a - {j}]
+    where_x = [w for w in where if w not in where_b and w not in where_a]
+    names = [n["var"] for n in pat["nodes"]]
+    bb = _Builder(ctx, None)
+    bb.pattern([nodes[v] for v in names if v in vars_b],
+               [steps[i] for i in split["side_b"]], where_b, anchor_var=bv)
+    iv_b, ctx.run_iv = ctx.run_iv, start_iv
+    ba = _Builder(ctx, None)
+    a_nodes = [nodes[v] for v in names if v in vars_a and v != j]
+    a_nodes.append({**nodes[j], "var": jj})
+    ba.pattern(a_nodes, [{**steps[i], "from": ren(steps[i]["from"]), "to": ren(steps[i]["to"])}
+                         for i in split["side_a"]], where_a, anchor_var=a)
+    on = ((ctx.uid_col[jj], ctx.uid_col[j]),)
+    rel: Node
+    rel = Join(ba.rel, bb.rel, on, "inner", sigma_=ctx.sigma)
+    if ctx.fragmented:
+        # overlap of the two sides' (as `_carry` narrows it by a step), and
+        # a pair whose intervals share no instant is dropped
+        iv_a = ctx.run_iv
+        assert iv_a is not None and iv_b is not None, "each side binds a version"
+        lo, hi = ctx.name("cs"), ctx.name("ce")
+        rel = Project(rel, bindings=(
+            (lo, If(Cmp(">", Col(iv_a[0]), Col(iv_b[0])), Col(iv_a[0]), Col(iv_b[0]))),
+            (hi, If(Cmp("<", Col(iv_a[1]), Col(iv_b[1])), Col(iv_a[1]), Col(iv_b[1])))),
+            keep="all", sigma_=ctx.sigma)
+        rel = Filter(rel, Cmp("<", Col(lo), Col(hi)), sigma_=ctx.sigma)
+        ctx.run_iv = (lo, hi)
+    bj = _Builder(ctx, rel)
+    bj._filter(Cmp("=", Col(f"{jj}.vid"), Col(f"{j}.vid")))
+    for ea in ba.single_edges:
+        for eb in bb.single_edges:
+            bj._filter(Cmp("!=", Col(f"{ea}.eid"), Col(f"{eb}.eid")))
+    bj.pending = [(_vars_in(w), w) for w in where_x]
+    bj._flush(join=False)
+    if bj.pending:
+        raise InvalidArgError("match: a predicate names an unbound variable",
+                              vars=sorted(set().union(*(n for n, _ in bj.pending))))
+    ctx.vid_cols[:] = [v for v in order if v in ctx.vid_cols] + [v for v in ctx.vid_cols if v not in order]
+    return bj.rel
 
 
 def _orderable(spec: Any, movable: bool | None = None) -> bool:
@@ -2174,7 +2953,8 @@ def run(adapter: Any, args: dict[str, Any], *, route: str | None = None,
     from gnomon.temporal.algebra import _canonicalize_floats
 
     card = cardinalities(adapter) if _orderable(args) else None
-    c = compile_match(args, card)
+    ends = anchor_cardinalities(adapter, args) if card is None else None
+    c = compile_match(args, card, ends)
     offset, limit = _offset(args.get("cursor")), int(args.get("limit", DEFAULT_LIMIT))
     want_native = _match_kernel(adapter) if route is None else route == "native"
     got = None

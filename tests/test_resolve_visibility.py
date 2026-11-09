@@ -193,7 +193,7 @@ def test_a_corrected_store_resolves_over_only_the_believed_rows(tmp_path):
 
 def test_a_clean_store_examines_every_row_and_that_is_correct(tmp_path):
     """The other side of the same claim, and the reason the c=0 configuration of the
-    A/B is pre-registered at 1.0 rather than at a speed-up: when nothing has
+    A/B is at 1.0 rather than at a speed-up: when nothing has
     been superseded there is nothing to skip, and the converted path must
     examine the whole store just as the sweep did. A gate that only checked
     the corrected configuration could be passed by a filter that drops rows."""

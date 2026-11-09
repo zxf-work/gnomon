@@ -5,8 +5,6 @@
 //! standalone inspect/repair CLI. The PyO3 bindings live in
 //! `gnomon-py`.
 //!
-//! Design: `ENGINE_BLUEPRINT.md` (v3). Binding contract:
-//! `ENGINE_IMPLEMENTATION_SPEC.md`. The store is a deterministic
 //! materialization of the JSONL event log, so the durability objective is
 //! *never expose an undetected inconsistent generation* — roll back to the
 //! last valid generation and replay the log suffix.
@@ -55,6 +53,7 @@ pub mod vidfilter;
 pub mod winsearch;
 pub mod visibility;
 pub mod vistouch;
+pub mod warm;
 #[cfg(test)]
 mod windowfirst_tests;
 #[cfg(test)]
@@ -162,7 +161,6 @@ pub mod defaults {
     /// a corpus that encodes to better than a quarter of the model seals
     /// under target rather than chasing the quotient, which is the graceful
     /// direction. The measured synthetic corpus needs 1.62 and the most
-    /// compressible fixture in `tests/sealsize.rs` needs 3.46, so it has
     /// headroom over both.
     pub const SEAL_RATIO_MAX_NUM: u64 = 4;
     /// Denominator of [`SEAL_RATIO_MAX_NUM`].

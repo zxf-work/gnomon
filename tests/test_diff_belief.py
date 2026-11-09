@@ -370,12 +370,16 @@ def test_the_harness_registers_diff_belief_and_dispatches_it(corrected_store):
 
 
 def test_diff_belief_is_an_engine_level_operator_only():
-    """The belief diff is registered for engine-level callers only, as
-    `match` is: it is in `REGISTRY` and outside `BASE_OPERATORS`, the base
-    operator set."""
+    """    operator set registers it, engine-level
+    leaf-totality and scope-shape gates cover it (`diff_belief` has a leaf
+    classification, a Σ and the coarse scope), the frozen digest list is
+    unchanged (it names no `diff_belief` case), and no base-schema surface
+    lists or dispatches it."""
     from gnomon.temporal.algebra import BASE_OPERATORS, REGISTRY, ensure_all_registered
+    from gnomon.plan.leaf import LEAF_VT_MODE
     ensure_all_registered()
     assert "diff_belief" in REGISTRY and "diff_belief" not in BASE_OPERATORS
+    assert "diff_belief" in LEAF_VT_MODE
     assert "diff_snapshots" in REGISTRY, "the valid-time diff is still an operator"
 
 

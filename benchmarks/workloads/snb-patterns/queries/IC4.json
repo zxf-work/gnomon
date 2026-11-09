@@ -1,0 +1,244 @@
+{
+ "row": "IC4",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "p",
+      "labels": [
+       "Person"
+      ],
+      "uids": [
+       "$person"
+      ]
+     },
+     {
+      "var": "f",
+      "labels": [
+       "Person"
+      ]
+     },
+     {
+      "var": "po",
+      "labels": [
+       "Post"
+      ]
+     },
+     {
+      "var": "t",
+      "labels": [
+       "Tag"
+      ]
+     }
+    ],
+    "steps": [
+     {
+      "from": "p",
+      "to": "f",
+      "rel_type": "KNOWS",
+      "dir": "both"
+     },
+     {
+      "from": "po",
+      "to": "f",
+      "rel_type": "HAS_CREATOR",
+      "dir": "out"
+     },
+     {
+      "from": "po",
+      "to": "t",
+      "rel_type": "HAS_TAG",
+      "dir": "out"
+     }
+    ],
+    "where": [
+     {
+      "cmp": ">=",
+      "l": {
+       "col": "po.vt_s"
+      },
+      "r": {
+       "lit": "$start",
+       "tau": "ts"
+      }
+     },
+     {
+      "cmp": "<",
+      "l": {
+       "col": "po.vt_s"
+      },
+      "r": {
+       "lit": "$end",
+       "tau": "ts"
+      }
+     }
+    ],
+    "not": [
+     {
+      "nodes": [
+       {
+        "var": "f2",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "po2",
+        "labels": [
+         "Post"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "p",
+        "to": "f2",
+        "rel_type": "KNOWS",
+        "dir": "both"
+       },
+       {
+        "from": "po2",
+        "to": "f2",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "po2",
+        "to": "t",
+        "rel_type": "HAS_TAG",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "<",
+        "l": {
+         "col": "po2.vt_s"
+        },
+        "r": {
+         "lit": "$start",
+         "tau": "ts"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "tagName",
+       "expr": {
+        "tprop": [
+         "t",
+         "name"
+        ],
+        "tau": "str"
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "postCount",
+       "fn": "count"
+      }
+     ]
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "postCount"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "col": "tagName"
+      },
+      "dir": "asc"
+     }
+    ],
+    "limit": 10
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "person": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "p",
+         "labels": [
+          "Person"
+         ]
+        },
+        {
+         "var": "f",
+         "labels": [
+          "Person"
+         ]
+        }
+       ],
+       "steps": [
+        {
+         "from": "p",
+         "to": "f",
+         "rel_type": "KNOWS",
+         "dir": "both"
+        }
+       ]
+      },
+      "return": {
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "p.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "count"
+         }
+        ]
+       },
+       "order_by": [
+        {
+         "expr": {
+          "col": "n"
+         },
+         "dir": "desc"
+        }
+       ],
+       "limit": 1
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {}
+     },
+     "col": "p",
+     "i": 0
+    },
+    "start": {
+     "date": "2012-01-01"
+    },
+    "end": {
+     "date": "2012-04-01"
+    }
+   }
+  }
+ ]
+}

@@ -70,3 +70,14 @@ GNOMON_TEST_BACKEND=duckdb python -m pytest tests
 
 Tests that exercise only native-engine features skip or select the native
 backend themselves.
+
+## The comparison kit
+
+The kit's own tests (the parameter-file path, the 10M pruning rule, the
+in-process worker's restart, and the tools of the studies) run with the same
+environment:
+
+```bash
+python -m pytest tests/test_extcmp_p1.py tests/test_r10m.py tests/test_worker_restart.py
+python -m pytest benchmarks/stages/studies/tests
+```

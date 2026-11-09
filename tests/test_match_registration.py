@@ -1,5 +1,5 @@
 """`match` in the registry: the engine runs it as an opaque leaf through
-`call_operator`, and it stays outside the base operator set."""
+`call_operator`, and no base-schema surface lists or dispatches it."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from gnomon.temporal.algebra import (
 
 from .conftest import fresh_adapter
 
-#: Every operator registered for the engine and outside the base operator
-#: set; a new one joins here when it is registered.
+#: Every operator registered for the engine and off the base-schema
+#: surfaces; a new one joins here in its registration commit.
 ENGINE_ONLY = {"match", "diff_belief", "paths", "state_series"}
 
 ARGS = {"pattern": {"nodes": [{"var": "a"}, {"var": "b"}],
@@ -51,7 +51,7 @@ def adapter():
     a.close()
 
 
-def test_match_is_registered_outside_the_base_operators():
+def test_match_is_registered_and_kept_off_the_agent_surfaces():
     ensure_all_registered()
     assert "match" in REGISTRY
     assert "match" not in BASE_OPERATORS
@@ -64,8 +64,9 @@ def test_call_operator_runs_match_through_its_leaf(adapter):
     direct = ops_match.match(adapter, json.loads(json.dumps(ARGS)))
     assert env["rows"] == direct["rows"] == [{"src": "u1", "dst": "u2"}]
     assert env["columns"] == ["src", "dst"]
-    # the echo is the caller's argument
+    # the echo is the caller's argument; Σ and the pin are its bound scope's
     assert env["args_echo"]["scope"] == {"vt": {"instant": "$t"}, "as_of_tt": "$b"}
+    assert env["pinned"] is True and env["tt_q"] == 2
     now = call_operator(adapter, "match", {**ARGS, "params": {"t": 20, "b": OPEN_END}})
     assert now["rows"] == [{"src": "u1", "dst": "u2"}, {"src": "u2", "dst": "u3"}]
 

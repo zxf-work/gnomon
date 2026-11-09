@@ -171,7 +171,7 @@ fn point_rows<S: crate::segment::SegmentSource>(
         rows.reserve(p.rows);
         for &(a, b) in &p.ranges {
             match p.vt_e {
-                // elided: every row is `[vt_s, vt_s + 1)`, and the planner's
+                // elided: every row is `[vt_s, vt_s + 1)`, and the match plan's
                 // cut is exact on both ends
                 None => rows.extend(a as u32..b as u32),
                 // the scan's own remaining test, `vt_e > vt_min`

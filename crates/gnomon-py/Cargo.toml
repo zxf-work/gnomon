@@ -4,6 +4,7 @@ description = "PyO3 bindings for the Gnomon native storage engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [lib]
 # must match the last component of tool.maturin module-name (gnomon._engine)

@@ -1,7 +1,6 @@
 """The memory-accounting instrument: `memory_accounting()` names where a build's resident
 bytes went, and costs nothing to read.
 
-**What it is for.** The 1B build peaked at 67.0 GB against a pre-registered
 38–56 GB band. `postings_peak_bytes` — the only per-component receipt the
 engine had — accounted for 12.25 GB of that, and `segment_cache_stats`
 reported one accounted total that silently mixes two quantities with

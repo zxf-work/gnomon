@@ -1,0 +1,3915 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "thr-subset-v1",
+ "log": {
+  "path": "synth-10000000.eventlog.jsonl",
+  "sha256": "b4cfe234f2fd2ad5cd0c0f1589231983a615f420f3d7424d5ae936bb820a8895"
+ },
+ "selection": {
+  "percentiles": [
+   10,
+   50,
+   90,
+   99
+  ],
+  "shuffle": "md5(version, 'order', query, instance)",
+  "instance_id": "md5(version, query, canonical args)[:8]",
+  "notes": [
+   "hist: version-count distribution [[1, 99999], [4, 1]] (degenerate): multi-version nodes ['n1'] are one stratum, 19 MD5-random one-version nodes the other",
+   "reach.window w1-early: percentiles; MD5-sample sizes p10=0 p50=0 p90=29859",
+   "reach.window w1-middle: percentiles; MD5-sample sizes p10=93661 p50=94757 p90=94757",
+   "reach.window w1-late: percentiles; MD5-sample sizes p10=0 p50=84808 p90=84808",
+   "reach.window w10-early: percentiles; MD5-sample sizes p10=1 p50=94100 p90=94100",
+   "reach.window w10-middle: percentiles; MD5-sample sizes p10=94887 p50=97869 p90=97869",
+   "reach.window w10-late: percentiles; MD5-sample sizes p10=93051 p50=97944 p90=97944",
+   "reach.window w25-early: percentiles; MD5-sample sizes p10=99159 p50=99673 p90=99673",
+   "reach.window w25-middle: percentiles; MD5-sample sizes p10=99630 p50=99876 p90=99876",
+   "reach.window w25-late: percentiles; MD5-sample sizes p10=99722 p50=99873 p90=99873",
+   "series/burst/agg: the 100 % window has one position, so 7 windows x 2 strides = 14 per query (not 18)",
+   "hub stratum (w2_hub_stratum.py): top hubs by cumulative degree ['n0', 'n34729', 'n69458', 'n4187', 'n38916']; per seeded query and class, the first instance of the class with its seed replaced by each of the top-k hubs (k per query: {'snap.hop2': 5, 'reach.window': 3, 'paths.k': 3, 'nbr.evolution': 5, 'coactive.narrow': 5, 'b.reach@now': 5, 'b.reach@T': 1, 'b.snap.hop2@now': 1, 'b.snap.hop2@T': 1})",
+   "thr: all hub-stratum instances plus up to 5 non-hub per id (round-robin over strata in alphabetical order, ascending md5('thr-subset-v1', query, instance) within a stratum)"
+  ]
+ },
+ "counts": {
+  "series.count.w10": 5,
+  "reach.window": 32,
+  "diff.global": 5,
+  "resolve.substr": 5,
+  "nbr.evolution": 20,
+  "coactive.narrow": 10,
+  "paths.k": 11,
+  "burst.zscore.w10": 5,
+  "agg.rel_bucket.w10": 5,
+  "snap.hop2": 20,
+  "burst.zscore": 5,
+  "hist.single": 5,
+  "agg.rel_bucket": 5,
+  "motif.filtered": 5,
+  "hist.asof": 5,
+  "series.count": 5
+ },
+ "subset_of": {
+  "file": "params-K10M.json",
+  "sha256": "683b3125aa9d660cb30ac8a426afaa2d8039654fbfa9ded53e4664a19c1a2182",
+  "version": "p1-v1"
+ },
+ "instances": [
+  {
+   "query": "series.count.w10",
+   "instance": "05940db2",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5006250
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 5006250,
+     "t_b": 5006260
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "80dd448a",
+   "stratum": "hub",
+   "class": "w10-late",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "4a86d409"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 9000000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "3e1b50cd",
+   "stratum": "gap 0.5 %",
+   "class": "at 30 %",
+   "factors": {
+    "edges_added": 50000,
+    "edges_removed": 50001
+   },
+   "args": {
+    "t1": 3000000,
+    "t2": 3050000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "44e1487e",
+   "stratum": "~10 matches",
+   "class": "~10 matches",
+   "factors": {
+    "matches": 11
+   },
+   "args": {
+    "query": "n7709"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "bc46558f",
+   "stratum": "hub",
+   "class": "interval w10",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "8df99ab3"
+   },
+   "args": {
+    "uid": "n69458",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "c5139efe",
+   "stratum": "hub",
+   "class": "pair",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "9656713f"
+   },
+   "args": {
+    "a_spec": {
+     "src": "n0"
+    },
+    "b_spec": {
+     "src": "n34729"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "bd2e6886",
+   "stratum": "3 hops",
+   "class": "window early",
+   "factors": {
+    "hops": 3,
+    "paths": -1,
+    "window": "early"
+   },
+   "args": {
+    "src": "n77851",
+    "dst": "n86408",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "c19e7c58",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5018750
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 5018750,
+     "t_b": 5018760
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "69c0c240",
+   "stratum": "p50",
+   "class": "w1-middle",
+   "factors": {
+    "reachable": 94757,
+    "window": "w1-middle",
+    "outdeg_in_window": 3
+   },
+   "args": {
+    "src": "n40622",
+    "window": {
+     "t_a": 4950000,
+     "t_b": 5050000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "0cf44cf4",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5006250
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 5006250,
+     "t_b": 5006260
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "9e42a4cf",
+   "stratum": "hub",
+   "class": "window early",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "bd2e6886"
+   },
+   "args": {
+    "src": "n34729",
+    "dst": "n86408",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "3700c222",
+   "stratum": "hub",
+   "class": "w10-early",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "ceb7b974"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "0866204f",
+   "stratum": "hub",
+   "class": "interval w25",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "02bd49b1"
+   },
+   "args": {
+    "uid": "n34729",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "ba95b551",
+   "stratum": "hub",
+   "class": "instant mid",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "c1c6ee53"
+   },
+   "args": {
+    "seeds": [
+     "n0"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "a7268f52",
+   "stratum": "w100",
+   "class": "w100-whole, 100 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 100
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 100000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "36d7cf20",
+   "stratum": "hub",
+   "class": "pair",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "9656713f"
+   },
+   "args": {
+    "a_spec": {
+     "src": "n4187"
+    },
+    "b_spec": {
+     "src": "n38916"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "e6155c5e",
+   "stratum": "p99",
+   "class": "instant q1",
+   "factors": {
+    "two_hop_nodes": 9839,
+    "instant": "q1"
+   },
+   "args": {
+    "seeds": [
+     "n3595"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "0deb73a7",
+   "stratum": "unreachable within 3 hops",
+   "class": "window early",
+   "factors": {
+    "hops": null,
+    "paths": -1,
+    "window": "early"
+   },
+   "args": {
+    "src": "n46054",
+    "dst": "n83547",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "675438d2",
+   "stratum": "hub",
+   "class": "pair",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "9656713f"
+   },
+   "args": {
+    "a_spec": {
+     "src": "n38916"
+    },
+    "b_spec": {
+     "src": "n73645"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "9656713f",
+   "stratum": "p10",
+   "class": "pair",
+   "factors": {
+    "edges_a": 20,
+    "edges_b": 14
+   },
+   "args": {
+    "a_spec": {
+     "src": "n8944"
+    },
+    "b_spec": {
+     "src": "n19541"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "ab953b37",
+   "stratum": "hub",
+   "class": "interval w25",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "02bd49b1"
+   },
+   "args": {
+    "uid": "n69458",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "755b9875",
+   "stratum": "hub",
+   "class": "instant q3",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "19710268"
+   },
+   "args": {
+    "seeds": [
+     "n69458"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "d2c61039",
+   "stratum": "p10",
+   "class": "w10-late",
+   "factors": {
+    "reachable": 93028,
+    "window": "w10-late",
+    "outdeg_in_window": 1
+   },
+   "args": {
+    "src": "n61",
+    "window": {
+     "t_a": 9000000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "b4c0cb3b",
+   "stratum": "1 version",
+   "class": "1 version",
+   "factors": {
+    "versions": "1 version"
+   },
+   "args": {
+    "uid": "n56081"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "00f286b8",
+   "stratum": "p90",
+   "class": "w10-late",
+   "factors": {
+    "reachable": 97944,
+    "window": "w10-late",
+    "outdeg_in_window": 11
+   },
+   "args": {
+    "src": "n10210",
+    "window": {
+     "t_a": 9000000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "3c827f0e",
+   "stratum": "p10",
+   "class": "w10-early",
+   "factors": {
+    "reachable": 1,
+    "window": "w10-early",
+    "outdeg_in_window": 1
+   },
+   "args": {
+    "src": "n76781",
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "b04bf7f0",
+   "stratum": "w50",
+   "class": "w50-middle, 50 buckets",
+   "factors": {
+    "events": 5000009,
+    "buckets": 50
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 2500000,
+     "t_b": 7500000
+    },
+    "stride": 100000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "6fa17d59",
+   "stratum": "p50",
+   "class": "pair",
+   "factors": {
+    "edges_a": 31,
+    "edges_b": 30
+   },
+   "args": {
+    "a_spec": {
+     "src": "n27754"
+    },
+    "b_spec": {
+     "src": "n64984"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "4268059a",
+   "stratum": "hub",
+   "class": "instant q3",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "19710268"
+   },
+   "args": {
+    "seeds": [
+     "n34729"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "2186590b",
+   "stratum": "hub",
+   "class": "window middle",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "25b1a11b"
+   },
+   "args": {
+    "src": "n34729",
+    "dst": "n13867",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "6a0526cf",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 2500500
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 2500500,
+     "t_b": 2500510
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "25a227c9",
+   "stratum": "p10",
+   "class": "instant q3",
+   "factors": {
+    "two_hop_nodes": 6,
+    "instant": "q3"
+   },
+   "args": {
+    "seeds": [
+     "n20477"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "79c2b89f",
+   "stratum": "hub",
+   "class": "interval w25",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "02bd49b1"
+   },
+   "args": {
+    "uid": "n0",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "4ef5377a",
+   "stratum": "p10",
+   "class": "pair",
+   "factors": {
+    "edges_a": 14,
+    "edges_b": 20
+   },
+   "args": {
+    "a_spec": {
+     "src": "n99940"
+    },
+    "b_spec": {
+     "src": "n88965"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "fe6eba96",
+   "stratum": "gap 2.5 %",
+   "class": "at 30 %",
+   "factors": {
+    "edges_added": 250000,
+    "edges_removed": 250001
+   },
+   "args": {
+    "t1": 3000000,
+    "t2": 3250000
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "a8cda488",
+   "stratum": "gap 10 %",
+   "class": "at 85 %",
+   "factors": {
+    "edges_added": 499999,
+    "edges_removed": 499999
+   },
+   "args": {
+    "t1": 8500000,
+    "t2": 9500000
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "df618667",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 1250750
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 1250750,
+     "t_b": 1250760
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "0eea32d3",
+   "stratum": "hub",
+   "class": "interval w1",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "179a64fb"
+   },
+   "args": {
+    "uid": "n69458",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "6bcad00d",
+   "stratum": "w100",
+   "class": "w100-whole, 50 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 50
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 200000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "661ca906",
+   "stratum": "w50",
+   "class": "w50-middle, 100 buckets",
+   "factors": {
+    "events": 5000009,
+    "buckets": 100
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 2500000,
+     "t_b": 7500000
+    },
+    "stride": 50000,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "8ff2d24e",
+   "stratum": "hub",
+   "class": "interval w10",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "8df99ab3"
+   },
+   "args": {
+    "uid": "n38916",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "ad1ad299",
+   "stratum": "~100 matches",
+   "class": "~100 matches",
+   "factors": {
+    "matches": 111
+   },
+   "args": {
+    "query": "n967"
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "5a296abf",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 6874625
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 6874625,
+     "t_b": 6874635
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "034f877f",
+   "stratum": "hub",
+   "class": "instant q1",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "bc4a5f5a"
+   },
+   "args": {
+    "seeds": [
+     "n0"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "7df5413a",
+   "stratum": "hub",
+   "class": "w10-early",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "ceb7b974"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "4da47112",
+   "stratum": "hub",
+   "class": "interval w25",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "02bd49b1"
+   },
+   "args": {
+    "uid": "n38916",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "7bd099f7",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 2500500
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 2500500,
+     "t_b": 2500510
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "941c6f03",
+   "stratum": "w100",
+   "class": "w100-whole, 100 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 100
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 100000,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "d5f7c57f",
+   "stratum": "p10",
+   "class": "instant q1",
+   "factors": {
+    "two_hop_nodes": 5,
+    "instant": "q1"
+   },
+   "args": {
+    "seeds": [
+     "n39495"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "07e6e715",
+   "stratum": "hub",
+   "class": "instant q1",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "bc4a5f5a"
+   },
+   "args": {
+    "seeds": [
+     "n34729"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "c22ad3c4",
+   "stratum": "filter 100",
+   "class": "delta 5 %",
+   "factors": {
+    "events": 49885,
+    "count": 3103
+   },
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 500000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040",
+     "n10041",
+     "n10042",
+     "n10043",
+     "n10044",
+     "n10045",
+     "n10046",
+     "n10047",
+     "n10048",
+     "n10049",
+     "n1005",
+     "n10050",
+     "n10051",
+     "n10052",
+     "n10053",
+     "n10054",
+     "n10055",
+     "n10056",
+     "n10057",
+     "n10058",
+     "n10059",
+     "n1006",
+     "n10060",
+     "n10061",
+     "n10062",
+     "n10063",
+     "n10064",
+     "n10065",
+     "n10066",
+     "n10067",
+     "n10068",
+     "n10069",
+     "n1007",
+     "n10070",
+     "n10071",
+     "n10072",
+     "n10073",
+     "n10074",
+     "n10075",
+     "n10076",
+     "n10077",
+     "n10078",
+     "n10079",
+     "n1008",
+     "n10080",
+     "n10081",
+     "n10082",
+     "n10083",
+     "n10084",
+     "n10085",
+     "n10086"
+    ]
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "4850292f",
+   "stratum": "~1 matches",
+   "class": "~1 matches",
+   "factors": {
+    "matches": 1
+   },
+   "args": {
+    "query": "94647"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "015768f8",
+   "stratum": "hub",
+   "class": "w1-middle",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "69c0c240"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 4950000,
+     "t_b": 5050000
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "014265cc",
+   "stratum": "gap 10 %",
+   "class": "at 30 %",
+   "factors": {
+    "edges_added": 499999,
+    "edges_removed": 499999
+   },
+   "args": {
+    "t1": 3000000,
+    "t2": 4000000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "8693d353",
+   "stratum": "1 hops",
+   "class": "window middle",
+   "factors": {
+    "hops": 1,
+    "paths": -1,
+    "window": "middle"
+   },
+   "args": {
+    "src": "n53755",
+    "dst": "n53752",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "90a3897d",
+   "stratum": "hub",
+   "class": "w1-early",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "3cddeeb7"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 0,
+     "t_b": 100000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "326c34ec",
+   "stratum": "hub",
+   "class": "w25-early",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "de684eae"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "3a3628b2",
+   "stratum": "hub",
+   "class": "interval w10",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "8df99ab3"
+   },
+   "args": {
+    "uid": "n0",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "cdd28e49",
+   "stratum": "p90",
+   "class": "interval w1",
+   "factors": {
+    "incident_edges": 31,
+    "interval": "w1"
+   },
+   "args": {
+    "uid": "n94340",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "b7ada50b",
+   "stratum": "1 version",
+   "class": "1 version",
+   "factors": {
+    "versions": "1 version"
+   },
+   "args": {
+    "uid": "n30422"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "5ae34e3b",
+   "stratum": "hub",
+   "class": "instant mid",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "c1c6ee53"
+   },
+   "args": {
+    "seeds": [
+     "n69458"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "078ddf97",
+   "stratum": "filter 300",
+   "class": "delta 5 %",
+   "factors": {
+    "events": 66896,
+    "count": 75151
+   },
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 500000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040",
+     "n10041",
+     "n10042",
+     "n10043",
+     "n10044",
+     "n10045",
+     "n10046",
+     "n10047",
+     "n10048",
+     "n10049",
+     "n1005",
+     "n10050",
+     "n10051",
+     "n10052",
+     "n10053",
+     "n10054",
+     "n10055",
+     "n10056",
+     "n10057",
+     "n10058",
+     "n10059",
+     "n1006",
+     "n10060",
+     "n10061",
+     "n10062",
+     "n10063",
+     "n10064",
+     "n10065",
+     "n10066",
+     "n10067",
+     "n10068",
+     "n10069",
+     "n1007",
+     "n10070",
+     "n10071",
+     "n10072",
+     "n10073",
+     "n10074",
+     "n10075",
+     "n10076",
+     "n10077",
+     "n10078",
+     "n10079",
+     "n1008",
+     "n10080",
+     "n10081",
+     "n10082",
+     "n10083",
+     "n10084",
+     "n10085",
+     "n10086",
+     "n10087",
+     "n10088",
+     "n10089",
+     "n1009",
+     "n10090",
+     "n10091",
+     "n10092",
+     "n10093",
+     "n10094",
+     "n10095",
+     "n10096",
+     "n10097",
+     "n10098",
+     "n10099",
+     "n101",
+     "n1010",
+     "n10100",
+     "n10101",
+     "n10102",
+     "n10103",
+     "n10104",
+     "n10105",
+     "n10106",
+     "n10107",
+     "n10108",
+     "n10109",
+     "n1011",
+     "n10110",
+     "n10111",
+     "n10112",
+     "n10113",
+     "n10114",
+     "n10115",
+     "n10116",
+     "n10117",
+     "n10118",
+     "n10119",
+     "n1012",
+     "n10120",
+     "n10121",
+     "n10122",
+     "n10123",
+     "n10124",
+     "n10125",
+     "n10126",
+     "n10127",
+     "n10128",
+     "n10129",
+     "n1013",
+     "n10130",
+     "n10131",
+     "n10132",
+     "n10133",
+     "n10134",
+     "n10135",
+     "n10136",
+     "n10137",
+     "n10138",
+     "n10139",
+     "n1014",
+     "n10140",
+     "n10141",
+     "n10142",
+     "n10143",
+     "n10144",
+     "n10145",
+     "n10146",
+     "n10147",
+     "n10148",
+     "n10149",
+     "n1015",
+     "n10150",
+     "n10151",
+     "n10152",
+     "n10153",
+     "n10154",
+     "n10155",
+     "n10156",
+     "n10157",
+     "n10158",
+     "n10159",
+     "n1016",
+     "n10160",
+     "n10161",
+     "n10162",
+     "n10163",
+     "n10164",
+     "n10165",
+     "n10166",
+     "n10167",
+     "n10168",
+     "n10169",
+     "n1017",
+     "n10170",
+     "n10171",
+     "n10172",
+     "n10173",
+     "n10174",
+     "n10175",
+     "n10176",
+     "n10177",
+     "n10178",
+     "n10179",
+     "n1018",
+     "n10180",
+     "n10181",
+     "n10182",
+     "n10183",
+     "n10184",
+     "n10185",
+     "n10186",
+     "n10187",
+     "n10188",
+     "n10189",
+     "n1019",
+     "n10190",
+     "n10191",
+     "n10192",
+     "n10193",
+     "n10194",
+     "n10195",
+     "n10196",
+     "n10197",
+     "n10198",
+     "n10199",
+     "n102",
+     "n1020",
+     "n10200",
+     "n10201",
+     "n10202",
+     "n10203",
+     "n10204",
+     "n10205",
+     "n10206",
+     "n10207",
+     "n10208",
+     "n10209",
+     "n1021",
+     "n10210",
+     "n10211",
+     "n10212",
+     "n10213",
+     "n10214",
+     "n10215",
+     "n10216",
+     "n10217",
+     "n10218",
+     "n10219",
+     "n1022",
+     "n10220",
+     "n10221",
+     "n10222",
+     "n10223",
+     "n10224",
+     "n10225",
+     "n10226",
+     "n10227",
+     "n10228",
+     "n10229",
+     "n1023",
+     "n10230",
+     "n10231",
+     "n10232",
+     "n10233",
+     "n10234",
+     "n10235",
+     "n10236",
+     "n10237",
+     "n10238",
+     "n10239",
+     "n1024",
+     "n10240",
+     "n10241",
+     "n10242",
+     "n10243",
+     "n10244",
+     "n10245",
+     "n10246",
+     "n10247",
+     "n10248",
+     "n10249",
+     "n1025",
+     "n10250",
+     "n10251",
+     "n10252",
+     "n10253",
+     "n10254",
+     "n10255",
+     "n10256",
+     "n10257",
+     "n10258",
+     "n10259",
+     "n1026",
+     "n10260",
+     "n10261",
+     "n10262",
+     "n10263",
+     "n10264",
+     "n10265",
+     "n10266"
+    ]
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "5f4ffec5",
+   "stratum": "hub",
+   "class": "interval w1",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "179a64fb"
+   },
+   "args": {
+    "uid": "n34729",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "e77f4008",
+   "stratum": "~1000 matches",
+   "class": "~1000 matches",
+   "factors": {
+    "matches": 1111
+   },
+   "args": {
+    "query": "n66"
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "838badd2",
+   "stratum": "1 hops",
+   "class": "window middle",
+   "factors": {
+    "hops": 1,
+    "paths": -1,
+    "window": "middle"
+   },
+   "args": {
+    "src": "n44426",
+    "dst": "n44429",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "c975ec92",
+   "stratum": "1 version",
+   "class": "as-of now",
+   "factors": {
+    "versions": "1 version",
+    "as_of": "now"
+   },
+   "args": {
+    "uid": "n71222",
+    "as_of_tt": 1792279959323292
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "5b78ac51",
+   "stratum": "hub",
+   "class": "window middle",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "25b1a11b"
+   },
+   "args": {
+    "src": "n0",
+    "dst": "n13867",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "bacb879a",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5043750
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 5043750,
+     "t_b": 5043760
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "a22c6344",
+   "stratum": "hub",
+   "class": "pair",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "9656713f"
+   },
+   "args": {
+    "a_spec": {
+     "src": "n69458"
+    },
+    "b_spec": {
+     "src": "n4187"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "7bf1044b",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 3750250
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 3750250,
+     "t_b": 3750260
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "673babdd",
+   "stratum": "hub",
+   "class": "w10-early",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "ceb7b974"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "1d802915",
+   "stratum": "hub",
+   "class": "w1-middle",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "69c0c240"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 4950000,
+     "t_b": 5050000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "6ce6d821",
+   "stratum": "hub",
+   "class": "interval w1",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "179a64fb"
+   },
+   "args": {
+    "uid": "n0",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "208c18ed",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 5000000
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 5000000,
+     "t_b": 5000010
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "ae14a17a",
+   "stratum": "p10",
+   "class": "interval w25",
+   "factors": {
+    "incident_edges": 9,
+    "interval": "w25"
+   },
+   "args": {
+    "uid": "n41466",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "f10f2845",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 1250750
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 1250750,
+     "t_b": 1250760
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "130bd200",
+   "stratum": "hub",
+   "class": "instant q3",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "19710268"
+   },
+   "args": {
+    "seeds": [
+     "n4187"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "30d7abfe",
+   "stratum": "4 versions",
+   "class": "as-of now",
+   "factors": {
+    "versions": "4 versions",
+    "as_of": "now"
+   },
+   "args": {
+    "uid": "n1",
+    "as_of_tt": 1792279959323292
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "cd9ba3d7",
+   "stratum": "4 versions",
+   "class": "as-of epoch1",
+   "factors": {
+    "versions": "4 versions",
+    "as_of": "epoch1"
+   },
+   "args": {
+    "uid": "n1",
+    "as_of_tt": 1792279872631015
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "12f4d412",
+   "stratum": "w25",
+   "class": "w25-early, 100 buckets",
+   "factors": {
+    "events": 2500000,
+    "buckets": 100
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "stride": 25000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "f3a6a557",
+   "stratum": "hub",
+   "class": "w10-middle",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "3dab8750"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 4500000,
+     "t_b": 5500000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "587a2c3b",
+   "stratum": "hub",
+   "class": "w25-middle",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "5c6ccda3"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "0d5751f6",
+   "stratum": "hub",
+   "class": "window middle",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "25b1a11b"
+   },
+   "args": {
+    "src": "n69458",
+    "dst": "n13867",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "e366881d",
+   "stratum": "p50",
+   "class": "interval w25",
+   "factors": {
+    "incident_edges": 20,
+    "interval": "w25"
+   },
+   "args": {
+    "uid": "n85561",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "3ec3f282",
+   "stratum": "hub",
+   "class": "interval w10",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "8df99ab3"
+   },
+   "args": {
+    "uid": "n4187",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "701047f4",
+   "stratum": "hub",
+   "class": "w25-early",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "de684eae"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "5d83b42d",
+   "stratum": "hub",
+   "class": "instant q1",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "bc4a5f5a"
+   },
+   "args": {
+    "seeds": [
+     "n69458"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b3f81bdb",
+   "stratum": "hub",
+   "class": "instant mid",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "c1c6ee53"
+   },
+   "args": {
+    "seeds": [
+     "n34729"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "0b548f77",
+   "stratum": "hub",
+   "class": "w1-late",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "a3d829d0"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 9900000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "5e6fd84d",
+   "stratum": "w25",
+   "class": "w25-middle, 50 buckets",
+   "factors": {
+    "events": 2500009,
+    "buckets": 50
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "stride": 50000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "f78ab0f9",
+   "stratum": "filter 50",
+   "class": "delta 5 %",
+   "factors": {
+    "events": 46868,
+    "count": 298
+   },
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 500000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040"
+    ]
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "90bd80fb",
+   "stratum": "w25",
+   "class": "w25-middle, 50 buckets",
+   "factors": {
+    "events": 2500009,
+    "buckets": 50
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "stride": 50000,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "de0d3308",
+   "stratum": "filter 200",
+   "class": "delta 2 %",
+   "factors": {
+    "events": 62662,
+    "count": 13350
+   },
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 200000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040",
+     "n10041",
+     "n10042",
+     "n10043",
+     "n10044",
+     "n10045",
+     "n10046",
+     "n10047",
+     "n10048",
+     "n10049",
+     "n1005",
+     "n10050",
+     "n10051",
+     "n10052",
+     "n10053",
+     "n10054",
+     "n10055",
+     "n10056",
+     "n10057",
+     "n10058",
+     "n10059",
+     "n1006",
+     "n10060",
+     "n10061",
+     "n10062",
+     "n10063",
+     "n10064",
+     "n10065",
+     "n10066",
+     "n10067",
+     "n10068",
+     "n10069",
+     "n1007",
+     "n10070",
+     "n10071",
+     "n10072",
+     "n10073",
+     "n10074",
+     "n10075",
+     "n10076",
+     "n10077",
+     "n10078",
+     "n10079",
+     "n1008",
+     "n10080",
+     "n10081",
+     "n10082",
+     "n10083",
+     "n10084",
+     "n10085",
+     "n10086",
+     "n10087",
+     "n10088",
+     "n10089",
+     "n1009",
+     "n10090",
+     "n10091",
+     "n10092",
+     "n10093",
+     "n10094",
+     "n10095",
+     "n10096",
+     "n10097",
+     "n10098",
+     "n10099",
+     "n101",
+     "n1010",
+     "n10100",
+     "n10101",
+     "n10102",
+     "n10103",
+     "n10104",
+     "n10105",
+     "n10106",
+     "n10107",
+     "n10108",
+     "n10109",
+     "n1011",
+     "n10110",
+     "n10111",
+     "n10112",
+     "n10113",
+     "n10114",
+     "n10115",
+     "n10116",
+     "n10117",
+     "n10118",
+     "n10119",
+     "n1012",
+     "n10120",
+     "n10121",
+     "n10122",
+     "n10123",
+     "n10124",
+     "n10125",
+     "n10126",
+     "n10127",
+     "n10128",
+     "n10129",
+     "n1013",
+     "n10130",
+     "n10131",
+     "n10132",
+     "n10133",
+     "n10134",
+     "n10135",
+     "n10136",
+     "n10137",
+     "n10138",
+     "n10139",
+     "n1014",
+     "n10140",
+     "n10141",
+     "n10142",
+     "n10143",
+     "n10144",
+     "n10145",
+     "n10146",
+     "n10147",
+     "n10148",
+     "n10149",
+     "n1015",
+     "n10150",
+     "n10151",
+     "n10152",
+     "n10153",
+     "n10154",
+     "n10155",
+     "n10156",
+     "n10157",
+     "n10158",
+     "n10159",
+     "n1016",
+     "n10160",
+     "n10161",
+     "n10162",
+     "n10163",
+     "n10164",
+     "n10165",
+     "n10166",
+     "n10167",
+     "n10168",
+     "n10169",
+     "n1017",
+     "n10170",
+     "n10171",
+     "n10172",
+     "n10173",
+     "n10174",
+     "n10175",
+     "n10176"
+    ]
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "4a09d525",
+   "stratum": "hub",
+   "class": "w1-late",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "a3d829d0"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 9900000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "905bfba3",
+   "stratum": "p90",
+   "class": "instant mid",
+   "factors": {
+    "two_hop_nodes": 3991,
+    "instant": "mid"
+   },
+   "args": {
+    "seeds": [
+     "n91791"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "77f76830",
+   "stratum": "gap 0.5 %",
+   "class": "at 85 %",
+   "factors": {
+    "edges_added": 50000,
+    "edges_removed": 50000
+   },
+   "args": {
+    "t1": 8500000,
+    "t2": 8550000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a74c8a58",
+   "stratum": "hub",
+   "class": "instant q3",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "19710268"
+   },
+   "args": {
+    "seeds": [
+     "n0"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "18c4524b",
+   "stratum": "hub",
+   "class": "window early",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "bd2e6886"
+   },
+   "args": {
+    "src": "n69458",
+    "dst": "n86408",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "1da34377",
+   "stratum": "hub",
+   "class": "w1-late",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "a3d829d0"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 9900000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "8fccfcb3",
+   "stratum": "w100",
+   "class": "w100-whole, 50 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 50
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 200000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "81656a20",
+   "stratum": "p99",
+   "class": "w25-early",
+   "factors": {
+    "reachable": 99673,
+    "window": "w25-early",
+    "outdeg_in_window": 7
+   },
+   "args": {
+    "src": "n45770",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "bd00d9ca",
+   "stratum": "hub",
+   "class": "interval w1",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "179a64fb"
+   },
+   "args": {
+    "uid": "n4187",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "721ce1a7",
+   "stratum": "hub",
+   "class": "w10-late",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "4a86d409"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 9000000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "aebf5d46",
+   "stratum": "hub",
+   "class": "w25-early",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "de684eae"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    }
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "5d6f65d2",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 1875625
+   },
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 1875625,
+     "t_b": 1875635
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "2bd744ba",
+   "stratum": "2 hops",
+   "class": "window middle",
+   "factors": {
+    "hops": 2,
+    "paths": -1,
+    "window": "middle"
+   },
+   "args": {
+    "src": "n26519",
+    "dst": "n26539",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "4f7e560a",
+   "stratum": "w25",
+   "class": "w25-middle, 100 buckets",
+   "factors": {
+    "events": 2500009,
+    "buckets": 100
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "stride": 25000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "4bc60e2a",
+   "stratum": "p90",
+   "class": "pair",
+   "factors": {
+    "edges_a": 157,
+    "edges_b": 48
+   },
+   "args": {
+    "a_spec": {
+     "src": "n49288"
+    },
+    "b_spec": {
+     "src": "n82232"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "0a5b36d5",
+   "stratum": "hub",
+   "class": "instant q1",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "bc4a5f5a"
+   },
+   "args": {
+    "seeds": [
+     "n38916"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "6daffec9",
+   "stratum": "p50",
+   "class": "instant q1",
+   "factors": {
+    "two_hop_nodes": 109,
+    "instant": "q1"
+   },
+   "args": {
+    "seeds": [
+     "n3804"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "130b7b6e",
+   "stratum": "filter 400",
+   "class": "delta 5 %",
+   "factors": {
+    "events": 73776,
+    "count": 88556
+   },
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 500000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040",
+     "n10041",
+     "n10042",
+     "n10043",
+     "n10044",
+     "n10045",
+     "n10046",
+     "n10047",
+     "n10048",
+     "n10049",
+     "n1005",
+     "n10050",
+     "n10051",
+     "n10052",
+     "n10053",
+     "n10054",
+     "n10055",
+     "n10056",
+     "n10057",
+     "n10058",
+     "n10059",
+     "n1006",
+     "n10060",
+     "n10061",
+     "n10062",
+     "n10063",
+     "n10064",
+     "n10065",
+     "n10066",
+     "n10067",
+     "n10068",
+     "n10069",
+     "n1007",
+     "n10070",
+     "n10071",
+     "n10072",
+     "n10073",
+     "n10074",
+     "n10075",
+     "n10076",
+     "n10077",
+     "n10078",
+     "n10079",
+     "n1008",
+     "n10080",
+     "n10081",
+     "n10082",
+     "n10083",
+     "n10084",
+     "n10085",
+     "n10086",
+     "n10087",
+     "n10088",
+     "n10089",
+     "n1009",
+     "n10090",
+     "n10091",
+     "n10092",
+     "n10093",
+     "n10094",
+     "n10095",
+     "n10096",
+     "n10097",
+     "n10098",
+     "n10099",
+     "n101",
+     "n1010",
+     "n10100",
+     "n10101",
+     "n10102",
+     "n10103",
+     "n10104",
+     "n10105",
+     "n10106",
+     "n10107",
+     "n10108",
+     "n10109",
+     "n1011",
+     "n10110",
+     "n10111",
+     "n10112",
+     "n10113",
+     "n10114",
+     "n10115",
+     "n10116",
+     "n10117",
+     "n10118",
+     "n10119",
+     "n1012",
+     "n10120",
+     "n10121",
+     "n10122",
+     "n10123",
+     "n10124",
+     "n10125",
+     "n10126",
+     "n10127",
+     "n10128",
+     "n10129",
+     "n1013",
+     "n10130",
+     "n10131",
+     "n10132",
+     "n10133",
+     "n10134",
+     "n10135",
+     "n10136",
+     "n10137",
+     "n10138",
+     "n10139",
+     "n1014",
+     "n10140",
+     "n10141",
+     "n10142",
+     "n10143",
+     "n10144",
+     "n10145",
+     "n10146",
+     "n10147",
+     "n10148",
+     "n10149",
+     "n1015",
+     "n10150",
+     "n10151",
+     "n10152",
+     "n10153",
+     "n10154",
+     "n10155",
+     "n10156",
+     "n10157",
+     "n10158",
+     "n10159",
+     "n1016",
+     "n10160",
+     "n10161",
+     "n10162",
+     "n10163",
+     "n10164",
+     "n10165",
+     "n10166",
+     "n10167",
+     "n10168",
+     "n10169",
+     "n1017",
+     "n10170",
+     "n10171",
+     "n10172",
+     "n10173",
+     "n10174",
+     "n10175",
+     "n10176",
+     "n10177",
+     "n10178",
+     "n10179",
+     "n1018",
+     "n10180",
+     "n10181",
+     "n10182",
+     "n10183",
+     "n10184",
+     "n10185",
+     "n10186",
+     "n10187",
+     "n10188",
+     "n10189",
+     "n1019",
+     "n10190",
+     "n10191",
+     "n10192",
+     "n10193",
+     "n10194",
+     "n10195",
+     "n10196",
+     "n10197",
+     "n10198",
+     "n10199",
+     "n102",
+     "n1020",
+     "n10200",
+     "n10201",
+     "n10202",
+     "n10203",
+     "n10204",
+     "n10205",
+     "n10206",
+     "n10207",
+     "n10208",
+     "n10209",
+     "n1021",
+     "n10210",
+     "n10211",
+     "n10212",
+     "n10213",
+     "n10214",
+     "n10215",
+     "n10216",
+     "n10217",
+     "n10218",
+     "n10219",
+     "n1022",
+     "n10220",
+     "n10221",
+     "n10222",
+     "n10223",
+     "n10224",
+     "n10225",
+     "n10226",
+     "n10227",
+     "n10228",
+     "n10229",
+     "n1023",
+     "n10230",
+     "n10231",
+     "n10232",
+     "n10233",
+     "n10234",
+     "n10235",
+     "n10236",
+     "n10237",
+     "n10238",
+     "n10239",
+     "n1024",
+     "n10240",
+     "n10241",
+     "n10242",
+     "n10243",
+     "n10244",
+     "n10245",
+     "n10246",
+     "n10247",
+     "n10248",
+     "n10249",
+     "n1025",
+     "n10250",
+     "n10251",
+     "n10252",
+     "n10253",
+     "n10254",
+     "n10255",
+     "n10256",
+     "n10257",
+     "n10258",
+     "n10259",
+     "n1026",
+     "n10260",
+     "n10261",
+     "n10262",
+     "n10263",
+     "n10264",
+     "n10265",
+     "n10266",
+     "n10267",
+     "n10268",
+     "n10269",
+     "n1027",
+     "n10270",
+     "n10271",
+     "n10272",
+     "n10273",
+     "n10274",
+     "n10275",
+     "n10276",
+     "n10277",
+     "n10278",
+     "n10279",
+     "n1028",
+     "n10280",
+     "n10281",
+     "n10282",
+     "n10283",
+     "n10284",
+     "n10285",
+     "n10286",
+     "n10287",
+     "n10288",
+     "n10289",
+     "n1029",
+     "n10290",
+     "n10291",
+     "n10292",
+     "n10293",
+     "n10294",
+     "n10295",
+     "n10296",
+     "n10297",
+     "n10298",
+     "n10299",
+     "n103",
+     "n1030",
+     "n10300",
+     "n10301",
+     "n10302",
+     "n10303",
+     "n10304",
+     "n10305",
+     "n10306",
+     "n10307",
+     "n10308",
+     "n10309",
+     "n1031",
+     "n10310",
+     "n10311",
+     "n10312",
+     "n10313",
+     "n10314",
+     "n10315",
+     "n10316",
+     "n10317",
+     "n10318",
+     "n10319",
+     "n1032",
+     "n10320",
+     "n10321",
+     "n10322",
+     "n10323",
+     "n10324",
+     "n10325",
+     "n10326",
+     "n10327",
+     "n10328",
+     "n10329",
+     "n1033",
+     "n10330",
+     "n10331",
+     "n10332",
+     "n10333",
+     "n10334",
+     "n10335",
+     "n10336",
+     "n10337",
+     "n10338",
+     "n10339",
+     "n1034",
+     "n10340",
+     "n10341",
+     "n10342",
+     "n10343",
+     "n10344",
+     "n10345",
+     "n10346",
+     "n10347",
+     "n10348",
+     "n10349",
+     "n1035",
+     "n10350",
+     "n10351",
+     "n10352",
+     "n10353",
+     "n10354",
+     "n10355",
+     "n10356"
+    ]
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "7b1660b7",
+   "stratum": "1 version",
+   "class": "as-of mid-corrections",
+   "factors": {
+    "versions": "1 version",
+    "as_of": "mid-corrections"
+   },
+   "args": {
+    "uid": "n12943",
+    "as_of_tt": 1792279957793393
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "ef89b772",
+   "stratum": "w100",
+   "class": "w100-whole, 100 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 100
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 100000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "5b6e104d",
+   "stratum": "hub",
+   "class": "w25-late",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "14d15cc2"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 7500000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "8328899a",
+   "stratum": "hub",
+   "class": "w25-middle",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "5c6ccda3"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "e594a915",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5018750
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 5018750,
+     "t_b": 5018760
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a2372ada",
+   "stratum": "hub",
+   "class": "instant q1",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "bc4a5f5a"
+   },
+   "args": {
+    "seeds": [
+     "n4187"
+    ],
+    "hops": 2,
+    "t_valid": 2500000
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "7630457f",
+   "stratum": "burst band, 10 per tick",
+   "class": "burst band, 10 per tick",
+   "factors": {
+    "t_a": 5031250
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 5031250,
+     "t_b": 5031260
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "0c2857f9",
+   "stratum": "1 event per tick",
+   "class": "1 event per tick",
+   "factors": {
+    "t_a": 3125375
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 3125375,
+     "t_b": 3125385
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "6a411509",
+   "stratum": "hub",
+   "class": "instant mid",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "c1c6ee53"
+   },
+   "args": {
+    "seeds": [
+     "n38916"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "6459d484",
+   "stratum": "w25",
+   "class": "w25-early, 100 buckets",
+   "factors": {
+    "events": 2500000,
+    "buckets": 100
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "stride": 25000,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "ce4cb7ac",
+   "stratum": "hub",
+   "class": "w10-late",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "4a86d409"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 9000000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "28d680b0",
+   "stratum": "hub",
+   "class": "w1-middle",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "69c0c240"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 4950000,
+     "t_b": 5050000
+    }
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "62af01b9",
+   "stratum": "1 version",
+   "class": "as-of epoch1",
+   "factors": {
+    "versions": "1 version",
+    "as_of": "epoch1"
+   },
+   "args": {
+    "uid": "n63427",
+    "as_of_tt": 1792279872631015
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "aa58cfab",
+   "stratum": "hub",
+   "class": "interval w1",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "179a64fb"
+   },
+   "args": {
+    "uid": "n38916",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "0a13327c",
+   "stratum": "p99",
+   "class": "interval w1",
+   "factors": {
+    "incident_edges": 192,
+    "interval": "w1"
+   },
+   "args": {
+    "uid": "n94577",
+    "t1": 5000000,
+    "t2": 5100000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "1b7ab03c",
+   "stratum": "hub",
+   "class": "interval w10",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "8df99ab3"
+   },
+   "args": {
+    "uid": "n34729",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "a946e4cb",
+   "stratum": "hub",
+   "class": "pair",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "9656713f"
+   },
+   "args": {
+    "a_spec": {
+     "src": "n34729"
+    },
+    "b_spec": {
+     "src": "n69458"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "ffc76857",
+   "stratum": "4 versions",
+   "class": "4 versions",
+   "factors": {
+    "versions": "4 versions"
+   },
+   "args": {
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "dddc4c5a",
+   "stratum": "hub",
+   "class": "interval w25",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "02bd49b1"
+   },
+   "args": {
+    "uid": "n4187",
+    "t1": 5000000,
+    "t2": 7500000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "2cca3c05",
+   "stratum": "hub",
+   "class": "w25-late",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "14d15cc2"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 7500000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "c274258c",
+   "stratum": "hub",
+   "class": "window early",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "bd2e6886"
+   },
+   "args": {
+    "src": "n0",
+    "dst": "n86408",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a725b35b",
+   "stratum": "hub",
+   "class": "instant mid",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "c1c6ee53"
+   },
+   "args": {
+    "seeds": [
+     "n4187"
+    ],
+    "hops": 2,
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "954f8fcc",
+   "stratum": "w25",
+   "class": "w25-middle, 50 buckets",
+   "factors": {
+    "events": 2500009,
+    "buckets": 50
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    },
+    "stride": 50000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "48aa96a6",
+   "stratum": "hub",
+   "class": "w10-middle",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n34729",
+    "template": "3dab8750"
+   },
+   "args": {
+    "src": "n34729",
+    "window": {
+     "t_a": 4500000,
+     "t_b": 5500000
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "fea3c821",
+   "stratum": "~10000 matches",
+   "class": "~10000 matches",
+   "factors": {
+    "matches": 11111
+   },
+   "args": {
+    "query": "n1"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "f048222c",
+   "stratum": "hub",
+   "class": "w25-middle",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "5c6ccda3"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 3750000,
+     "t_b": 6250000
+    }
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "1724328f",
+   "stratum": "w50",
+   "class": "w50-middle, 100 buckets",
+   "factors": {
+    "events": 5000009,
+    "buckets": 100
+   },
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 2500000,
+     "t_b": 7500000
+    },
+    "stride": 50000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "f44382cb",
+   "stratum": "hub",
+   "class": "w1-early",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "3cddeeb7"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 0,
+     "t_b": 100000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "9c36f8de",
+   "stratum": "hub",
+   "class": "w1-early",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "3cddeeb7"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 0,
+     "t_b": 100000
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "86fb008d",
+   "stratum": "1 version",
+   "class": "1 version",
+   "factors": {
+    "versions": "1 version"
+   },
+   "args": {
+    "uid": "n12211"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "5a08d42c",
+   "stratum": "p10",
+   "class": "interval w10",
+   "factors": {
+    "incident_edges": 4,
+    "interval": "w10"
+   },
+   "args": {
+    "uid": "n87455",
+    "t1": 5000000,
+    "t2": 6000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "52eb8d0f",
+   "stratum": "p99",
+   "class": "pair",
+   "factors": {
+    "edges_a": 7129,
+    "edges_b": 15
+   },
+   "args": {
+    "a_spec": {
+     "src": "n11816"
+    },
+    "b_spec": {
+     "src": "n72444"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "a64c8534",
+   "stratum": "hub",
+   "class": "w10-middle",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n69458",
+    "template": "3dab8750"
+   },
+   "args": {
+    "src": "n69458",
+    "window": {
+     "t_a": 4500000,
+     "t_b": 5500000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "c4bbcab3",
+   "stratum": "hub",
+   "class": "w25-late",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "14d15cc2"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 7500000,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "46c4d403",
+   "stratum": "w100",
+   "class": "w100-whole, 50 buckets",
+   "factors": {
+    "events": 10000009,
+    "buckets": 50
+   },
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    },
+    "stride": 200000,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "5a887e20",
+   "stratum": "hub",
+   "class": "instant q3",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n38916",
+    "template": "19710268"
+   },
+   "args": {
+    "seeds": [
+     "n38916"
+    ],
+    "hops": 2,
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "c00b4ecd",
+   "stratum": "1 version",
+   "class": "1 version",
+   "factors": {
+    "versions": "1 version"
+   },
+   "args": {
+    "uid": "n63427"
+   }
+  }
+ ]
+}

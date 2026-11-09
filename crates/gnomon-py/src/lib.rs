@@ -39,6 +39,9 @@ use gnomon_core::store::{
 use gnomon_core::ingest_phase::{self as ip, Timer, G};
 use gnomon_core::OPEN_END;
 
+mod envelope;
+mod nbrevo;
+
 /// Map an engine error onto a Python exception.
 ///
 /// The category is kept as the message prefix (`not_found: ...`) so the
@@ -406,6 +409,31 @@ impl NativeStore {
             // harness can separate the amortized every-Kth-commit cost from
             // the per-commit one instead of averaging them together
             ("manifest_checkpoint", u64::from(p.manifest_checkpoint)),
+        ] {
+            d.set_item(k, v).expect("fresh dict accepts u64 values");
+        }
+        Some(d)
+    }
+
+    /// The warm open's phases (`GNOMON_STORE_WARM_OPEN`, a read-only handle):
+    /// `None` when this handle was not warmed at open.
+    fn warm_open_us<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyDict>> {
+        let p = self.inner.warm_phases()?;
+        let d = PyDict::new(py);
+        for (k, v) in [
+            ("threads", p.threads),
+            ("segments", p.segments),
+            ("segments_us", p.segments_us),
+            ("open_us", p.open_us),
+            ("tcsr_us", p.tcsr_us),
+            ("postings_us", p.postings_us),
+            ("derive_us", p.derive_us),
+            ("stats_us", p.stats_us),
+            ("labels_us", p.labels_us),
+            ("rel_ends_us", p.rel_ends_us),
+            ("total_us", p.total_us),
+            ("evictions", p.evictions),
+            ("complete", u64::from(p.complete)),
         ] {
             d.set_item(k, v).expect("fresh dict accepts u64 values");
         }
@@ -780,6 +808,195 @@ impl NativeStore {
             }
         }
         Ok((out_id, out_s, out_e))
+    }
+
+    /// `ops_snapshot._expand_from_seeds` and the page the operator keeps, in
+    /// one call: the same filtered scans (one per hop, then
+    /// the induced edges with both ends reached), the same node validity
+    /// (`believed` per id, the greatest valid version in `(vt_s, vid)`), the
+    /// same cap check, then strings and objects for edges `[offset, offset +
+    /// limit)` in scan order and nodes `[0, limit)` by `(hop, uid)` only.
+    /// `None` when the reached set outgrows `cap` (the caller then takes the
+    /// engine frontier, as the Python expansion's `None` does).
+    #[pyo3(signature = (seeds, t, as_of_tt, hops, cap, offset, limit, rel_types=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_scan_page<'py>(
+        &self,
+        py: Python<'py>,
+        seeds: Vec<u32>,
+        t: i64,
+        as_of_tt: i64,
+        hops: u32,
+        cap: usize,
+        offset: usize,
+        limit: usize,
+        rel_types: Option<Vec<String>>,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        type Edge = (String, String, String, String, String, i64, i64);
+        type Page = (Vec<(String, String, u32)>, usize, Vec<Edge>, usize);
+        let got: PyResult<Option<Page>> = py.detach(|| {
+            let scan = |ids: &[u32], cols: Option<Vec<String>>, both: bool| -> PyResult<gnomon_core::scan::EdgeColumns> {
+                let mut v = ids.to_vec();
+                v.sort_unstable();
+                v.dedup();
+                let req = ScanRequest {
+                    as_of_tt,
+                    vt_min: Some(t),
+                    vt_max: Some(t + 1),
+                    rel_types: rel_types.clone(),
+                    touching_ids: Some(v),
+                    touching_both: both,
+                    vt_s_min: None,
+                    limit: None,
+                    columns: cols,
+                };
+                Ok(self.inner.scan_edges(&req).map_err(err)?.cols)
+            };
+            let uid_of = |id: u32| -> PyResult<String> {
+                self.inner
+                    .dict()
+                    .uid(id)
+                    .map(str::to_string)
+                    .ok_or_else(|| PyKeyError::new_err(format!("dense id {id} vanished")))
+            };
+            let mut info: HashMap<u32, (String, String)> = HashMap::new();
+            let valid_at = |ids: &[u32], info: &mut HashMap<u32, (String, String)>| -> PyResult<()> {
+                for &id in ids {
+                    let uid = uid_of(id)?;
+                    let vs = self.inner.believed_node_versions(&uid, as_of_tt).map_err(err)?;
+                    let mut best: Option<(i64, &str, &str)> = None;
+                    for v in &vs {
+                        if v.vt_s <= t && t < v.vt_e && best.is_none_or(|b| (v.vt_s, v.vid.as_str()) > (b.0, b.1)) {
+                            best = Some((v.vt_s, v.vid.as_str(), v.label.as_str()));
+                        }
+                    }
+                    if let Some((_, _, label)) = best {
+                        let label = label.to_string();
+                        info.insert(id, (uid, label));
+                    }
+                }
+                Ok(())
+            };
+            let pair = Some(vec!["src_id".to_string(), "dst_id".to_string()]);
+            let mut sorted_seeds = seeds.clone();
+            sorted_seeds.sort_unstable();
+            sorted_seeds.dedup();
+            let mut e = scan(&sorted_seeds, pair.clone(), false)?;
+            valid_at(&sorted_seeds, &mut info)?;
+            let mut checked: std::collections::HashSet<u32> = sorted_seeds.iter().copied().collect();
+            let mut dist: HashMap<u32, u32> = HashMap::new();
+            for s in &seeds {
+                if info.contains_key(s) {
+                    dist.insert(*s, 0);
+                }
+            }
+            let mut frontier: Vec<u32> = dist.keys().copied().collect();
+            frontier.sort_unstable();
+            for h in 1..=hops {
+                if frontier.is_empty() {
+                    break;
+                }
+                if h > 1 {
+                    e = scan(&frontier, pair.clone(), false)?;
+                }
+                let mut touched: Vec<u32> = Vec::new();
+                for (s, d) in e.src_id.iter().zip(e.dst_id.iter()) {
+                    if frontier.binary_search(s).is_ok() || frontier.binary_search(d).is_ok() {
+                        touched.push(*s);
+                        touched.push(*d);
+                    }
+                }
+                touched.sort_unstable();
+                touched.dedup();
+                let cand: Vec<u32> = touched.into_iter().filter(|i| !dist.contains_key(i)).collect();
+                if dist.len() + cand.len() > cap {
+                    return Ok(None);
+                }
+                let ask: Vec<u32> = cand.iter().copied().filter(|i| !checked.contains(i)).collect();
+                checked.extend(ask.iter().copied());
+                valid_at(&ask, &mut info)?;
+                frontier = cand.into_iter().filter(|i| info.contains_key(i)).collect();
+                for &v in &frontier {
+                    dist.insert(v, h);
+                }
+            }
+            let mut reached: Vec<u32> = dist.keys().copied().collect();
+            reached.sort_unstable();
+            let cols = ["src_id", "dst_id", "vid", "rel_type", "disc", "vt_e"].iter().map(|c| c.to_string()).collect();
+            let ed = scan(&reached, Some(cols), true)?;
+            let n = ed.vt_s.len();
+            let lo = offset.min(n);
+            let hi = lo.saturating_add(limit).min(n);
+            let mut edges = Vec::with_capacity(hi - lo);
+            for i in lo..hi {
+                let src = uid_of(ed.src_id[i])?;
+                let dst = uid_of(ed.dst_id[i])?;
+                let eid = gnomon_core::derive::edge_eid(&src, &dst, &ed.rel_type[i], &ed.disc[i]).to_hex();
+                edges.push((eid, ed.vid[i].to_hex(), src, dst, ed.rel_type[i].clone(), ed.vt_s[i], ed.vt_e[i]));
+            }
+            let mut nodes: Vec<(u32, &str, &str)> =
+                dist.iter().map(|(i, h)| (*h, info[i].0.as_str(), info[i].1.as_str())).collect();
+            nodes.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+            let nodes_total = nodes.len();
+            let page_nodes = nodes.iter().take(limit).map(|(h, u, l)| (u.to_string(), l.to_string(), *h)).collect();
+            Ok(Some((page_nodes, nodes_total, edges, n)))
+        });
+        let Some((nodes, nodes_total, edges, edges_total)) = got? else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("nodes", nodes)?;
+        d.set_item("nodes_total", nodes_total)?;
+        d.set_item("edges_total", edges_total)?;
+        let rows = PyList::empty(py);
+        for (eid, vid, src, dst, rel, vt_s, vt_e) in edges {
+            let r = PyDict::new(py);
+            r.set_item("eid", eid)?;
+            r.set_item("vid", vid)?;
+            r.set_item("src", src)?;
+            r.set_item("dst", dst)?;
+            r.set_item("rel_type", rel)?;
+            r.set_item("vt_s", vt_s)?;
+            r.set_item("vt_e", vt_e)?;
+            rows.append(r)?;
+        }
+        d.set_item("edges", rows)?;
+        Ok(Some(d))
+    }
+
+    /// `NativeAdapter.nodes_valid_at` in one call: for each
+    /// `(id, uid)`, the node versions `believed` returns for `uid` at
+    /// `as_of_tt`, and of those valid at `t` (`vt_s <= t < vt_e`) the
+    /// greatest in `(vt_s, vid)`: `(id, uid, label)` in input order, ids with
+    /// none skipped. The same point read and the same choice as the adapter's
+    /// per-id loop, without a Python round trip per id.
+    #[pyo3(signature = (ids, uids, t, as_of_tt = OPEN_END))]
+    fn nodes_valid_at(
+        &self,
+        py: Python<'_>,
+        ids: Vec<u32>,
+        uids: Vec<String>,
+        t: i64,
+        as_of_tt: i64,
+    ) -> Res<Vec<(u32, String, String)>> {
+        if ids.len() != uids.len() {
+            return Err(PyKeyError::new_err("nodes_valid_at: ids and uids differ in length"));
+        }
+        py.detach(|| {
+            let mut out = Vec::new();
+            for (id, uid) in ids.into_iter().zip(uids) {
+                let vs = self.inner.believed_node_versions(&uid, as_of_tt).map_err(err)?;
+                let mut best: Option<(i64, &str, &str)> = None;
+                for v in &vs {
+                    if v.vt_s <= t && t < v.vt_e && best.is_none_or(|b| (v.vt_s, v.vid.as_str()) > (b.0, b.1)) {
+                        best = Some((v.vt_s, v.vid.as_str(), v.label.as_str()));
+                    }
+                }
+                if let Some((_, _, label)) = best {
+                    let label = label.to_string();
+                    out.push((id, uid, label));
+                }
+            }
+            Ok(out)
+        })
     }
 
     #[pyo3(signature = (uids, as_of_tt = OPEN_END))]
@@ -2404,7 +2621,7 @@ impl NativeStore {
     /// claim.
     ///
     /// `epsilon` is `empty_positives / positives`: measured in situ, against
-    /// a pre-registered band of 3 * 2^-16.
+    /// a band of 3 * 2^-16.
     fn vidfilter_stats(&self, py: Python<'_>) -> Res<Py<PyDict>> {
         let (
             segments,
@@ -2632,6 +2849,51 @@ impl NativeStore {
         Ok(Some(d))
     }
 
+    /// `snapshot_expand` as a page: `{"nodes": [(uid, label,
+    /// hop)] (the first `node_limit` by (hop, uid)), "nodes_total", "edges":
+    /// [dict] (rows `[offset, offset + limit)` in `(vt_s, vid)` order),
+    /// "edges_total"}`; strings and objects for the page only. `None` inside
+    /// an open batch.
+    #[pyo3(signature = (seeds, t, as_of_tt, hops, offset, limit, node_limit, rel_types=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_expand_page<'py>(
+        &self,
+        py: Python<'py>,
+        seeds: Vec<u32>,
+        t: i64,
+        as_of_tt: i64,
+        hops: u32,
+        offset: usize,
+        limit: usize,
+        node_limit: usize,
+        rel_types: Option<Vec<String>>,
+    ) -> Res<Option<Bound<'py, PyDict>>> {
+        let out = py
+            .detach(|| {
+                self.inner.snapshot_expand_page(&seeds, t, as_of_tt, hops, rel_types.as_deref(), offset, limit, node_limit)
+            })
+            .map_err(err)?;
+        let Some(out) = out else { return Ok(None) };
+        let d = PyDict::new(py);
+        d.set_item("nodes", out.nodes)?;
+        d.set_item("nodes_total", out.nodes_total)?;
+        d.set_item("edges_total", out.edges_total)?;
+        let rows = PyList::empty(py);
+        for e in &out.edges {
+            let r = PyDict::new(py);
+            r.set_item("eid", &e.eid)?;
+            r.set_item("vid", &e.vid)?;
+            r.set_item("src", &e.src)?;
+            r.set_item("dst", &e.dst)?;
+            r.set_item("rel_type", &e.rel_type)?;
+            r.set_item("vt_s", e.vt_s)?;
+            r.set_item("vt_e", e.vt_e)?;
+            rows.append(r)?;
+        }
+        d.set_item("edges", rows)?;
+        Ok(Some(d))
+    }
+
     /// Why the `match` executor last declined a plan (empty if never).
     fn match_last_decline(&self) -> String {
         gnomon_core::matcher::last_decline()
@@ -2641,6 +2903,19 @@ impl NativeStore {
     /// compiler's step-order estimates.
     fn match_label_counts(&self, py: Python<'_>) -> Res<Vec<(String, u64)>> {
         py.detach(|| self.inner.match_label_counts()).map_err(err)
+    }
+
+    /// Per relationship type, `[(type, edge versions, distinct source
+    /// identities, distinct target identities)]`: the `match` compiler's
+    /// second-anchor estimates.
+    fn match_rel_ends(&self, py: Python<'_>) -> Res<Vec<(String, u64, u64, u64)>> {
+        py.detach(|| self.inner.match_rel_ends()).map_err(err)
+    }
+
+    /// The adjacency-index rows of `uids` in direction `dir` ("out",
+    /// "in", "both"), every type and version: the second-anchor probe.
+    fn match_adjacency_rows(&self, py: Python<'_>, uids: Vec<String>, dir: String) -> Res<u64> {
+        py.detach(|| self.inner.match_adjacency_rows(&uids, &dir)).map_err(err)
     }
 
     /// `temporal_paths` in the engine: the total and the first `k`
@@ -3031,6 +3306,98 @@ fn build_info(py: Python<'_>) -> Bound<'_, PyDict> {
 
 /// Engine constants are exported so the Python side can *assert* agreement
 /// with `gnomon.core.model` rather than trusting two copies of one number.
+fn canon_plain(o: &Bound<'_, PyAny>) -> bool {
+    o.is_exact_instance_of::<pyo3::types::PyString>()
+        || o.is_exact_instance_of::<pyo3::types::PyInt>()
+        || o.is_exact_instance_of::<pyo3::types::PyBool>()
+        || o.is_none()
+}
+
+fn canon<'py>(o: &Bound<'py, PyAny>, round: &Bound<'py, PyAny>, fallback: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = o.py();
+    if canon_plain(o) {
+        return Ok(o.clone());
+    }
+    if o.is_instance_of::<pyo3::types::PyFloat>() {
+        let f: f64 = o.extract()?;
+        if !f.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err("non-finite float in operator output"));
+        }
+        return round.call1((o, 9));
+    }
+    if let Ok(d) = o.cast_exact::<PyDict>() {
+        if d.values().iter().all(|v| canon_plain(&v)) {
+            return Ok(d.copy()?.into_any());
+        }
+        let out = PyDict::new(py);
+        for (k, v) in d.iter() {
+            out.set_item(k, canon(&v, round, fallback)?)?;
+        }
+        return Ok(out.into_any());
+    }
+    if let Ok(l) = o.cast_exact::<PyList>() {
+        let all = l.iter().all(|v| canon_plain(&v));
+        let out = PyList::empty(py);
+        for v in l.iter() {
+            if all {
+                out.append(v)?;
+            } else {
+                out.append(canon(&v, round, fallback)?)?;
+            }
+        }
+        return Ok(out.into_any());
+    }
+    if o.is_instance_of::<PyDict>() || o.is_instance_of::<PyList>() {
+        // a subclass: the Python function, whose `dict`/`list` results differ
+        return fallback.call1((o,));
+    }
+    Ok(o.clone())
+}
+
+fn jc<'py>(o: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = o.py();
+    if let Ok(d) = o.cast_exact::<PyDict>() {
+        let n = PyDict::new(py);
+        for (k, v) in d.iter() {
+            n.set_item(k, jc(&v)?)?;
+        }
+        return Ok(n.into_any());
+    }
+    if let Ok(l) = o.cast_exact::<PyList>() {
+        let n = PyList::empty(py);
+        for v in l.iter() {
+            n.append(jc(&v)?)?;
+        }
+        return Ok(n.into_any());
+    }
+    if let Ok(t) = o.cast_exact::<pyo3::types::PyTuple>() {
+        let items = t.iter().map(|v| jc(&v)).collect::<PyResult<Vec<_>>>()?;
+        return Ok(pyo3::types::PyTuple::new(py, items)?.into_any());
+    }
+    Ok(o.clone())
+}
+
+/// `algebra.json_copy`: a deep copy of exact dicts, lists
+/// and tuples, every other value shared, as the Python function does.
+#[pyfunction]
+fn json_copy<'py>(obj: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    jc(&obj)
+}
+
+/// `algebra._canonicalize_floats`: the same walk over exact
+/// dicts, lists and scalars, with `round(x, 9)` called through `round` (the
+/// Python builtin, so the digits are Python's) and every other container
+/// type handed to `fallback`; a non-finite float raises `ValueError` and the
+/// caller re-runs the Python function, which raises its own error.
+#[pyfunction]
+fn canonicalize_floats<'py>(
+    obj: Bound<'py, PyAny>,
+    round: Bound<'py, PyAny>,
+    fallback: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    canon(&obj, &round, &fallback)
+}
+
 #[pymodule]
 fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeStore>()?;
@@ -3041,6 +3408,12 @@ fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(core_version, m)?)?;
     m.add_function(wrap_pyfunction!(win_search, m)?)?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
+    m.add_function(wrap_pyfunction!(canonicalize_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(envelope::canonical_json_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(envelope::canonicalize_json, m)?)?;
+    m.add_function(wrap_pyfunction!(envelope::args_key_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(nbrevo::neighborhood_evolution_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(json_copy, m)?)?;
     m.add("FORMAT_VERSION", gnomon_core::FORMAT_VERSION)?;
     m.add(
         "MANIFEST_FORMAT_VERSION",

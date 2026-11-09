@@ -1,4 +1,3 @@
-//! The shared-instant rule, one shared valid instant:
 //! the variable-length step `CoValidExpand`, the `optional`/`not` join
 //! `CoValidJoin`, the per-version-tuple `Collapse`, and the union of binding
 //! tables a `dir: both` hop compiles to.
@@ -86,6 +85,8 @@ pub(super) fn ivs_or(a: &[(i64, i64)], b: &[(i64, i64)]) -> Ivs {
 type Adj = FxMap<u32, Vec<(u32, i64, i64)>>;
 /// One search's rows: (target id, version, depth, fragment start, end).
 type Found = Vec<(u32, Addr, u32, i64, i64)>;
+/// One pool worker's share of a level's search state (covered, frontiers, reach).
+type ParPart<'x> = std::sync::Mutex<(&'x mut [FxMap<u32, Ivs>], &'x mut [Vec<(u32, Ivs)>], &'x mut [Vec<(u32, Ivs, u32)>])>;
 
 /// `CoValidExpand`'s fields.
 #[derive(Clone, Debug)]
@@ -110,7 +111,6 @@ fn pair(n: &J, key: &str) -> DResult<(String, String)> {
     }
 }
 
-/// The three shared-instant plan nodes, from their JSON.
 pub(super) fn parse_op(op: &str, n: &J, inputs: usize) -> DResult<Option<Op>> {
     Ok(Some(match op {
         "CoValidExpand" => {
@@ -401,6 +401,16 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// search over (node, instant set) states; every search of a level shares
     /// one adjacency call.
     pub(super) fn covalid_expand(&mut self, input: Rel, c: &CoValid) -> DResult<Rel> {
+        self.covalid_expand_where(input, c, &[])
+    }
+
+    /// `CoValidExpand` with `local`, predicates of a filter chain over it that
+    /// read the target's own fields alone (`covalid_local`): each is decided
+    /// once per distinct target version the search found, and a found
+    /// fragment of a version that fails is never made a row. A row's verdict
+    /// is its version's, so the rows that pass and their order are the
+    /// chain's.
+    pub(super) fn covalid_expand_where(&mut self, input: Rel, c: &CoValid, local: &[Op]) -> DResult<Rel> {
         let t0 = trace().then(std::time::Instant::now);
         let (mut t_adj, mut t_lvl) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
         let n = input.n;
@@ -437,7 +447,36 @@ impl<'s, 'a> Ctx<'s, 'a> {
         let mut covered: Vec<FxMap<u32, Ivs>> = Vec::with_capacity(keys.len());
         let mut frontiers: Vec<Vec<(u32, Ivs)>> = Vec::with_capacity(keys.len());
         let mut reach: Vec<Vec<(u32, Ivs, u32)>> = Vec::with_capacity(keys.len());
-        for &(seed, s, e) in &keys {
+        let par = covalid_par_on() && keys.len() >= par_min();
+        if par {
+            // Each search's start on the pool, a node's existence as
+            // `exists_of` computes it
+            let this: &Self = self;
+            let wv_r = &wv;
+            type Start = (FxMap<u32, Ivs>, Vec<(u32, Ivs)>, Vec<(u32, Ivs, u32)>);
+            let st: Vec<Start> = par_concat(keys.len(), |rg| {
+                rg.map(|k| {
+                    let (seed, s, e) = keys[k];
+                    let ex = ivs_norm(wv_r.of(seed).iter().map(|&a| this.node_iv(a)).collect());
+                    let first = ivs_and(&[(s, e)], &ex);
+                    let mut cov = FxMap::default();
+                    let (mut fr, mut re) = (Vec::new(), Vec::new());
+                    if !first.is_empty() {
+                        cov.insert(seed, first.clone());
+                        fr.push((seed, first.clone()));
+                        re.push((seed, first, 0u32));
+                    }
+                    (cov, fr, re)
+                })
+                .collect()
+            });
+            for (cov, fr, re) in st {
+                covered.push(cov);
+                frontiers.push(fr);
+                reach.push(re);
+            }
+        }
+        for &(seed, s, e) in if par { &keys[..0] } else { &keys[..] } {
             let ex = self.exists_of(&mut wv, seed);
             let first = ivs_and(&[(s, e)], &ex);
             let mut cov = FxMap::default();
@@ -471,6 +510,68 @@ impl<'s, 'a> Ctx<'s, 'a> {
             self.win_versions(&mut wv, &nbrs)?;
             t_adj += lap(t1);
             let t1 = trace().then(std::time::Instant::now);
+            if par {
+                // The level's searches in chunks on the pool, each as
+                // the loop below does it; existence per neighbour once
+                let this: &Self = self;
+                let wv_r = &wv;
+                let exn: Vec<Ivs> = par_concat(nbrs.len(), |rg| {
+                    rg.map(|i| ivs_norm(wv_r.of(nbrs[i]).iter().map(|&a| this.node_iv(a)).collect())).collect()
+                });
+                let width = MATCH_THREADS.with(|c| c.get()).max(1).min(keys.len());
+                let size = keys.len().div_ceil(width);
+                let parts: Vec<ParPart<'_>> = covered
+                    .chunks_mut(size)
+                    .zip(frontiers.chunks_mut(size))
+                    .zip(reach.chunks_mut(size))
+                    .map(|((a, b), c)| std::sync::Mutex::new((a, b, c)))
+                    .collect();
+                let (all_r, adj_r, nbrs_r, exn_r) = (&all, &adj, &nbrs, &exn);
+                let counts: Vec<usize> = crate::pool::run(parts.len(), |w| {
+                    let mut g = parts[w].lock().expect("co-valid part mutex poisoned");
+                    let (cov, fro, rea) = &mut *g;
+                    let mut st = 0usize;
+                    for j in 0..cov.len() {
+                        let fr = std::mem::take(&mut fro[j]);
+                        let mut next: FxMap<u32, Ivs> = FxMap::default();
+                        for (u, got) in fr {
+                            let p = all_r.binary_search(&u).expect("frontier node listed");
+                            for &(v, s, e) in &adj_r[p] {
+                                let kk = ivs_and(&got, &[(s, e)]);
+                                if kk.is_empty() {
+                                    continue;
+                                }
+                                let ex = &exn_r[nbrs_r.binary_search(&v).expect("neighbour listed")];
+                                let kk = ivs_and(&kk, ex);
+                                let kk = match cov[j].get(&v) {
+                                    Some(cv) => ivs_sub(&kk, cv),
+                                    None => kk,
+                                };
+                                if kk.is_empty() {
+                                    continue;
+                                }
+                                let cv = cov[j].entry(v).or_default();
+                                *cv = ivs_or(cv, &kk);
+                                let nx = next.entry(v).or_default();
+                                *nx = ivs_or(nx, &kk);
+                            }
+                        }
+                        let mut nx: Vec<(u32, Ivs)> = next.into_iter().collect();
+                        nx.sort_unstable_by_key(|x| x.0);
+                        for (v, kk) in &nx {
+                            rea[j].push((*v, kk.clone(), depth));
+                        }
+                        st += nx.len();
+                        fro[j] = nx;
+                    }
+                    st
+                });
+                drop(parts);
+                states += counts.iter().sum::<usize>();
+                t_lvl += lap(t1);
+                check_rows(states)?;
+                continue;
+            }
             for k in 0..keys.len() {
                 let fr = std::mem::take(&mut frontiers[k]);
                 let mut next: FxMap<u32, Ivs> = FxMap::default();
@@ -512,7 +613,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
         // in chunks of searches on the pool, in search order
         let this: &Self = self;
         let wv_r = &wv;
-        let found: Vec<Found> = par_concat_from(reach.len(), (par_min() / 16).max(1), |rg| {
+        let mut found: Vec<Found> = par_concat_from(reach.len(), (par_min() / 16).max(1), |rg| {
             rg.map(|k| {
                 let mut f = Vec::new();
                 for (v, kk, d) in &reach[k] {
@@ -532,6 +633,28 @@ impl<'s, 'a> Ctx<'s, 'a> {
             })
             .collect()
         });
+        if !local.is_empty() {
+            let mut vs: Vec<(Addr, u32)> = found.iter().flatten().map(|f| (f.1, f.0)).collect();
+            vs.sort_unstable();
+            vs.dedup();
+            let rel = Rel {
+                n: vs.len(),
+                vars: vec![(c.into.clone(), Var::Node { ids: vs.iter().map(|x| x.1).collect(), ver: vs.iter().map(|x| x.0).collect(), depth: None })],
+                cols: Vec::new(),
+            };
+            let mut mask = vec![true; rel.n];
+            for p in local {
+                self.and_mask(p, &rel, &mut mask)?;
+            }
+            let ok: Vec<Addr> = vs.iter().zip(&mask).filter(|(_, &m)| m).map(|(x, _)| x.0).collect();
+            if trace() {
+                eprintln!("match trace:   co-valid expand target predicates: {} of {} versions pass", ok.len(), vs.len());
+            }
+            let ok = &ok;
+            found = par_concat_from(found.len(), (par_min() / 16).max(1), |rg| {
+                rg.map(|k| found[k].iter().filter(|f| ok.binary_search(&f.1).is_ok()).copied().collect()).collect()
+            });
+        }
         // the budget as the row loop meets it: after each input row
         let mut total = 0usize;
         for i in 0..n {
@@ -576,6 +699,9 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// `CoValidJoin`: per left fragment, the overlapping extensions on the
     /// intersection (`left_outer`), then the uncovered remainder.
     pub(super) fn covalid_join(&mut self, left: Rel, right: Rel, j: &CoJoin) -> DResult<Rel> {
+        if let Some(out) = self.covalid_join_ids(&left, &right, j)? {
+            return Ok(out);
+        }
         let lk: Vec<Vec<KeyVal>> = j.on.iter().map(|(l, _)| self.keys_by_name(&left, l)).collect::<DResult<_>>()?;
         let rk: Vec<Vec<KeyVal>> = j.on.iter().map(|(_, r)| self.keys_by_name(&right, r)).collect::<DResult<_>>()?;
         if lk.iter().any(|k| k.contains(&KeyVal::Null)) || rk.iter().any(|k| k.contains(&KeyVal::Null)) {
@@ -630,23 +756,166 @@ impl<'s, 'a> Ctx<'s, 'a> {
         Ok(out)
     }
 
+    /// `CoValidJoin` on one or two identity keys with no null on either
+    /// side (`id_keys`), on the pool: the right rows by packed key (sorted,
+    /// each key's rows in row order), each chunk of left rows matched and
+    /// covered as the row loop does, the chunks' rows concatenated in left
+    /// order, so the rows and their order are the row loop's. `None` for any
+    /// other key, and under `GNOMON_MATCH_COJOIN_IDS=0` (read per call: the row
+    fn covalid_join_ids(&mut self, left: &Rel, right: &Rel, j: &CoJoin) -> DResult<Option<Rel>> {
+        if std::env::var("GNOMON_MATCH_COJOIN_IDS").is_ok_and(|v| v.trim() == "0") {
+            return Ok(None);
+        }
+        let (Some(lu), Some(ru)) = (self.id_keys(left, &j.on, true), self.id_keys(right, &j.on, false)) else {
+            return Ok(None);
+        };
+        let t0 = trace().then(std::time::Instant::now);
+        let mut keyed: Vec<(u64, u32)> = ru.iter().enumerate().map(|(r, &k)| (k, r as u32)).collect();
+        keyed.sort_unstable();
+        let mut at: FxMap<u64, (u32, u32)> = FxMap::default();
+        let mut x = 0;
+        while x < keyed.len() {
+            let mut y = x + 1;
+            while y < keyed.len() && keyed[y].0 == keyed[x].0 {
+                y += 1;
+            }
+            at.insert(keyed[x].0, (x as u32, y as u32));
+            x = y;
+        }
+        let (ls, le) = (self.i64s(left, &j.left_iv.0)?, self.i64s(left, &j.left_iv.1)?);
+        let (rs, re) = (self.i64s(right, &j.right_iv.0)?, self.i64s(right, &j.right_iv.1)?);
+        let outer = j.outer;
+        const NONE: u32 = u32::MAX;
+        let rows: Vec<(u32, u32, i64, i64)> = par_concat(left.n, |range| {
+            let mut out = Vec::new();
+            for i in range {
+                let (Some(s), Some(e)) = (ls[i], le[i]) else { continue };
+                if s >= e {
+                    continue;
+                }
+                let mut cover: Ivs = Vec::new();
+                if let Some(&(a0, b0)) = at.get(&lu[i]) {
+                    for &(_, r) in &keyed[a0 as usize..b0 as usize] {
+                        let r = r as usize;
+                        let (Some(a), Some(b)) = (rs[r], re[r]) else { continue };
+                        let (a, b) = (a.max(s), b.min(e));
+                        if a >= b {
+                            continue;
+                        }
+                        cover.push((a, b));
+                        if outer {
+                            out.push((i as u32, r as u32, a, b));
+                        }
+                    }
+                }
+                for (a, b) in ivs_sub(&[(s, e)], &ivs_norm(cover)) {
+                    out.push((i as u32, NONE, a, b));
+                }
+                if out.len() > MAX_ROWS {
+                    break;
+                }
+            }
+            out
+        });
+        check_rows(rows.len())?;
+        let li: Vec<usize> = rows.iter().map(|x| x.0 as usize).collect();
+        let mut out = left.take(&li);
+        if outer {
+            let ri: Vec<Option<usize>> = rows.iter().map(|x| (x.1 != NONE).then_some(x.1 as usize)).collect();
+            let r = right.take_opt(&ri);
+            out.vars.extend(r.vars);
+            out.cols.extend(r.cols);
+        }
+        out.cols.push((j.out_iv.0.clone(), Col { v: Vals::I64(rows.iter().map(|x| x.2).collect()), null: None }));
+        out.cols.push((j.out_iv.1.clone(), Col { v: Vals::I64(rows.iter().map(|x| x.3).collect()), null: None }));
+        if let Some(t0) = t0 {
+            eprintln!(
+                "match trace:   co-valid join by ids: {} x {} -> {} rows in {:.1} ms",
+                left.n,
+                right.n,
+                out.n,
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        Ok(Some(out))
+    }
+
     /// `Collapse`: the first row of each distinct `by` tuple, each `mins`
     /// target depth its least over the group.
     pub(super) fn collapse(&mut self, input: Rel, by: &[String], mins: &[String]) -> DResult<Rel> {
         let n = input.n;
-        let keys: Vec<Vec<KeyVal>> = by.iter().map(|b| self.keys_by_name(&input, b)).collect::<DResult<_>>()?;
-        let mut first: HashMap<Vec<KeyVal>, usize> = HashMap::new();
-        let mut order: Vec<usize> = Vec::new();
-        let mut group = vec![0usize; n];
-        for i in 0..n {
-            let k: Vec<KeyVal> = keys.iter().map(|c| c[i].clone()).collect();
-            let next = order.len();
-            let g = *first.entry(k).or_insert(next);
-            if g == next {
-                order.push(i);
+        let (order, group) = match self.collapse_words(&input, by)? {
+            // Every key a version id, an integer or an identity: each
+            // row's keys as words, grouped by slices of one array
+            Some((w, words)) => {
+                let t0 = trace().then(std::time::Instant::now);
+                let row = |i: usize| &words[i * w..(i + 1) * w];
+                // each row's first row with its keys: rows sharded by a hash
+                // of their words, each shard's rows in row order
+                let hash: Vec<u64> = par_concat(n, |r| {
+                    r.map(|i| row(i).iter().fold(0x9e37_79b9_7f4a_7c15u64, |h, &x| (h ^ x).wrapping_mul(0x0100_0000_01b3).rotate_left(29)))
+                        .collect()
+                });
+                let shards = if n >= par_min() { MATCH_THREADS.with(|c| c.get()).max(1) * 2 } else { 1 } as u64;
+                let parts: Vec<Vec<(u32, u32)>> = par_concat_from(shards as usize, 1, |r| {
+                    r.map(|s| {
+                        let mut first: FxMap<&[u64], u32> = FxMap::default();
+                        let mut out = Vec::new();
+                        for (i, &h) in hash.iter().enumerate() {
+                            if (h ^ (h >> 32)) % shards == s as u64 {
+                                let f = *first.entry(row(i)).or_insert(i as u32);
+                                out.push((i as u32, f));
+                            }
+                        }
+                        out
+                    })
+                    .collect()
+                });
+                let mut firsts = vec![0u32; n];
+                for part in &parts {
+                    for &(i, f) in part {
+                        firsts[i as usize] = f;
+                    }
+                }
+                let order: Vec<usize> = par_concat(n, |r| r.filter(|&i| firsts[i] as usize == i).collect());
+                let mut rank = vec![0usize; n];
+                for (g, &i) in order.iter().enumerate() {
+                    rank[i] = g;
+                }
+                let group: Vec<usize> = par_concat(n, |r| r.map(|i| rank[firsts[i] as usize]).collect());
+                if let Some(t0) = t0 {
+                    eprintln!(
+                        "match trace:   collapse by words: {} rows -> {} groups in {:.1} ms ({} shards)",
+                        n,
+                        order.len(),
+                        t0.elapsed().as_secs_f64() * 1e3,
+                        shards
+                    );
+                }
+                // every row its own group: the rows as they are, each
+                // depth already its group's least
+                if order.len() == n {
+                    return Ok(input);
+                }
+                (order, group)
             }
-            group[i] = g;
-        }
+            None => {
+                let keys: Vec<Vec<KeyVal>> = by.iter().map(|b| self.keys_by_name(&input, b)).collect::<DResult<_>>()?;
+                let mut first: HashMap<Vec<KeyVal>, usize> = HashMap::new();
+                let mut order: Vec<usize> = Vec::new();
+                let mut group = vec![0usize; n];
+                for i in 0..n {
+                    let k: Vec<KeyVal> = keys.iter().map(|c| c[i].clone()).collect();
+                    let next = order.len();
+                    let g = *first.entry(k).or_insert(next);
+                    if g == next {
+                        order.push(i);
+                    }
+                    group[i] = g;
+                }
+                (order, group)
+            }
+        };
         let mut out = input.take(&order);
         for m in mins {
             let Some(var) = m.strip_suffix(".depth") else { return unsupported("Collapse of a non-depth column") };
@@ -670,6 +939,51 @@ impl<'s, 'a> Ctx<'s, 'a> {
             }
         }
         Ok(out)
+    }
+
+    /// `Collapse`'s keys as two words a key per row (`w` words a row),
+    /// when every key column is a version id, an integer or an identity:
+    /// (value, low part) or (value, 0), a null as (0, 1 << 40), which no
+    /// value takes, so two rows' words are equal exactly when their keys are
+    /// (`KeyVal` equality). `None` for any other column, and under
+    /// `GNOMON_MATCH_COLLAPSE_WORDS=0` (read per call: the keys as `KeyVal`
+    fn collapse_words(&mut self, input: &Rel, by: &[String]) -> DResult<Option<(usize, Vec<u64>)>> {
+        if std::env::var("GNOMON_MATCH_COLLAPSE_WORDS").is_ok_and(|v| v.trim() == "0") || by.is_empty() {
+            return Ok(None);
+        }
+        const NULL: u64 = 1 << 40;
+        let n = input.n;
+        let w = 2 * by.len();
+        let mut cols = Vec::with_capacity(by.len());
+        for b in by {
+            let c = self.eval(&Expr::Col(b.clone()), input)?;
+            if !matches!(c.v, Vals::Vid(_) | Vals::I64(_) | Vals::Uid(_) | Vals::Null(_)) {
+                return Ok(None);
+            }
+            cols.push(c);
+        }
+        let cols = &cols;
+        let words: Vec<u64> = par_concat(n, |r| {
+            let mut out = Vec::with_capacity(r.len() * w);
+            for i in r {
+                for c in cols {
+                    let (a, b) = if c.null.as_ref().is_some_and(|m| m[i]) {
+                        (0, NULL)
+                    } else {
+                        match &c.v {
+                            Vals::Vid(x) => (x[i].0, x[i].1 as u64),
+                            Vals::I64(x) => (x[i] as u64, 0),
+                            Vals::Uid(x) => (x[i] as u64, 0),
+                            _ => (0, NULL),
+                        }
+                    };
+                    out.push(a);
+                    out.push(b);
+                }
+            }
+            out
+        });
+        Ok(Some((w, words)))
     }
 
     /// A union of binding tables with one variable and column list (a

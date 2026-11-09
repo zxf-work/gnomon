@@ -1,0 +1,449 @@
+{
+ "row": "BI10",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "expertId",
+       "expr": {
+        "col": "expertId"
+       }
+      },
+      {
+       "as": "tagName",
+       "expr": {
+        "col": "tagName"
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "messageCount",
+       "fn": "count_distinct",
+       "of": {
+        "col": "messageId"
+       }
+      }
+     ]
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "messageCount"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "col": "tagName"
+      },
+      "dir": "asc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "expertId"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     }
+    ],
+    "limit": 100
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "person": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "p",
+         "labels": [
+          "Person"
+         ]
+        },
+        {
+         "var": "f",
+         "labels": [
+          "Person"
+         ]
+        }
+       ],
+       "steps": [
+        {
+         "from": "p",
+         "to": "f",
+         "rel_type": "KNOWS",
+         "dir": "both"
+        }
+       ]
+      },
+      "return": {
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "p.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "count"
+         }
+        ]
+       },
+       "order_by": [
+        {
+         "expr": {
+          "col": "n"
+         },
+         "dir": "desc"
+        }
+       ],
+       "limit": 1
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {}
+     },
+     "col": "p",
+     "i": 0
+    },
+    "country": {
+     "pick": [
+      "countries",
+      0
+     ]
+    },
+    "tagClass": {
+     "pick": [
+      "tagclasses",
+      0
+     ]
+    },
+    "minPathDistance": 3,
+    "maxPathDistance": 4
+   },
+   "union": [
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "p",
+        "labels": [
+         "Person"
+        ],
+        "uids": [
+         "$person"
+        ]
+       },
+       {
+        "var": "e",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       },
+       {
+        "var": "t",
+        "labels": [
+         "Tag"
+        ]
+       },
+       {
+        "var": "tc",
+        "labels": [
+         "TagClass"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "p",
+        "to": "e",
+        "rel_type": "KNOWS",
+        "dir": "both",
+        "hops": {
+         "min": "$minPathDistance",
+         "max": "$maxPathDistance"
+        }
+       },
+       {
+        "from": "e",
+        "to": "ci",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci",
+        "to": "cn",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "e",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "t",
+        "rel_type": "HAS_TAG",
+        "dir": "out"
+       },
+       {
+        "from": "t",
+        "to": "tc",
+        "rel_type": "HAS_TYPE",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "tc",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$tagClass"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "expertId",
+       "expr": {
+        "col": "e.uid"
+       }
+      },
+      {
+       "as": "tagName",
+       "expr": {
+        "tprop": [
+         "t",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "messageId",
+       "expr": {
+        "col": "m.uid"
+       }
+      }
+     ]
+    },
+    {
+     "pattern": {
+      "nodes": [
+       {
+        "var": "p",
+        "labels": [
+         "Person"
+        ],
+        "uids": [
+         "$person"
+        ]
+       },
+       {
+        "var": "e",
+        "labels": [
+         "Person"
+        ]
+       },
+       {
+        "var": "ci",
+        "labels": [
+         "City"
+        ]
+       },
+       {
+        "var": "cn",
+        "labels": [
+         "Country"
+        ]
+       },
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       },
+       {
+        "var": "t",
+        "labels": [
+         "Tag"
+        ]
+       },
+       {
+        "var": "tc",
+        "labels": [
+         "TagClass"
+        ]
+       },
+       {
+        "var": "t2",
+        "labels": [
+         "Tag"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "p",
+        "to": "e",
+        "rel_type": "KNOWS",
+        "dir": "both",
+        "hops": {
+         "min": "$minPathDistance",
+         "max": "$maxPathDistance"
+        }
+       },
+       {
+        "from": "e",
+        "to": "ci",
+        "rel_type": "IS_LOCATED_IN",
+        "dir": "out"
+       },
+       {
+        "from": "ci",
+        "to": "cn",
+        "rel_type": "IS_PART_OF",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "e",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "t",
+        "rel_type": "HAS_TAG",
+        "dir": "out"
+       },
+       {
+        "from": "t",
+        "to": "tc",
+        "rel_type": "HAS_TYPE",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "t2",
+        "rel_type": "HAS_TAG",
+        "dir": "out"
+       }
+      ],
+      "where": [
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "cn",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$country"
+        }
+       },
+       {
+        "cmp": "=",
+        "l": {
+         "tprop": [
+          "tc",
+          "name"
+         ],
+         "tau": "str"
+        },
+        "r": {
+         "lit": "$tagClass"
+        }
+       }
+      ]
+     },
+     "rows": [
+      {
+       "as": "expertId",
+       "expr": {
+        "col": "e.uid"
+       }
+      },
+      {
+       "as": "tagName",
+       "expr": {
+        "tprop": [
+         "t2",
+         "name"
+        ],
+        "tau": "str"
+       }
+      },
+      {
+       "as": "messageId",
+       "expr": {
+        "col": "m.uid"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

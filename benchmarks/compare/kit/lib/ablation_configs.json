@@ -1,0 +1,142 @@
+{
+ "about": "Ablation configurations: name -> [store variant, switch settings, store of the paired unset window (optional, default u)]. 'default' is the list timed when --arms is not given; 'c4' holds the configurations added for the evaluated engine. Settings are comma-separated KEY=VALUE environment variables; '-' is none.",
+ "configurations": {
+  "aa": [
+   "u",
+   "-"
+  ],
+  "range_visibility_off": [
+   "u",
+   "GNOMON_RANGE_VISIBILITY=0"
+  ],
+  "window_first_off": [
+   "u",
+   "GNOMON_WINDOW_FIRST=0"
+  ],
+  "time_codec_raw": [
+   "raw",
+   "-"
+  ],
+  "time_codec_runs": [
+   "runs",
+   "-"
+  ],
+  "segment_prune_off": [
+   "u",
+   "GNOMON_SEGMENT_PRUNE=0"
+  ],
+  "tcsr_scan": [
+   "u",
+   "GNOMON_TCSR=scan"
+  ],
+  "vidfilter_ignore": [
+   "u",
+   "GNOMON_VIDFILTER=ignore"
+  ],
+  "existence_probe_walk": [
+   "u",
+   "GNOMON_EXISTENCE_PROBE=walk"
+  ],
+  "seed_expansion_off": [
+   "u",
+   "GNOMON_SEED_EXPANSION=0"
+  ],
+  "adj_filtered_scan_off": [
+   "u",
+   "GNOMON_ADJ_FILTERED_SCAN=0"
+  ],
+  "full_store_compaction": [
+   "settled",
+   "-"
+  ],
+  "agg_range_count_off": [
+   "u",
+   "GNOMON_AGG_RANGE_COUNT=0"
+  ],
+  "reach_kernel_python": [
+   "u",
+   "GNOMON_REACH_KERNEL=python"
+  ],
+  "diff_kernel_python": [
+   "u",
+   "GNOMON_DIFF_KERNEL=python"
+  ],
+  "ingest_raw_off": [
+   "pyrows",
+   "-"
+  ],
+  "exec_python": [
+   "u",
+   "GNOMON_AGG_RANGE_COUNT=0,GNOMON_REACH_KERNEL=python,GNOMON_DIFF_KERNEL=python"
+  ],
+  "duckdb_storage": [
+   "duckdb",
+   "-"
+  ],
+  "staircase_off": [
+   "u",
+   "GNOMON_NO_STAIRCASE=1"
+  ],
+  "staircase_off_settled": [
+   "settled",
+   "GNOMON_NO_STAIRCASE=1",
+   "settled"
+  ]
+ },
+ "default": [
+  "aa",
+  "range_visibility_off",
+  "window_first_off",
+  "time_codec_raw",
+  "time_codec_runs",
+  "segment_prune_off",
+  "tcsr_scan",
+  "vidfilter_ignore",
+  "existence_probe_walk",
+  "seed_expansion_off",
+  "adj_filtered_scan_off",
+  "full_store_compaction",
+  "agg_range_count_off",
+  "reach_kernel_python",
+  "diff_kernel_python",
+  "ingest_raw_off",
+  "exec_python",
+  "duckdb_storage",
+  "staircase_off",
+  "staircase_off_settled"
+ ],
+ "c4": {
+  "adjacency_seed_off": [
+   "u",
+   "GNOMON_TCSR=scan,GNOMON_SEED_EXPANSION=0"
+  ],
+  "kernels_off": [
+   "u",
+   "GNOMON_AGG_RANGE_COUNT=0,GNOMON_REACH_KERNEL=python,GNOMON_DIFF_KERNEL=python,GNOMON_PATHS_KERNEL=python,GNOMON_NBR_EVOLUTION_KERNEL=0"
+  ],
+  "window_bound_off": [
+   "u",
+   "GNOMON_WINDOW_FIRST=0,GNOMON_NO_STAIRCASE=1"
+  ],
+  "snapshot_page_off": [
+   "u",
+   "GNOMON_SNAPSHOT_PAGE=0,GNOMON_SNAPSHOT_ONECALL=0"
+  ],
+  "paths_kernel_python": [
+   "u",
+   "GNOMON_PATHS_KERNEL=python"
+  ],
+  "tt_e_column_off": [
+   "u",
+   "GNOMON_TT_E_COLUMN=0"
+  ]
+ },
+ "variants": {
+  "u": "replay of the density log, size-tiered (all switches unset)",
+  "settled": "copy of u, then `gnomon store settle` and `gnomon store gc --keep 2`",
+  "raw": "replay with GNOMON_TIME_CODEC=raw",
+  "runs": "replay with GNOMON_TIME_CODEC=runs",
+  "pyrows": "replay with GNOMON_INGEST_RAW=0 (every op staged by the Python row build)",
+  "duckdb": "the kit system duckdb: the density log replayed into the DuckDB backend"
+ }
+}

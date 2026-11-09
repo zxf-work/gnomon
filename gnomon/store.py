@@ -16,15 +16,12 @@ from typing import Any, Iterable, Iterator
 
 from gnomon.core.clock import HybridLogicalClock
 from gnomon.core.errors import StateError, GnomonError
-from gnomon.core.model import OPEN_END, EntityRef, Props, digest
+from gnomon.core.model import OPEN_END, EntityRef, Props
 from gnomon.storage.base import StorageAdapter, make_op
 from gnomon.storage.crashpoint import crash_point
 from gnomon.storage.eventlog import EventLog, extend_chain
 
 INGEST_CHUNK = 50_000
-
-#: `Store.store_identity` of a store whose event log holds no batch yet.
-UNANCHORED = "unanchored"
 
 #: The single-writer rule used to be a convention nowhere enforced
 #: — a second writer process raced `_recover`/`_write` silently, the same
@@ -265,19 +262,18 @@ class Store:
 
     @property
     def store_identity(self) -> str:
-        """A stable identity for this store's history.
-
+        """
         `digest(header record ‖ first batch record)`: stable across every replay
         of one history, distinct between stores, and available without reading
         the backend. A log with no batches yet has no identity to state and
         takes the `"unanchored"` sentinel until its first write, so the value is
         re-derived while it is still unanchored.
         """
+        from gnomon.plan.depscope import UNANCHORED, store_identity  # local: import cost
+
         if self._store_identity in (None, UNANCHORED):
-            first = self.eventlog.first_batch()
-            self._store_identity = (
-                UNANCHORED if first is None
-                else digest([self.eventlog.header(), first]))
+            self._store_identity = store_identity(
+                self.eventlog.header(), self.eventlog.first_batch())
         return self._store_identity
 
     def _recover(self) -> None:
@@ -654,6 +650,58 @@ class Store:
         self.frontier_verified = True
         return tt
 
+    # --- freshness ----------------------- #
+
+    def check_scope(self, scope: Any, *, tt_now: int = OPEN_END,
+                    chain_cache: Any = None) -> Any:
+        """*"Could anything written since have changed this?"* — asked of a
+        stored `DependencyScope`, answered without recomputing anything.
+
+        Thin by design: it supplies this store's event log and forwards. **No
+        new state, no persistence, and no envelope key** — a verdict is computed
+        on demand and stored nowhere, which is what keeps every comparator's
+        shape and every frozen digest untouched by this milestone.
+
+        `tt_now` defaults to `OPEN_END`, i.e. scan the whole suffix. The
+        rounding direction is the *opposite* of `tt_q`'s: the log is
+        fsynced before apply, so it leads the frontier, and passing this
+        store's frontier here would exclude batches every recomputing reader
+        can already see. A caller passing a smaller `tt_now` is asking an
+        "as of" question and owns it.
+
+        Accepts a `DependencyScope` or the JSON object off an envelope's
+        `dependency` key.
+        """
+        from gnomon.plan.check import check
+
+        return check(scope, self.eventlog, tt_now, chain_cache=chain_cache)
+
+    def check_result(self, envelope: dict[str, Any], *, tt_now: int = OPEN_END,
+                     chain_cache: Any = None) -> Any:
+        """The same question asked of a result envelope, which carries its own
+        scope on `dependency`.
+
+        key, or by a path that bypassed `envelope_metadata`. There is no basis
+        to compare against, so it refuses — never `FRESH`.
+        """
+        from gnomon.plan.check import UNDECIDABLE
+
+        scope = envelope.get("dependency")
+        if not isinstance(scope, dict):
+            return UNDECIDABLE("no-tt_q")
+        return self.check_scope(scope, tt_now=tt_now, chain_cache=chain_cache)
+
+    def check_trace(self, record: dict[str, Any], *, tt_now: int = OPEN_END,
+                    chain_cache: Any = None) -> Any:
+        """A saved plan/trace record — where the interesting answer is.
+
+        Each step is checked against **its own scope and its own `tt_q`** and
+        the results fold, so the verdict carries per-step attribution
+        """
+        from gnomon.plan.check import check_trace
+
+        return check_trace(record, self.eventlog, tt_now, chain_cache=chain_cache)
+
     # --- introspection ------------------------------------------------------ #
 
     def digest(self) -> str:
@@ -685,6 +733,8 @@ def detect_backend(path: Path) -> str:
     """
     if (path / "store.duckdb").exists():
         return "duckdb"
+    if (path / "store.kuzu").exists():
+        return "kuzu"
     return DEFAULT_BACKEND
 
 
@@ -730,12 +780,15 @@ def _make_adapter(backend: str, path: Path, read_only: bool = False) -> StorageA
             # write refusal still applies to a read-only in-memory handle.
             return DuckDBAdapter(":memory:")
         return DuckDBAdapter(path / "store.duckdb", read_only=read_only)
+    if backend == "kuzu":
+        return _optional_backend("kuzu")(path / "store.kuzu", read_only=read_only)
     raise ValueError(f"unknown backend: {backend}")
 
 
 #: Backends that ship as optional extras, not runtime dependencies.
 _OPTIONAL_BACKENDS = {
     "duckdb": ("gnomon.storage.duckdb_adapter", "DuckDBAdapter"),
+    "kuzu": ("gnomon.storage.kuzu_adapter", "KuzuAdapter"),
 }
 
 

@@ -45,7 +45,13 @@ pub struct Dictionary {
     path: PathBuf,
     arena: String,
     spans: Vec<Span>,
-    index: HashMap<u64, Vec<u32>>,
+    /// uid hash -> ids (ascending), in [`INDEX_SHARDS`] maps by the hash's
+    /// top bits, so a large index is built on several threads. Built by the
+    /// sequential load; the parallel load (`GNOMON_STORE_WARM_OPEN`,
+    /// `load_fast`) leaves it to the first lookup or to
+    /// [`Self::prepare_index`], which a warmed reader runs beside its segment
+    /// pass. The same contents either way.
+    index: std::sync::OnceLock<Vec<HashMap<u64, Vec<u32>>>>,
     /// Records durably published by the current manifest generation.
     committed_records: u32,
     /// Byte length of the file as of the current manifest generation.
@@ -64,13 +70,15 @@ impl Dictionary {
     pub fn heap_bytes(&self) -> u64 {
         let arena = self.arena.capacity();
         let spans = self.spans.capacity() * std::mem::size_of::<Span>();
-        let buckets = self.index.capacity()
-            * (std::mem::size_of::<u64>() + std::mem::size_of::<Vec<u32>>());
-        let dense: usize = self
-            .index
-            .values()
-            .map(|v| v.capacity() * std::mem::size_of::<u32>())
-            .sum();
+        // an index not built yet holds nothing
+        let (buckets, dense) = self.index.get().map_or((0, 0), |shards| {
+            shards.iter().fold((0, 0), |(b, d), index| {
+                (
+                    b + index.capacity() * (std::mem::size_of::<u64>() + std::mem::size_of::<Vec<u32>>()),
+                    d + index.values().map(|v| v.capacity() * std::mem::size_of::<u32>()).sum::<usize>(),
+                )
+            })
+        });
         (arena + spans + buckets + dense + self.path.as_os_str().len()) as u64
     }
 
@@ -85,7 +93,12 @@ impl Dictionary {
     /// over them. **Opening a store never mutates it**, which is what lets a
     /// reader process open one while the writer is committing.
     pub fn open(path: impl Into<PathBuf>, visible_records: u32, visible_bytes: u64) -> Result<Self> {
-        let path = path.into();
+        let fast = crate::warm::warm_open_on() && visible_records as usize >= fast_load_min();
+        Self::open_with_load(path.into(), visible_records, visible_bytes, fast)
+    }
+
+    /// [`Self::open`] with the load chosen: `fast` is the parallel load.
+    fn open_with_load(path: PathBuf, visible_records: u32, visible_bytes: u64, fast: bool) -> Result<Self> {
         let mut buf = Vec::new();
         if path.exists() {
             File::open(&path)
@@ -109,11 +122,15 @@ impl Dictionary {
             path,
             arena: String::new(),
             spans: Vec::new(),
-            index: HashMap::new(),
+            index: std::sync::OnceLock::new(),
             committed_records: 0,
             committed_bytes: visible_bytes,
         };
-        d.load(&buf)?;
+        if fast {
+            d.load_fast(&buf, visible_records)?;
+        } else {
+            d.load(&buf)?;
+        }
         if d.spans.len() as u32 != visible_records {
             return Err(EngineError::corrupt(format!(
                 "dictionary holds {} records, manifest claims {visible_records}",
@@ -149,7 +166,123 @@ impl Dictionary {
         Ok(())
     }
 
+    /// The parallel load (`GNOMON_STORE_WARM_OPEN`): the record framing in
+    /// one sequential pass, the arena as one copy, UTF-8 checked per field
+    /// on several threads, and the uid index left to [`Self::prepare_index`]
+    /// or the first lookup. The same arena, spans and index as [`Self::load`];
+    /// a malformed file is handed to `load`, so the error is the one it
+    /// reports.
+    fn load_fast(&mut self, buf: &[u8], records: u32) -> Result<()> {
+        let n = records as usize;
+        let mut spans: Vec<Span> = Vec::with_capacity(n);
+        let mut arena: Vec<u8> = Vec::with_capacity(buf.len().saturating_sub(8 * n));
+        let mut pos = 0usize;
+        let len_at = |p: usize| -> Option<usize> {
+            buf.get(p..p + 4).map(|s| u32::from_le_bytes(s.try_into().expect("4 bytes")) as usize)
+        };
+        while pos < buf.len() {
+            let Some(ul) = len_at(pos) else { return self.load(buf) };
+            let Some(u) = buf.get(pos + 4..pos + 4 + ul) else { return self.load(buf) };
+            let lp = pos + 4 + ul;
+            let Some(ll) = len_at(lp) else { return self.load(buf) };
+            let Some(l) = buf.get(lp + 4..lp + 4 + ll) else { return self.load(buf) };
+            let uid_start = arena.len() as u32;
+            arena.extend_from_slice(u);
+            let label_start = arena.len() as u32;
+            arena.extend_from_slice(l);
+            spans.push(Span { uid_start, uid_len: ul as u32, label_start, label_len: ll as u32 });
+            pos = lp + 4 + ll;
+        }
+        // every field is UTF-8 on its own (what `load` checks per field),
+        // so the arena, their concatenation, is too
+        let ok = std::sync::atomic::AtomicBool::new(true);
+        par_chunks(spans.len(), |r| {
+            for sp in &spans[r] {
+                let u = &arena[sp.uid_start as usize..(sp.uid_start + sp.uid_len) as usize];
+                let l = &arena[sp.label_start as usize..(sp.label_start + sp.label_len) as usize];
+                if std::str::from_utf8(u).is_err() || std::str::from_utf8(l).is_err() {
+                    ok.store(false, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+            }
+        });
+        if !ok.load(std::sync::atomic::Ordering::Relaxed) {
+            return self.load(buf);
+        }
+        let Ok(arena) = String::from_utf8(arena) else { return self.load(buf) };
+        self.arena = arena;
+        self.spans = spans;
+        self.index = std::sync::OnceLock::new();
+        Ok(())
+    }
+
+    /// Build the uid index now if it is not built (the uids hashed on
+    /// several threads, inserted in id order: the map `push` builds).
+    pub fn prepare_index(&self) {
+        self.index();
+    }
+
+    fn index(&self) -> &Vec<HashMap<u64, Vec<u32>>> {
+        self.index.get_or_init(|| {
+            let n = self.spans.len();
+            if n < fast_load_min() {
+                let mut shards: Vec<HashMap<u64, Vec<u32>>> = vec![HashMap::new(); INDEX_SHARDS];
+                for id in 0..n as u32 {
+                    let h = hash_uid(self.uid(id).expect("id is in range"));
+                    shards[shard_of(h)].entry(h).or_default().push(id);
+                }
+                return shards;
+            }
+            let width = n.div_ceil(par_threads()).max(1);
+            // per contiguous id range, its (hash, id) pairs by shard, ids
+            // ascending; then each shard filled from the ranges in order,
+            // so every hash's ids stay ascending (what `push` produces)
+            let parts: Vec<Vec<Vec<(u64, u32)>>> = std::thread::scope(|sc| {
+                let hs: Vec<_> = (0..n)
+                    .step_by(width)
+                    .map(|start| {
+                        sc.spawn(move || {
+                            let mut by: Vec<Vec<(u64, u32)>> = vec![Vec::new(); INDEX_SHARDS];
+                            for id in start..(start + width).min(n) {
+                                let h = hash_uid(self.uid(id as u32).expect("id is in range"));
+                                by[shard_of(h)].push((h, id as u32));
+                            }
+                            by
+                        })
+                    })
+                    .collect();
+                hs.into_iter().map(|h| h.join().expect("dictionary index worker")).collect()
+            });
+            let parts = &parts;
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = (0..INDEX_SHARDS)
+                    .map(|k| {
+                        sc.spawn(move || {
+                            let len = parts.iter().map(|p| p[k].len()).sum();
+                            let mut index: HashMap<u64, Vec<u32>> = HashMap::with_capacity(len);
+                            for p in parts {
+                                for &(h, id) in &p[k] {
+                                    index.entry(h).or_default().push(id);
+                                }
+                            }
+                            index
+                        })
+                    })
+                    .collect();
+                hs.into_iter().map(|h| h.join().expect("dictionary index worker")).collect()
+            })
+        })
+    }
+
+    fn index_mut(&mut self) -> &mut Vec<HashMap<u64, Vec<u32>>> {
+        self.index();
+        self.index.get_mut().expect("built above")
+    }
+
     fn push(&mut self, uid: &str, label: &str) -> u32 {
+        // the index of the records already here first, so this one is
+        // inserted exactly once
+        self.index();
         let id = self.spans.len() as u32;
         let uid_start = self.arena.len() as u32;
         self.arena.push_str(uid);
@@ -161,7 +294,8 @@ impl Dictionary {
             label_start,
             label_len: label.len() as u32,
         });
-        self.index.entry(hash_uid(uid)).or_default().push(id);
+        let h = hash_uid(uid);
+        self.index.get_mut().expect("built above")[shard_of(h)].entry(h).or_default().push(id);
         id
     }
 
@@ -178,8 +312,9 @@ impl Dictionary {
     /// Hash probe, then full-string verify — a 64-bit collision must never
     /// be able to return the wrong entity.
     pub fn dense_id(&self, uid: &str) -> Option<u32> {
-        self.index
-            .get(&hash_uid(uid))?
+        let h = hash_uid(uid);
+        self.index()[shard_of(h)]
+            .get(&h)?
             .iter()
             .copied()
             .find(|&id| self.uid(id) == Some(uid))
@@ -279,10 +414,12 @@ impl Dictionary {
         }
         for id in keep..self.len() {
             let uid = self.uid(id).expect("staged id is in range").to_string();
-            if let Some(bucket) = self.index.get_mut(&hash_uid(&uid)) {
+            let h = hash_uid(&uid);
+            let index = &mut self.index_mut()[shard_of(h)];
+            if let Some(bucket) = index.get_mut(&h) {
                 bucket.retain(|&i| i < keep);
                 if bucket.is_empty() {
-                    self.index.remove(&hash_uid(&uid));
+                    index.remove(&h);
                 }
             }
         }
@@ -298,6 +435,38 @@ impl Dictionary {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// The parallel load serves dictionaries of at least this many records
+/// (`GNOMON_DICT_FAST_MIN`, default 65,536); smaller ones load sequentially,
+/// where threads cost more than they save.
+fn fast_load_min() -> usize {
+    std::env::var("GNOMON_DICT_FAST_MIN")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(1 << 16)
+}
+
+/// The uid index's shard count, and a hash's shard (its top bits).
+const INDEX_SHARDS: usize = 64;
+
+fn shard_of(h: u64) -> usize {
+    (h >> 58) as usize
+}
+
+fn par_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 64)
+}
+
+/// `f` over `0..n` in contiguous ranges, one per thread.
+fn par_chunks(n: usize, f: impl Fn(std::ops::Range<usize>) + Sync) {
+    let width = n.div_ceil(par_threads()).max(1);
+    std::thread::scope(|sc| {
+        let f = &f;
+        for start in (0..n).step_by(width) {
+            sc.spawn(move || f(start..(start + width).min(n)));
+        }
+    });
 }
 
 fn decode(buf: &[u8], pos: usize, len: usize, rec_start: usize) -> Result<&str> {
@@ -384,6 +553,94 @@ mod tests {
         assert_eq!(re.len(), 2);
         assert_eq!(re.dense_id("kept"), Some(0));
         assert_eq!(re.dense_id("n2"), Some(1));
+    }
+
+    /// committed; returns `(path, records, bytes)`.
+    fn written(name: &str, n: u32) -> (PathBuf, u32, u64) {
+        let path = tmp(name);
+        let mut d = Dictionary::open_with_load(path.clone(), 0, 0, false).unwrap();
+        for i in 0..n {
+            let uid = match i % 5 {
+                0 => format!("café-{i}"),
+                1 => format!("{}-{i}", "x".repeat((i % 97) as usize)),
+                _ => format!("n{i}"),
+            };
+            d.ensure(&uid, ["Person", "Post", "中文"][(i % 3) as usize]).unwrap();
+        }
+        let (r, b) = d.commit_to_disk().unwrap();
+        (path, r, b)
+    }
+
+    #[test]
+    fn the_parallel_load_builds_what_the_sequential_one_does() {
+        // past the index's parallel threshold, so both halves run threaded
+        let (path, r, b) = written("fastload", (1 << 16) + 4321);
+        let seq = Dictionary::open_with_load(path.clone(), r, b, false).unwrap();
+        let fast = Dictionary::open_with_load(path.clone(), r, b, true).unwrap();
+        assert!(fast.index.get().is_none(), "the parallel load leaves the index to first use");
+        assert_eq!(seq.len(), fast.len());
+        assert_eq!(seq.arena, fast.arena);
+        for id in 0..seq.len() {
+            assert_eq!(seq.uid(id), fast.uid(id));
+            assert_eq!(seq.label(id), fast.label(id));
+        }
+        fast.prepare_index();
+        let (a, z) = (seq.index.get().unwrap(), fast.index.get().unwrap());
+        assert_eq!(a.len(), INDEX_SHARDS);
+        for k in 0..INDEX_SHARDS {
+            assert_eq!(a[k], z[k], "shard {k}");
+        }
+        for id in (0..seq.len()).step_by(7) {
+            let uid = seq.uid(id).unwrap();
+            assert_eq!(fast.dense_id(uid), Some(id));
+        }
+        assert_eq!(fast.dense_id("absent"), None);
+        assert_eq!(seq.committed_records(), fast.committed_records());
+        assert_eq!(seq.committed_bytes(), fast.committed_bytes());
+    }
+
+    #[test]
+    fn a_parallel_load_then_writes_and_rolls_back_as_before() {
+        let (path, r, b) = written("fastwrite", 3000);
+        // the index unbuilt until `ensure` needs it: an existing uid keeps
+        // its id, a new one takes the next ordinal, a rollback forgets it
+        let mut d = Dictionary::open_with_load(path.clone(), r, b, true).unwrap();
+        assert_eq!(d.ensure("n2", "Other").unwrap(), 2);
+        assert_eq!(d.ensure("brand-new", "Node").unwrap(), r);
+        d.discard_staged();
+        assert_eq!(d.dense_id("brand-new"), None);
+        assert_eq!(d.ensure("later", "Node").unwrap(), r);
+        let (r2, b2) = d.commit_to_disk().unwrap();
+        let re = Dictionary::open_with_load(path, r2, b2, true).unwrap();
+        assert_eq!(re.dense_id("later"), Some(r));
+        assert_eq!(re.dense_id("n2"), Some(2));
+    }
+
+    #[test]
+    fn a_malformed_file_fails_the_parallel_load_as_the_sequential_one() {
+        let (path, r, b) = written("fastbad", 500);
+        let mut bytes = std::fs::read(&path).unwrap();
+        // an invalid UTF-8 byte inside the third record's uid
+        let mut pos = 0usize;
+        for _ in 0..2 {
+            let ul = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+            let ll = u32::from_le_bytes(bytes[pos + 4 + ul..pos + 8 + ul].try_into().unwrap()) as usize;
+            pos += 8 + ul + ll;
+        }
+        bytes[pos + 4] = 0xff;
+        std::fs::write(&path, &bytes).unwrap();
+        let msg = |fast| match Dictionary::open_with_load(path.clone(), r, b, fast) {
+            Ok(_) => panic!("a malformed dictionary must not open"),
+            Err(e) => (e.category, e.to_string()),
+        };
+        assert_eq!(msg(false), msg(true));
+        // and a truncated one
+        std::fs::write(&path, &bytes[..bytes.len() - 3]).unwrap();
+        let msg = |fast| match Dictionary::open_with_load(path.clone(), r, b - 3, fast) {
+            Ok(_) => panic!("a truncated dictionary must not open"),
+            Err(e) => (e.category, e.to_string()),
+        };
+        assert_eq!(msg(false), msg(true));
     }
 
     #[test]

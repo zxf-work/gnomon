@@ -32,7 +32,7 @@
 //!
 //! # Cost
 //!
-//! One planned scan of the window's believed rows — the planner's ranges
+//! One planned scan of the window's believed rows — the match plan's ranges
 //! ([`crate::scan::ScanSet::plan_believed`]), never a selection vector — into
 //! a by-source CSR, then a heap search that touches only the reached part of
 //! it, then a selection of the requested page by `(arrival, uid)` and a sort

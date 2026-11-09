@@ -1,0 +1,879 @@
+"""Concurrency evaluation: mixed writer+readers, commit cost, residency.
+
+: N readers over a *quiescent* store.
+This measures the three things that were missing.
+
+* **mixed** — what a live writer costs concurrent readers, and what
+  concurrent readers cost the writer. Reported as *distributions*: reader
+  per-query p50/p90/p99 and writer commit p50/p90/p99, over several trials,
+  because concurrency is the noisiest thing this project measures and a
+  single median from a single trial would be a story rather than a result.
+  Aggregate throughput and per-query latency are reported side by side and
+  never substituted for one another.
+
+* **commitcost** — where a singleton commit's milliseconds actually go, by
+  commit naming every segment". Those are different fixes. Measure first.
+  Every rep's seed store must be built by the same engine that is being
+  had silently written a format-2 manifest chain (byte-identical in size to
+  the format-2 control) under a format-3 binary, because
+  `manifest.rs::digest()` picks the digest rule from the manifest's own
+  `format` field rather than from the binary that opened it
+  (`crates/gnomon-core/src/manifest.rs:615-636`) — a format-2 chain
+  keeps paying the O(segments) `legacy_body_sha` fallback no matter which
+  engine is measuring it. `cmd_commitcost` now reads the fresh store's own
+  `chain_format` (`NativeAdapter.manifest_format()`) right after `gnomon.open`
+  and refuses to run a rep whose chain format is older than the loaded
+  engine's `MANIFEST_FORMAT_VERSION`, unless `--allow-legacy-chain` is
+  passed explicitly.
+
+* **groupcommit** — what coalescing queued single writes into one durable
+  generation buys, on the write patterns that exist.
+
+  costs a mixed read workload, against what dropping it costs to rebuild.
+
+one process are not independent), and readers open `read_only=True` because
+a read-write handle performs crash recovery and is therefore a second
+writer.
+
+    uv run python scripts/eval_concurrency.py mixed --scale 1000000 \
+        --readers 1,2,4,8 --trials 3 --json out.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import eval_harness as H  # noqa: E402
+import eval_resources as R  # noqa: E402
+
+#: lookup, a traversal that builds the TCSR, and two full-window scans. Same
+#: queries, same dataset, so the readers-only table is the baseline this
+#: compares against rather than a differently-shaped neighbour.
+READER_MIX = R.READER_MIX
+
+#: The path query the residency decision turns on, and the scan it taxes.
+PATH_QUERY = "paths.k"
+SCAN_QUERY = "series.count"
+
+
+def _tcsr_backend() -> str:
+    """Which traversal index this process will actually use.
+
+    Not `os.environ.get("GNOMON_TCSR", "python")`: since W12 an unset variable
+    means the Rust per-segment index, so reading the raw environment would
+    stamp every default-configuration receipt with the wrong arm. The adapter
+    owns the resolution; ask it.
+    """
+    try:
+        from gnomon.storage.native.adapter import tcsr_backend
+    except Exception:
+        return "unavailable"
+    return tcsr_backend()
+
+
+def pctl(xs: list[float], p: float) -> float:
+    if not xs:
+        return float("nan")
+    s = sorted(xs)
+    return s[min(len(s) - 1, max(0, int(round(p * (len(s) - 1)))))]
+
+
+def dist(xs: list[float]) -> dict[str, Any]:
+    """A distribution, never a single median. Concurrency measurements are
+    the noisiest thing here; one number would hide the shape that matters."""
+    if not xs:
+        return {"n": 0}
+    return {"n": len(xs),
+            "p50": round(statistics.median(xs), 3),
+            "p90": round(pctl(xs, 0.90), 3),
+            "p99": round(pctl(xs, 0.99), 3),
+            "min": round(min(xs), 3), "max": round(max(xs), 3)}
+
+
+def merge_dists(runs: list[list[float]]) -> dict[str, Any]:
+    """Per-trial p50s kept separately, plus the pooled distribution: a
+    difference smaller than the spread across trials is a tie, not a win."""
+    per_trial = [round(statistics.median(r), 3) for r in runs if r]
+    pooled = [x for r in runs for x in r]
+    return {"trials": len(per_trial), "trial_p50s": per_trial,
+            "pooled": dist(pooled)}
+
+
+# --------------------------------------------------------------------------- #
+# child processes                                                             #
+# --------------------------------------------------------------------------- #
+
+
+def _spawn(mode: str, cfg: dict[str, Any]) -> subprocess.Popen:
+    p = subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "_child", mode],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=dict(os.environ))
+    assert p.stdin is not None
+    p.stdin.write(json.dumps(cfg))
+    p.stdin.close()
+    p.stdin = None
+    return p
+
+
+def _collect(p: subprocess.Popen, timeout_s: float) -> dict[str, Any]:
+    try:
+        out, err = p.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        return {"failed": "timeout"}
+    if p.returncode != 0:
+        return {"failed": f"rc={p.returncode}", "stderr": err[-800:]}
+    try:
+        return json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"failed": "unparseable", "stdout": out[-800:], "stderr": err[-800:]}
+
+
+def child_reader(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Loop the read mix inside a barrier-aligned wall-clock window."""
+    import gnomon
+    from gnomon.temporal.algebra import call_operator, ensure_all_registered
+
+    ensure_all_registered()
+    store = gnomon.open(Path(cfg["store"]), backend="native", read_only=True)
+    a = store.adapter
+    mix = cfg["mix"]
+
+    for q in mix:                       # one warm pass, per process
+        try:
+            call_operator(a, q["op"], dict(q["args"]))
+        except Exception:               # noqa: BLE001 — a refusal is data
+            pass
+    while time.time() < cfg["start_at"]:
+        time.sleep(0.005)
+
+    timings: dict[str, list[float]] = {q["id"]: [] for q in mix}
+    errors: dict[str, str] = {}
+    t_begin = time.perf_counter()
+    deadline = t_begin + cfg["duration_s"]
+    done = 0
+    while time.perf_counter() < deadline:
+        for q in mix:
+            try:
+                t = time.perf_counter()
+                call_operator(a, q["op"], dict(q["args"]))
+                timings[q["id"]].append((time.perf_counter() - t) * 1e3)
+                done += 1
+            except Exception as e:      # noqa: BLE001
+                errors[q["id"]] = f"{type(e).__name__}: {e}"[:160]
+    wall = time.perf_counter() - t_begin
+    store.close()
+    return {"role": "reader", "generation": a.generation,
+            "wall_s": round(wall, 3), "queries_done": done,
+            "qps": round(done / wall, 3),
+            "per_query": {k: dist(v) for k, v in timings.items()},
+            "raw": {k: [round(x, 3) for x in v[:4000]] for k, v in timings.items()},
+            "errors": errors}
+
+
+def child_writer(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Commit batches for a wall-clock window, timing every commit."""
+    import gnomon
+
+    store = gnomon.open(Path(cfg["store"]), backend="native")
+    rows = int(cfg["batch_rows"])
+    base = int(cfg["vt_base"])
+    while time.time() < cfg["start_at"]:
+        time.sleep(0.005)
+
+    lat: list[float] = []
+    phases: list[dict[str, int]] = []
+    t_begin = time.perf_counter()
+    deadline = t_begin + cfg["duration_s"]
+    n = 0
+    while time.perf_counter() < deadline:
+        events = [{"src": f"cw{n + j}", "dst": f"cx{n + j}", "rel_type": "W",
+                   "vt_s": base + n + j} for j in range(rows)]
+        t = time.perf_counter()
+        store.ingest_events(events)
+        lat.append((time.perf_counter() - t) * 1e3)
+        ph = store.adapter._store.last_commit_phases()
+        if ph is not None:
+            phases.append({k: int(v) for k, v in ph.items()})
+        n += rows
+    wall = time.perf_counter() - t_begin
+    gen = store.adapter.generation
+    store.close()
+    return {"role": "writer", "commits": len(lat), "rows_written": n,
+            "wall_s": round(wall, 3), "generation": gen,
+            "commit_ms": dist(lat), "raw": [round(x, 3) for x in lat[:4000]],
+            "commits_per_s": round(len(lat) / wall, 3),
+            "phase_p50_us": {k: int(statistics.median([p[k] for p in phases]))
+                             for k in phases[0]} if phases else None}
+
+
+# --------------------------------------------------------------------------- #
+# mode: mixed (writer + N readers)                                            #
+# --------------------------------------------------------------------------- #
+
+
+@contextlib.contextmanager
+def _pristine(store: Path):
+    """A private copy of `store`, removed afterwards."""
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="gnomon-mixed-"))
+    live = tmp / store.name
+    shutil.copytree(store, live)
+    try:
+        yield live
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cmd_mixed(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    if args.log:
+        # arguments come from the log's own dataset facts (extcmp.dataset: its side file), the same registry templates
+        if not args.store:
+            raise SystemExit("--log needs --store")
+        import extcmp as X
+        data = X.dataset(Path(args.log))
+        store = Path(args.store)
+    else:
+        data, d = R.ensure_dataset(Path(args.workdir), args.scale)
+        store = Path(args.store) if args.store else R.ensure_store(d, "native", data.log)
+    mix = R.queries_for(data, READER_MIX)
+    counts = [int(x) for x in args.readers.split(",")]
+    duration = args.duration
+    lead = args.lead
+
+    records: list[dict[str, Any]] = []
+    for n in counts:
+        for with_writer in (False, True):
+            reader_runs: dict[str, list[list[float]]] = {q["id"]: [] for q in mix}
+            commit_runs: list[list[float]] = []
+            trial_rows: list[dict[str, Any]] = []
+            for trial in range(args.trials):
+                # Every trial gets its own copy. The writer grows the store by
+                # thousands of generations, so a shared one would make the
+                # later conditions measure a different store than the earlier
+                # every other harness replays from.
+                with _pristine(store) as live:
+                    start_at = time.time() + lead
+                    rcfg = {"store": str(live), "start_at": start_at,
+                            "duration_s": duration, "mix": mix}
+                    wcfg = {"store": str(live), "start_at": start_at,
+                            "duration_s": duration,
+                            "batch_rows": args.batch_rows,
+                            "vt_base": 10_000_000 + trial * 1_000_000}
+                    procs = [_spawn("reader", rcfg) for _ in range(n)]
+                    wproc = _spawn("writer", wcfg) if with_writer else None
+                    readers = [_collect(p, duration + lead + 900) for p in procs]
+                    writer = (_collect(wproc, duration + lead + 900)
+                              if wproc else None)
+
+                ok = [r for r in readers if not r.get("failed")]
+                if len(ok) != n or (wproc and writer.get("failed")):
+                    trial_rows.append({"trial": trial, "failed": True,
+                                       "readers": readers, "writer": writer})
+                    continue
+                for q in mix:
+                    pooled = [x for r in ok for x in r["raw"].get(q["id"], [])]
+                    reader_runs[q["id"]].append(pooled)
+                if writer:
+                    commit_runs.append(writer["raw"])
+                trial_rows.append({
+                    "trial": trial,
+                    "aggregate_qps": round(sum(r["qps"] for r in ok), 2),
+                    "reader_generations": sorted({r["generation"] for r in ok}),
+                    "writer": None if not writer else {
+                        "commits": writer["commits"],
+                        "commit_ms": writer["commit_ms"],
+                        "commits_per_s": writer["commits_per_s"],
+                        "phase_p50_us": writer["phase_p50_us"]}})
+
+            good = [t for t in trial_rows if not t.get("failed")]
+            records.append({
+                "readers": n, "writer": with_writer,
+                "aggregate_qps": [t["aggregate_qps"] for t in good],
+                "per_query_ms": {q["id"]: merge_dists(reader_runs[q["id"]])
+                                 for q in mix},
+                "commit_ms": merge_dists(commit_runs) if commit_runs else None,
+                "trials": trial_rows})
+            label = "writer" if with_writer else "idle  "
+            qps = [t["aggregate_qps"] for t in good]
+            print(f"  n={n:<3} {label} agg {qps} q/s | "
+                  + " ".join(
+                      f"{q['id']}={records[-1]['per_query_ms'][q['id']]['trial_p50s']}"
+                      for q in mix), flush=True)
+    return 0, {"mode": "mixed", "store": str(store), "scale": args.scale,
+               "reader_counts": counts, "queries": [q["id"] for q in mix],
+               "duration_s": duration, "trials": args.trials,
+               "batch_rows": args.batch_rows, "records": records}
+
+
+# --------------------------------------------------------------------------- #
+# mode: commitcost — where a singleton commit's time goes                     #
+# --------------------------------------------------------------------------- #
+
+# The engine phases that must fully account for `total_us` -- everything
+# `NativeStore::commit` times, other than `total_us` itself
+# (`crates/gnomon-core/src/store.rs::CommitPhases`, B1-v2d). Kept as a
+# module constant rather than re-deriving it from a phase dict's keys because
+# `wal_us`/`apply_us`/`python_wrap_us` (Python-side) and `write_us` (the
+# harness's own outer wrapper) share the `_us` suffix but are not part of
+# what the engine's `total_us` is supposed to sum to.
+ENGINE_PHASE_KEYS = (
+    "capture_us", "seal_us", "closes_us", "stats_us", "dict_us",
+    "digest_us", "debug_verify_us", "delta_build_us", "manifest_us",
+    "current_us",
+)
+
+
+def _aggregate_commit_phases(phases: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-commit phase dicts (as `_timed_write` returns) -> a commitcost
+    row's summary fields.
+
+    `phase_p50_us`/`first_decile_us`/`last_decile_us` are the pre-B1-v2d
+    median-based fields, unchanged, for existing consumers.
+
+    `phase_decile_first_us`/`phase_decile_last_us` are new: the *mean* (not
+    median) over the same first/last-decile window, per phase -- a mean
+    moves on a fat right tail a median can hide, which is exactly the shape
+    a per-commit fsync or a growing directory-entry count would take.
+
+    `residual_first_us`/`residual_last_us` re-derive the B1V2_AB_DIAGNOSIS
+    memo's own Q1 metric -- `total_us` minus the named engine phases -- per
+    commit, meaned over the same window, so a commitcost record shows on its
+    own whether the B1-v2d instrumentation actually closed the gap (it
+    should sit near zero; a nonzero, growing value here means some region of
+    the commit path is still untimed).
+    """
+    if not phases:
+        raise ValueError("_aggregate_commit_phases needs at least one commit")
+    k = max(1, len(phases) // 10)
+    keys = sorted(phases[0])
+
+    def med(ps: list[dict[str, Any]], key: str) -> int:
+        return int(statistics.median([p[key] for p in ps]))
+
+    def mean_us(ps: list[dict[str, Any]], key: str) -> float:
+        return statistics.fmean(p[key] for p in ps)
+
+    def residual(ps: list[dict[str, Any]]) -> float:
+        return statistics.fmean(
+            p["total_us"] - sum(p.get(pk, 0) for pk in ENGINE_PHASE_KEYS)
+            for p in ps)
+
+    first, last = phases[:k], phases[-k:]
+    return {
+        "phase_p50_us": {k2: med(phases, k2) for k2 in keys},
+        "first_decile_us": {k2: med(first, k2) for k2 in keys},
+        "last_decile_us": {k2: med(last, k2) for k2 in keys},
+        "phase_decile_first_us": {k2: mean_us(first, k2) for k2 in keys},
+        "phase_decile_last_us": {k2: mean_us(last, k2) for k2 in keys},
+        "residual_first_us": residual(first),
+        "residual_last_us": residual(last),
+    }
+
+
+def _dir_entry_counts(native_root: Path) -> dict[str, int]:
+    """How many files sit in `seg/` and `manifests/` right now.
+
+    The B1V2_AB_DIAGNOSIS memo's candidate 2b is a directory-fsync
+    cost tied to the growing entry count `write_atomic` fsyncs against;
+    recording the count at the first and last commit turns "35 -> 575
+    segments" from a number read off a raw JSON file into part of the record
+    a commitcost run produces.
+    """
+    counts = {}
+    for sub in ("seg", "manifests"):
+        d = native_root / sub
+        counts[sub] = sum(1 for _ in d.iterdir()) if d.exists() else 0
+    return counts
+
+
+
+def _timed_write(store, events: list[dict[str, Any]]) -> dict[str, int]:
+    """One write batch, driven layer by layer instead of through `_write`.
+
+    Deliberately duplicates `Store._write` so the three layers can be timed
+    separately: the write-ahead log fsync, the Python bi-temporal semantics
+    (`apply_ops`), and the engine commit — which reports its own phase split.
+    Kept honest by asserting the generation advanced by exactly one.
+    """
+    from gnomon.storage.base import make_op
+
+    a = store.adapter
+    gen0 = a.generation
+    ops = [make_op("ingest_events", events=events, offset=0, node_label="Node",
+                   source="ingest", provenance_ref=None)]
+    t_all = time.perf_counter()
+    tt = store.clock.tick()
+    t = time.perf_counter()
+    _bid, end_offset, record = store.eventlog.append(tt, ops)
+    wal_us = int((time.perf_counter() - t) * 1e6)
+    store._chain = __import__("gnomon.storage.eventlog", fromlist=["x"]).extend_chain(
+        store._chain if store._chain is not None
+        else store.eventlog.chain_of_prefix(end_offset - len(record)), record)
+    t = time.perf_counter()
+    a.begin()
+    a.apply_ops(ops, tt)
+    apply_us = int((time.perf_counter() - t) * 1e6)
+    a.note_event_cursor(end_offset, store._chain)
+    a.commit()
+    write_us = int((time.perf_counter() - t_all) * 1e6)
+    assert a.generation == gen0 + 1, "a batch must publish exactly one generation"
+    ph = {k: int(v) for k, v in a._store.last_commit_phases().items()}
+    ph.update({"wal_us": wal_us, "apply_us": apply_us, "write_us": write_us,
+               "python_wrap_us": a.last_commit_python_wrap_us()})
+    return ph
+
+
+def _loaded_engine_manifest_format() -> int:
+    """`MANIFEST_FORMAT_VERSION` of whichever `_engine*.so` this process has
+    resolved -- the format a store this process creates gets written at.
+
+    Read from the module constant directly (`crates/gnomon-py/src/lib.rs`
+    registers it on `_engine` alongside `build_info()`) rather than through
+    `NativeAdapter.build_info()`, which is a newer addition an
+    older engine `.so` may not carry at all -- this constant is older and is
+    the one property `_check_chain_format` actually needs.
+    """
+    from gnomon import _engine
+
+    return int(_engine.MANIFEST_FORMAT_VERSION)
+
+
+def _check_chain_format(store, allow_legacy: bool) -> int:
+    """Refuse to time a commitcost rep whose store is on an older manifest
+    chain format than the loaded engine writes.
+
+    wrote manifest records sized like the format-2 control (1,565-1,568 B)
+    instead of format 3 (1,592-1,595 B). `Manifest::digest()`
+    (`crates/gnomon-core/src/manifest.rs:615-636`) picks the digest
+    rule from the manifest's own `format` field, not from the binary that
+    is running it, so a format-2 chain measured under a format-3 binary
+    silently keeps paying the O(segments) `legacy_body_sha` fallback --
+    the A/B ended up comparing two format-2 arms without anyone noticing
+    until the byte counts were checked well after the fact. This makes
+    that failure mode loud instead of silent: every rep's own chain format
+    is read back from the store it just opened and compared against the
+    loaded engine's `MANIFEST_FORMAT_VERSION` before a single commit is
+    timed.
+
+    Raises `SystemExit` naming both numbers unless `allow_legacy` is set --
+    the escape hatch for a rep deliberately measuring a legacy chain (e.g.
+    an upgrade-path benchmark), which is never `commitcost`'s default.
+    """
+    chain_format = int(store.adapter.manifest_format())
+    engine_format = _loaded_engine_manifest_format()
+    if chain_format < engine_format and not allow_legacy:
+        raise SystemExit(
+            f"commitcost: store chain format {chain_format} is older than "
+            f"the loaded engine's MANIFEST_FORMAT_VERSION {engine_format} -- "
+            "this rep's seed store was not built by the engine being "
+            "measured (a stale PYTHONPATH/venv is the usual cause, per the "
+            "an earlier correction). Rebuild the seed store "
+            "with the treatment engine, or pass --allow-legacy-chain to "
+            "measure the legacy chain anyway.")
+    return chain_format
+
+
+def cmd_commitcost(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """Commit a singleton batch repeatedly and watch the phases move.
+
+    The point is the *shape over generations*: fsync cost is flat, manifest
+    cost grows with the number of segments the manifest has to name. Whichever
+    grows is the one group-commit has to beat.
+
+    Every rep builds its own store fresh, in this process, via `gnomon.open` --
+    there is no `--store`/copy path here (unlike `cmd_mixed`'s `_pristine()`)
+    -- so its manifest chain format is, in principle, always whatever the
+    loaded engine writes. `_check_chain_format` asserts that rather than
+    assuming it: see its docstring and the module docstring's `commitcost`
+    """
+    import tempfile
+
+    import gnomon
+
+    rows = [int(x) for x in args.batch_sizes.split(",")]
+    out: list[dict[str, Any]] = []
+    for batch in rows:
+        root = Path(tempfile.mkdtemp(prefix="gnomon-cc-")) / "s"
+        native_root = root / "native"
+        s = gnomon.open(root, backend="native")
+        chain_format = _check_chain_format(s, args.allow_legacy_chain)
+        s.ingest_events([{"src": f"p{i}", "dst": f"q{i}", "rel_type": "R",
+                          "vt_s": i} for i in range(args.seed_rows)])
+        lat, phases = [], []
+        dir_entries_first: dict[str, int] | None = None
+        dir_entries_last: dict[str, int] | None = None
+        n = 0
+        for i in range(args.commits):
+            events = [{"src": f"a{n + j}", "dst": f"b{n + j}", "rel_type": "R",
+                       "vt_s": 1_000_000 + n + j} for j in range(batch)]
+            phases.append(_timed_write(s, events))
+            lat.append(phases[-1]["write_us"] / 1e3)
+            n += batch
+            if i == 0:
+                dir_entries_first = _dir_entry_counts(native_root)
+            if i == args.commits - 1:
+                dir_entries_last = _dir_entry_counts(native_root)
+
+        row = {
+            "batch_rows": batch, "commits": args.commits,
+            "commit_ms": dist(lat),
+            "ms_per_row": round(statistics.median(lat) / batch, 4),
+            **_aggregate_commit_phases(phases),
+            "store_bytes": sum(f.stat().st_size
+                               for f in root.rglob("*") if f.is_file()),
+            "dir_entries_first": dir_entries_first,
+            "dir_entries_last": dir_entries_last,
+            "build_info": _engine_build_info(),
+            "chain_format": chain_format,
+        }
+        out.append(row)
+        p = row["phase_p50_us"]
+        first, last = row["first_decile_us"], row["last_decile_us"]
+        print(f"  batch={batch:<5} write p50 {row['commit_ms']['p50']:8.2f} ms "
+              f"({row['ms_per_row']:.4f} ms/row)", flush=True)
+        print(f"      wal={p['wal_us'] / 1e3:.2f} apply={p['apply_us'] / 1e3:.2f} "
+              f"| engine {p['total_us'] / 1e3:.2f} = seal {p['seal_us'] / 1e3:.2f} "
+              f"+ dict {p['dict_us'] / 1e3:.2f} + manifest "
+              f"{p['manifest_us'] / 1e3:.2f} + CURRENT {p['current_us'] / 1e3:.2f}",
+              flush=True)
+        print(f"      manifest {p['manifest_bytes']:,} B naming "
+              f"{p['segments_named']} segs | growth first->last decile: "
+              f"write {first['write_us'] / 1e3:.2f}->"
+              f"{last['write_us'] / 1e3:.2f} ms, "
+              f"manifest {first['manifest_bytes']:,}->{last['manifest_bytes']:,} B",
+              flush=True)
+        print(f"      residual first->last decile (mean): "
+              f"{row['residual_first_us']:.1f}->{row['residual_last_us']:.1f} us | "
+              f"seg/ {dir_entries_first['seg']}->{dir_entries_last['seg']}, "
+              f"manifests/ {dir_entries_first['manifests']}->"
+              f"{dir_entries_last['manifests']}", flush=True)
+        s.close()
+    return 0, {"mode": "commitcost", "seed_rows": args.seed_rows,
+               "commits": args.commits, "records": out}
+
+
+# --------------------------------------------------------------------------- #
+# mode: groupcommit                                                           #
+# --------------------------------------------------------------------------- #
+
+
+def cmd_groupcommit(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """Concurrent single-row writers, with and without coalescing.
+
+    The workload group-commit exists for: N callers each holding one row,
+    none of which can batch on its own. Without coalescing each is a durable
+    generation; with it, whatever is queued when the committer wakes shares
+    one.
+    """
+    import tempfile
+
+    import gnomon
+    from gnomon.write import GroupCommitWriter
+
+    out = []
+    for writers in [int(x) for x in args.writers.split(",")]:
+        for coalesce in (False, True):
+            root = Path(tempfile.mkdtemp(prefix="gnomon-gc-")) / "s"
+            s = gnomon.open(root, backend="native")
+            s.ingest_events([{"src": f"p{i}", "dst": f"q{i}", "rel_type": "R",
+                              "vt_s": i} for i in range(args.seed_rows)])
+            gc = GroupCommitWriter(s, max_delay_s=args.max_delay,
+                                   max_batch=args.max_batch) if coalesce else None
+            if gc:
+                gc.start()
+            gen0 = s.adapter.generation
+            t0 = time.perf_counter()
+            lat = _drive_writers(s, gc, writers, args.rows_per_writer)
+            wall = time.perf_counter() - t0
+            gen_before = s.adapter.generation
+            if gc:
+                gc.close()
+            rows = writers * args.rows_per_writer
+            row = {"writers": writers, "coalesced": coalesce, "rows": rows,
+                   "generations_used": gen_before - gen0,
+                   "wall_s": round(wall, 3),
+                   "submit_ms": dist(lat),
+                   "rows_per_s": round(rows / wall, 1),
+                   "group": gc.stats() if gc else None}
+            out.append(row)
+            print(f"  writers={writers:<3} coalesce={coalesce!s:<5} "
+                  f"submit p50 {row['submit_ms']['p50']:7.2f} p99 "
+                  f"{row['submit_ms']['p99']:8.2f} ms | {rows} rows in "
+                  f"{row['generations_used']} generations, "
+                  f"{row['rows_per_s']:8.1f} rows/s"
+                  + (f" (max group {row['group']['max_group']})" if gc else ""),
+                  flush=True)
+            s.close()
+    return 0, {"mode": "groupcommit", "records": out,
+               "max_delay_s": args.max_delay, "max_batch": args.max_batch}
+
+
+def _drive_writers(store, gc, n_writers: int, rows: int) -> list[float]:
+    """`n_writers` threads each submitting `rows` single-row writes."""
+    import threading
+
+    lat: list[float] = []
+    lock = threading.Lock()
+
+    def one(w: int) -> None:
+        mine: list[float] = []
+        for i in range(rows):
+            t = time.perf_counter()
+            if gc is not None:
+                gc.assert_edge(f"g{w}_{i}", f"h{w}_{i}", "W",
+                               vt_s=2_000_000 + w * rows + i)
+            else:
+                store.assert_edge(f"g{w}_{i}", f"h{w}_{i}", "W",
+                                  vt_s=2_000_000 + w * rows + i)
+            mine.append((time.perf_counter() - t) * 1e3)
+        with lock:
+            lat.extend(mine)
+
+    threads = [threading.Thread(target=one, args=(w,)) for w in range(n_writers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return lat
+
+
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+
+
+def cmd_residency(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """What a resident TCSR costs a mixed read workload, per path query.
+
+    but declined to choose a budget, because choosing needs a workload mix.
+    This runs the mix at several scan-per-path-query ratios, in one fresh
+    process per condition, keeping the index and dropping it.
+    """
+    data, d = R.ensure_dataset(Path(args.workdir), args.scale)
+    store = Path(args.store) if args.store else R.ensure_store(d, "native", data.log)
+    qs = {q["id"]: q for q in R.queries_for(data, (PATH_QUERY, SCAN_QUERY))}
+    ratios = [int(x) for x in args.scans_per_path.split(",")]
+    out = []
+    for ratio in ratios:
+        for keep in (True, False):
+            per_trial = []
+            for _ in range(args.trials):
+                cfg = {"store": str(store), "scans_per_path": ratio,
+                       "rounds": args.rounds, "keep_index": keep,
+                       "path": qs[PATH_QUERY], "scan": qs[SCAN_QUERY]}
+                r = _collect(_spawn("residency", cfg), 3600)
+                if r.get("failed"):
+                    per_trial.append(r)
+                    continue
+                per_trial.append(r)
+            good = [t for t in per_trial if not t.get("failed")]
+            row = {"scans_per_path": ratio, "keep_index": keep,
+                   "trials": per_trial,
+                   "round_ms_p50": [t["round_ms"]["p50"] for t in good],
+                   "path_ms_p50": [t["path_ms"]["p50"] for t in good],
+                   "scan_ms_p50": [t["scan_ms"]["p50"] for t in good]}
+            out.append(row)
+            print(f"  scans/path={ratio:<3} keep={keep!s:<5} "
+                  f"round p50 {row['round_ms_p50']} | "
+                  f"path {row['path_ms_p50']} scan {row['scan_ms_p50']}",
+                  flush=True)
+    return 0, {"mode": "residency", "store": str(store), "scale": args.scale,
+               "path_query": PATH_QUERY, "scan_query": SCAN_QUERY,
+               "rounds": args.rounds, "records": out}
+
+
+def child_residency(cfg: dict[str, Any]) -> dict[str, Any]:
+    """One path query then `scans_per_path` scans, `rounds` times.
+
+    `keep_index` is the knob under test, so it is *asserted* rather than
+    trusted: with keep off, the adapter must not be holding a
+    TCSR when the scans run.
+
+    **`GNOMON_TCSR=rust` (W3_report.md finding 2).** Under the Rust backend
+    `a._tcsr` holds a `NativeTCSR` shim whose real storage is the engine's
+    per-segment index cache inside the store handle. Setting `a._tcsr = None`
+    drops the shim and leaves every `.tci` extent resident, so the "nothing
+    resident" control would have been measuring the treatment. `release_tcsr()`
+    (`adapter.py:716`) drops both and is documented as exactly this condition;
+    it is used whenever the adapter has it, which makes the control real on
+    the Rust arm and leaves the Python arm unchanged (`release_tcsr` sets
+    `self._tcsr = None` first and the engine cache is empty there). Residency
+    is then *measured* rather than assumed: `tcsr_stats()["resident_bytes"]`
+    is sampled in both conditions and returned, which is also F3-3's
+    instrument.
+    """
+    import gnomon
+    from gnomon.temporal.algebra import call_operator, ensure_all_registered
+
+    ensure_all_registered()
+    store = gnomon.open(Path(cfg["store"]), backend="native", read_only=True)
+    a = store.adapter
+    keep = bool(cfg["keep_index"])
+    path_q, scan_q = cfg["path"], cfg["scan"]
+
+    def _stats() -> dict[str, int]:
+        try:
+            return {k: int(v) for k, v in dict(a.tcsr_stats()).items()}
+        except Exception:
+            return {}
+
+    def _drop() -> None:
+        # the control, applied through the API that actually frees the
+        # engine-side extents; falls back to the pre-W3 spelling on an
+        # adapter that predates `release_tcsr`
+        if hasattr(a, "release_tcsr"):
+            a.release_tcsr()
+        else:
+            a._tcsr = None
+
+    call_operator(a, scan_q["op"], dict(scan_q["args"]))     # warm the scan
+    round_ms, path_ms, scan_ms = [], [], []
+    resident_bytes: list[int] = []
+    for _ in range(int(cfg["rounds"])):
+        t_round = time.perf_counter()
+        t = time.perf_counter()
+        call_operator(a, path_q["op"], dict(path_q["args"]))
+        path_ms.append((time.perf_counter() - t) * 1e3)
+        assert a._tcsr is not None, "the path query did not build the index"
+        built = _stats()
+        if not keep:
+            _drop()
+            assert a._tcsr is None
+            after = _stats()
+            assert after.get("resident_bytes", 0) == 0, (
+                f"release_tcsr left {after} resident")
+        resident_bytes.append(int(built.get("resident_bytes", 0)))
+        for _ in range(int(cfg["scans_per_path"])):
+            t = time.perf_counter()
+            call_operator(a, scan_q["op"], dict(scan_q["args"]))
+            scan_ms.append((time.perf_counter() - t) * 1e3)
+        if keep:
+            assert a._tcsr is not None, "the index was dropped despite keep"
+        round_ms.append((time.perf_counter() - t_round) * 1e3)
+    stats_end = _stats()
+    store.close()
+    return {"keep_index": keep, "scans_per_path": cfg["scans_per_path"],
+            "round_ms": dist(round_ms), "path_ms": dist(path_ms),
+            "scan_ms": dist(scan_ms),
+            "tcsr_backend": _tcsr_backend(),
+            "resident_bytes_after_path": resident_bytes,
+            "tcsr_stats_end": stats_end}
+
+
+# --------------------------------------------------------------------------- #
+# entry                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+CHILDREN = {"reader": child_reader, "writer": child_writer,
+            "residency": child_residency}
+
+
+def _engine_build_info() -> dict[str, Any] | None:
+    """`NativeAdapter.build_info()`, or `None` off the native backend.
+
+    in the untimed residual, and a debug-assertions build — which runs
+    `store::publish`'s O(segments) `debug_assert_eq!` every commit — was the
+    top candidate. Every commitcost record must be able to say which build
+    profile it ran; `None` here (rather than a fabricated value) is itself
+    the signal that this run never touched the native engine.
+    """
+    try:
+        from gnomon.storage.native import NativeAdapter
+    except ImportError:
+        return None
+    return NativeAdapter.build_info()
+
+
+def _provenance() -> dict[str, Any]:
+    """Enough to say whether two runs are comparable."""
+    import platform
+
+    def sh(*cmd: str) -> str:
+        try:
+            return subprocess.run(cmd, cwd=H.ROOT, capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        except Exception:  # noqa: BLE001
+            return "unknown"
+
+    return {"commit": sh("git", "rev-parse", "--short", "HEAD"),
+            "dirty": bool(sh("git", "status", "--porcelain", "-uno")),
+            "build_info": _engine_build_info(),
+            "python": platform.python_version(),
+            "platform": f"{platform.system()} {platform.release()} "
+                        f"{platform.machine()}",
+            "cpu_count": os.cpu_count()}
+
+
+def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "_child":
+        cfg = json.loads(sys.stdin.read())
+        print(json.dumps(CHILDREN[sys.argv[2]](cfg)))
+        return 0
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("mode", choices=["mixed", "commitcost", "groupcommit",
+                                     "residency"])
+    ap.add_argument("--store", default="",
+                    help="prebuilt store; default is the cached 14.4 one")
+    ap.add_argument("--workdir", default="benchmarks/work-concurrency")
+    ap.add_argument("--log", default="", help="mixed: a frozen event log (with its extcmp side file) for the read mix; needs --store")
+    ap.add_argument("--scale", type=int, default=1_000_000)
+    ap.add_argument("--readers", default="1,2,4,8")
+    ap.add_argument("--trials", type=int, default=3)
+    ap.add_argument("--duration", type=float, default=30.0,
+                    help="seconds each reader/writer runs inside the window")
+    ap.add_argument("--lead", type=float, default=25.0,
+                    help="barrier lead time: open + one warm pass")
+    ap.add_argument("--batch-rows", type=int, default=100,
+                    help="rows per writer commit in the mixed mode")
+    ap.add_argument("--seed-rows", type=int, default=100_000)
+    ap.add_argument("--commits", type=int, default=200)
+    ap.add_argument("--batch-sizes", default="1,10,100,1000")
+    ap.add_argument("--allow-legacy-chain", action="store_true",
+                    help="commitcost: measure a store whose manifest chain "
+                         "format is older than the loaded engine's "
+                         "MANIFEST_FORMAT_VERSION instead of refusing (see "
+                         "_check_chain_format's docstring); never needed for "
+                         "a normal run, since commitcost always builds its "
+                         "own store fresh")
+    ap.add_argument("--writers", default="1,2,4,8")
+    ap.add_argument("--rows-per-writer", type=int, default=100)
+    ap.add_argument("--max-delay", type=float, default=0.002)
+    ap.add_argument("--max-batch", type=int, default=1000)
+    ap.add_argument("--scans-per-path", default="1,4,16,64")
+    ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--json", default="")
+    args = ap.parse_args()
+
+    print(f"# {args.mode}", flush=True)
+    if args.mode == "commitcost":
+        print(f"  build_info: {_engine_build_info()}", flush=True)
+    t0 = time.time()
+    rc, payload = {"mixed": cmd_mixed, "commitcost": cmd_commitcost,
+                   "groupcommit": cmd_groupcommit,
+                   "residency": cmd_residency}[args.mode](args)
+    payload["wall_s"] = round(time.time() - t0, 1)
+    payload["provenance"] = _provenance()
+    if args.json:
+        Path(args.json).write_text(json.dumps(payload, indent=1))
+        print(f"wrote {args.json}", flush=True)
+    return rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

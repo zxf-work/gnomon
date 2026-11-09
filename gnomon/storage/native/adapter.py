@@ -773,6 +773,11 @@ class NativeAdapter(StorageAdapter):
             return {}
         as_of = clamp_tt(as_of_tt)
         uids = self.uids_for(ids)
+        if os.environ.get("GNOMON_NODES_VALID_BATCH", "1") != "0" and \
+                hasattr(self._store, "nodes_valid_at"):
+            # The loop below in one engine call
+            return {int(i): (u, lab) for i, u, lab in self._read_op(
+                lambda s: s.nodes_valid_at(ids, list(uids), int(t), as_of))}
 
         def run(s: Any) -> dict[int, tuple[str, str]]:
             out: dict[int, tuple[str, str]] = {}
@@ -827,6 +832,21 @@ class NativeAdapter(StorageAdapter):
                 return []
             return self._edges(self._read_op(lambda s: s.versions_of("edge", key)))
         return self._nodes(self._read_op(lambda s: s.versions_of("node", key)))
+
+    def identity_version_cols(self, kind: str, key: str) -> dict[str, list[Any]] | None:
+        """`identity_versions` as the engine's columns, without building a
+        version object or parsing props per row; `None`
+        where `identity_versions` returns no rows for a key that is no
+        identity."""
+        if kind == "edge":
+            try:
+                int(key, 16)
+            except ValueError:
+                return None
+            if len(key) != 24:
+                return None
+            return self._read_op(lambda s: s.versions_of("edge", key))
+        return self._read_op(lambda s: s.versions_of("node", key))
 
     def node_intervals(self, ids: Sequence[int], vt_min: int, vt_max: int,
                        as_of_tt: int = OPEN_END) -> dict[int, list[tuple[int, int]]]:
@@ -984,6 +1004,20 @@ class NativeAdapter(StorageAdapter):
             if columns is not None and c in columns:
                 out[c] = np.asarray(got[c], dtype=np.int64)
         return out
+
+    def neighborhood_evolution_parts(self, uid_id: int, t1: int, t2: int, as_of_tt: int,
+                                     stride: int) -> tuple[list[str], list[str], list[dict[str, int]]] | None:
+        """`neighborhood_evolution`'s one-read form in one engine call
+: the gained and the lost neighbours' uids, each
+        sorted, and the degree series, from the read `edges_columnar` makes
+        over `[t1, t2 + 1)` touching `uid_id`. `None` without the engine
+        function, or when the handle is not the engine's own (a wrapper
+        around it): the operator then runs its NumPy form."""
+        fn = getattr(_engine, "neighborhood_evolution_parts", None)
+        if fn is None or type(self._store) is not _engine.NativeStore:
+            return None
+        return self._read_op(lambda s: fn(s, int(uid_id), int(t1), int(t2),
+                                          clamp_tt(as_of_tt), int(stride)))
 
     def aggregate_events_columnar(
         self,
@@ -1320,6 +1354,29 @@ class NativeAdapter(StorageAdapter):
             [int(i) for i in seed_ids], int(t), clamp_tt(as_of_tt), int(hops),
             list(rel_types) if rel_types else None))
 
+    def snapshot_scan_page(self, seed_ids: Sequence[int], t: int, as_of_tt: int, hops: int,
+                           rel_types: list[str] | None, cap: int, offset: int,
+                           limit: int) -> dict[str, Any] | None:
+        """`ops_snapshot._expand_from_seeds` and the operator's page in one
+        engine call; `None` past `cap`, as there."""
+        return self._read_op(lambda s: s.snapshot_scan_page(
+            [int(i) for i in seed_ids], int(t), clamp_tt(as_of_tt), int(hops), int(cap),
+            int(offset), int(limit), list(rel_types) if rel_types is not None else None))
+
+    def snapshot_kernel_page(self, seed_ids: Sequence[int], t: int, as_of_tt: int, hops: int,
+                             rel_types: list[str] | None, offset: int, limit: int,
+                             node_limit: int) -> dict[str, Any] | None:
+        """`snapshot_kernel` as a page: the totals, the nodes
+        `[0, node_limit)` by `(hop, uid)` and the edges `[offset, offset +
+        limit)` in `(vt_s, vid)` order, built for the page only. `None` where
+        `snapshot_kernel` is."""
+        if tcsr_backend() == "python":
+            return None
+        return self._read_op(lambda s: s.snapshot_expand_page(
+            [int(i) for i in seed_ids], int(t), clamp_tt(as_of_tt), int(hops),
+            int(offset), int(limit), int(node_limit),
+            list(rel_types) if rel_types else None))
+
     def match_last_decline(self) -> str:
         """Why the engine's `match` executor last declined a plan."""
         return str(self._store.match_last_decline())
@@ -1328,6 +1385,18 @@ class NativeAdapter(StorageAdapter):
         """Node versions written per label (every version: an estimate for
         the `match` compiler's step order), cached per generation."""
         return {str(k): int(v) for k, v in self._read_op(lambda s: s.match_label_counts())}
+
+    def match_rel_ends(self) -> list[tuple[str, int, int, int]]:
+        """Per relationship type, its edge versions and the distinct
+        identities at its source and target ends (every version: the
+        `match` compiler's second-anchor estimates), cached per generation."""
+        return [(str(r), int(c), int(s), int(d)) for r, c, s, d in self._read_op(lambda s: s.match_rel_ends())]
+
+    def match_adjacency_rows(self, uids: list[str], direction: str) -> int:
+        """The adjacency-index rows of `uids` in `direction` (every type and
+        version: an upper bound of a first hop, the `match` compiler's
+        second-anchor probe)."""
+        return int(self._read_op(lambda s: s.match_adjacency_rows([str(u) for u in uids], direction)))
 
     def phase_stats(self) -> dict[str, int]:
         """Per-phase read-path timers: `agg_*` for the aggregate path's own
@@ -1663,6 +1732,7 @@ class NativeAdapter(StorageAdapter):
             # report down with it, hiding the findings that actually matter.
             findings += self._verify_tcsr(
                 scan_is_trustworthy=not any(f["severity"] == "error" for f in findings))
+            findings += self._verify_registry()
         report["findings"] = findings
         report["problems"] = [f["detail"] for f in findings if f["severity"] == "error"]
         report["healthy"] = not report["problems"]
@@ -1710,6 +1780,20 @@ class NativeAdapter(StorageAdapter):
             return [self._finding("eventlog", "log-unreadable", rel,
                                   f"the event log cannot be read: {e}")]
         return [self._finding("eventlog", d["kind"], rel, d["detail"])
+                for d in defects]
+
+    def _verify_registry(self) -> list[dict[str, Any]]:
+        from gnomon.artifact import registry as artifact_registry
+
+        rel = artifact_registry.FILE_NAME
+        try:
+            defects = artifact_registry.verify(self.path.parent)
+        except OSError as e:
+            return [self._finding("registry", "registry-unreadable", rel,
+                                  f"the artifact registry cannot be read: {e}")]
+        layer_of = {"blob-missing": "blob", "blob-digest-mismatch": "blob"}
+        return [self._finding(layer_of.get(d["kind"], "registry"), d["kind"], rel,
+                              d["detail"])
                 for d in defects]
 
     #: Vertices the TCSR content spot-check compares in full. The permutation

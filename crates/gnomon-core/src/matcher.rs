@@ -6,7 +6,6 @@
 //! plan of the plan IR (`gnomon/plan/node.py`) and hands this module that plan as JSON (`plan_json`): a DAG of
 //! `NodeScan`, `EdgeScan`, `Expand`, `Filter`, `TypeConstraint`, `Project`,
 //! `Join`, `Aggregate`, `Order` and `Limit` nodes, Σ, and the output columns;
-//! under the shared-instant rule (one shared valid instant) also `CoValidExpand`, `CoValidJoin`
 //! and `Collapse` (module `covalid`).
 //! The plan IR's reference evaluator runs the same plan when the handle was opened with
 //! `GNOMON_MATCH_KERNEL=python`, so the two executors differ in execution only,
@@ -67,6 +66,7 @@ use crate::visibility::CloseIndex;
 use crate::OPEN_END;
 
 mod covalid;
+pub mod snappage;
 
 // --------------------------------------------------------------------------
 // hashing
@@ -299,11 +299,8 @@ enum Op {
     OrderedReach(Box<Reach>),
     /// a version's successor or predecessor along one time axis
     Succ { of: String, into: String, edge: bool, valid_axis: bool, next: bool, belief: BeliefMode, vt_mode: VtMode },
-    /// the shared-instant rule: a variable-length step under one shared valid instant
     CoValidExpand(Box<covalid::CoValid>),
-    /// the shared-instant rule: an optional (left outer) or not (anti) sub-pattern
     CoValidJoin(Box<covalid::CoJoin>),
-    /// the shared-instant rule: one row per version tuple, each target at its least depth
     Collapse { by: Vec<String>, mins: Vec<String> },
 }
 
@@ -1122,6 +1119,8 @@ fn tval_of(v: Option<&J>) -> TVal {
 pub type NodeMapEntry = ((u64, i64, i64), Arc<Vec<Addr>>);
 /// One generation's node versions per label.
 pub type LabelCounts = (u64, Arc<Vec<(String, u64)>>);
+/// One generation's `match_rel_ends`.
+pub type RelEnds = (u64, Arc<Vec<(String, u64, u64, u64)>>);
 /// One node segment's rows, by label (labels sorted).
 pub type LabelRows = Arc<Vec<(String, Vec<u32>)>>;
 /// Per node segment id, its rows by label.
@@ -1134,6 +1133,62 @@ pub type RelRowsCache = HashMap<u64, RelRows>;
 /// A relationship is rare in a segment while it holds at most this fraction
 /// of the segment's rows; only rare relationships get row lists.
 const RARE_REL_FRACTION: usize = 32;
+
+/// One node segment's rows by label (`label_ref` is the segment's label
+/// column): the distinct label refs resolved once, each label's rows
+/// ascending, labels sorted. The one derivation behind `Ctx::label_rows` and
+/// the warm open's (`NativeStore::warm_match_segment`).
+fn label_rows_of(tag: &[u32], seg: &Segment<MmapSource>) -> Result<LabelRows> {
+    let mut by_ref: FxMap<u32, Vec<u32>> = FxMap::default();
+    for (row, &t) in tag.iter().enumerate() {
+        by_ref.entry(t).or_default().push(row as u32);
+    }
+    let strings = seg.strings()?;
+    let mut by_label: HashMap<String, Vec<u32>> = HashMap::new();
+    for (r, rows) in by_ref {
+        let l = strings.get(r)?.to_string();
+        by_label.entry(l).or_default().extend(rows);
+    }
+    let mut v: Vec<(String, Vec<u32>)> = by_label.into_iter().collect();
+    for (_, rows) in v.iter_mut() {
+        rows.sort_unstable();
+    }
+    v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    Ok(Arc::new(v))
+}
+
+/// One edge segment's rare relationships with their rows and the names of
+/// the others, from its `rel_code` column and header names: the one
+/// derivation behind `Ctx::rel_rows` and the warm open's.
+fn rel_rows_of(rel: &[u16], names: &[String]) -> RelRows {
+    let mut counts = vec![0usize; names.len()];
+    for &c in rel {
+        if let Some(n) = counts.get_mut(c as usize) {
+            *n += 1;
+        }
+    }
+    let rows_n = rel.len();
+    let rare: Vec<bool> = counts.iter().map(|&n| n.saturating_mul(RARE_REL_FRACTION) <= rows_n).collect();
+    let mut lists: Vec<Vec<u32>> = vec![Vec::new(); names.len()];
+    for (row, &c) in rel.iter().enumerate() {
+        if rare.get(c as usize).copied().unwrap_or(false) {
+            lists[c as usize].push(row as u32);
+        }
+    }
+    let mut rare_rows = Vec::new();
+    let mut common = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        if counts[i] == 0 {
+            continue;
+        }
+        if rare[i] {
+            rare_rows.push((name.clone(), std::mem::take(&mut lists[i])));
+        } else {
+            common.push(name.clone());
+        }
+    }
+    Arc::new((rare_rows, common))
+}
 /// A hop reads a rare relationship's rows instead of the adjacency index
 /// from this many frontier nodes on (below it the index's slices are cheap).
 const REL_ROWS_FRONTIER_MIN: usize = 64;
@@ -1341,13 +1396,13 @@ impl Col {
         }
         let v = match &self.v {
             Vals::Null(_) => Vals::Null(idx.len()),
-            Vals::I64(x) => Vals::I64(g(x, idx)),
+            Vals::I64(x) => Vals::I64(gather_copy(x, idx)),
             Vals::F64(x) => Vals::F64(g(x, idx)),
             Vals::Bool(x) => Vals::Bool(g(x, idx)),
             Vals::Str(x) => Vals::Str(g1(x, idx)),
-            Vals::Uid(x) => Vals::Uid(g(x, idx)),
+            Vals::Uid(x) => Vals::Uid(gather_copy(x, idx)),
             Vals::Vid(x) => Vals::Vid(g(x, idx)),
-            Vals::Eid(x) => Vals::Eid(g(x, idx)),
+            Vals::Eid(x) => Vals::Eid(gather_copy(x, idx)),
             Vals::Json(x, k, key) => Vals::Json(g(x, idx), *k, key.clone()),
             Vals::Label(x) => Vals::Label(g(x, idx)),
             Vals::RelType(x) => Vals::RelType(g(x, idx)),
@@ -1400,11 +1455,11 @@ impl Var {
     fn take(&self, idx: &[usize]) -> Var {
         match self {
             Var::Node { ids, ver, depth } => Var::Node {
-                ids: gather(ids, idx),
-                ver: gather(ver, idx),
-                depth: depth.as_ref().map(|d| gather(d, idx)),
+                ids: gather_copy(ids, idx),
+                ver: gather_copy(ver, idx),
+                depth: depth.as_ref().map(|d| gather_copy(d, idx)),
             },
-            Var::Edge { ver } => Var::Edge { ver: gather(ver, idx) },
+            Var::Edge { ver } => Var::Edge { ver: gather_copy(ver, idx) },
         }
     }
 }
@@ -1452,8 +1507,43 @@ thread_local! {
     /// match call running on this thread, so a gather deep in the executor
     /// reads it without a handle; 1 outside a call.
     static MATCH_THREADS: std::cell::Cell<usize> = const { std::cell::Cell::new(1) };
+    /// `GNOMON_MATCH_NODE_PASS` for the match call on this thread
+    /// (`NODE_PASS_SERIAL`, `NODE_PASS_EAGER` or `NODE_PASS_PACED`).
+    static NODE_PASS_PAR: std::cell::Cell<u8> = const { std::cell::Cell::new(NODE_PASS_PACED) };
+    /// `GNOMON_MATCH_ROWS_FAST` for the match call on this thread.
+    static ROWS_FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// The rows from which that call's row loops split (`Designs::match_par_rows`).
     static MATCH_PAR_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(1 << 17) };
+}
+
+/// The node lane pass on one thread (`GNOMON_MATCH_NODE_PASS=serial`).
+const NODE_PASS_SERIAL: u8 = 0;
+/// The node lane pass split over the pool from `par_min()` rows
+///.
+const NODE_PASS_EAGER: u8 = 1;
+/// The first `NODE_PASS_HEAD` rows on the caller, the rest split only
+/// when it would take `NODE_PASS_GATE_NS` or more at their pace (default).
+const NODE_PASS_PACED: u8 = 2;
+/// Rows of a segment the paced node pass reads on the caller first.
+const NODE_PASS_HEAD: usize = 1 << 15;
+/// The paced node pass splits a segment's rest from this much work.
+const NODE_PASS_GATE_NS: u128 = 1_000_000;
+
+/// The paced node pass head and gate: `GNOMON_MATCH_NODE_PASS_HEAD=<rows>`
+/// (for the tests) reads that many rows first and always splits the rest.
+fn node_pass_head() -> (usize, u128) {
+    match std::env::var("GNOMON_MATCH_NODE_PASS_HEAD").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(h) => (h.max(1), 0),
+        None => (NODE_PASS_HEAD, NODE_PASS_GATE_NS),
+    }
+}
+
+fn node_pass_mode() -> u8 {
+    match std::env::var("GNOMON_MATCH_NODE_PASS").as_deref().map(str::trim) {
+        Ok("serial") => NODE_PASS_SERIAL,
+        Ok("eager") => NODE_PASS_EAGER,
+        _ => NODE_PASS_PACED,
+    }
 }
 
 /// Sets this thread's match thread count and split for one call; restores
@@ -1601,6 +1691,36 @@ fn gather<T: Clone + Send + Sync>(v: &[T], idx: &[usize]) -> Vec<T> {
     par_concat(idx.len(), |r| idx[r].iter().map(|&i| v[i].clone()).collect())
 }
 
+/// `gather` for plain values: each worker fills its own contiguous part
+/// of one output, so no chunk is copied again into the result (BI4 at SF10:
+/// tens of 32.9M-row columns gathered per step). The same values in the same
+/// order. `GNOMON_MATCH_ROWS_FAST=0` (read per call): `gather`.
+fn gather_copy<T: Copy + Default + Send + Sync>(v: &[T], idx: &[usize]) -> Vec<T> {
+    let n = idx.len();
+    let threads = MATCH_THREADS.with(|c| c.get());
+    let min = par_min();
+    if threads <= 1 || n < 2 * min || !ROWS_FAST.with(|c| c.get()) {
+        return gather(v, idx);
+    }
+    let width = threads.min(n / (min / 2).max(1));
+    let size = n.div_ceil(width);
+    let mut out = vec![T::default(); n];
+    let parts: Vec<std::sync::Mutex<&mut [T]>> = out.chunks_mut(size).map(std::sync::Mutex::new).collect();
+    crate::pool::run(parts.len(), |w| {
+        let mut part = parts[w].lock().expect("gather part mutex poisoned");
+        let base = w * size;
+        for (j, slot) in part.iter_mut().enumerate() {
+            *slot = v[idx[base + j]];
+        }
+    });
+    drop(parts);
+    out
+}
+
+fn rows_fast_on() -> bool {
+    ROWS_FAST.with(|c| c.get())
+}
+
 /// The distinct values of `v`, ascending: by a bitset over the values'
 /// range when it is dense enough, else by sorting.
 fn sorted_distinct(mut v: Vec<u32>) -> Vec<u32> {
@@ -1665,12 +1785,175 @@ struct Ctx<'s, 'a> {
     /// expansion node -> the semi-join a later closing step implies for its
     /// target (computed once per plan, see `semi_hints`)
     semi: Option<FxMap<usize, SemiHint>>,
+    /// Join node -> the semi-join a later closing join implies for its
+    /// right side (computed once per plan, see `wsemi_hints`), and the one
+    /// the join being run applies (`apply`'s Join takes it)
+    wsemi: Option<FxMap<usize, WinSemi>>,
+    wsemi_now: Option<WinSemi>,
     /// node -> the text of every operator downstream of it and the answer's
     /// columns (`dead_cols`), built on demand
     downstream: FxMap<usize, String>,
     /// relationship list -> the believed edge rows of the call's scope
     /// (`edge_rows_estimate`), once per call
     edge_est: std::sync::Mutex<FxMap<Option<Vec<String>>, usize>>,
+    /// the hint as the expansion takes it, as its scan hop takes it, whether
+    /// a cut was decided, and the uncut row count when it cut
+    topk: Option<TopkHint>,
+    topk_now: Option<(SortKey, usize)>,
+    topk_scan: Option<TopkScan>,
+    topk_tried: bool,
+    topk_rows: Option<usize>,
+    /// The vt_s bound of the node scan being run (`scan_vt_bound`)
+    scan_vt_now: Option<(i64, i64)>,
+    /// The last index hop's lists, by (frontier, direction, instant,
+    /// relationships): a second sub-pattern of the call reading the same
+    /// hop takes them (`GNOMON_MATCH_HOP_MEMO=0`: it reads it again)
+    hop_memo: Option<HopMemo>,
+}
+
+/// One index hop's lists and what they were read for.
+struct HopMemo {
+    frontier: Vec<u32>,
+    dir: NeighborDir,
+    t: i64,
+    rels: Option<Vec<String>>,
+    lists: NeighborLists,
+}
+
+/// `GNOMON_MATCH_HOP_MEMO=0` (read per call): every hop is read, even
+/// one the call has just read for the same frontier.
+fn hop_memo_on() -> bool {
+    std::env::var("GNOMON_MATCH_HOP_MEMO").map_or(true, |v| v.trim() != "0")
+}
+
+/// `[lo, hi)` on `<var>.vt_s` that every row passing `pred` is in:
+/// from its top-level conjuncts comparing that column with an integer
+/// literal (`None` when there is none).
+fn vt_s_bound(pred: &Expr, var: &str) -> Option<(i64, i64)> {
+    fn walk(e: &Expr, col: &str, b: &mut (i64, i64), any: &mut bool) {
+        match e {
+            Expr::And(l, r) => {
+                walk(l, col, b, any);
+                walk(r, col, b, any);
+            }
+            Expr::Cmp(op, l, r) => {
+                let (op, x) = match (l.as_ref(), r.as_ref()) {
+                    (Expr::Col(c), Expr::Lit(Lit::Int(x))) if c == col => (*op, *x),
+                    (Expr::Lit(Lit::Int(x)), Expr::Col(c)) if c == col => (
+                        match op {
+                            CmpOp::Lt => CmpOp::Gt,
+                            CmpOp::Le => CmpOp::Ge,
+                            CmpOp::Gt => CmpOp::Lt,
+                            CmpOp::Ge => CmpOp::Le,
+                            o => *o,
+                        },
+                        *x,
+                    ),
+                    _ => return,
+                };
+                match op {
+                    CmpOp::Lt => b.1 = b.1.min(x),
+                    CmpOp::Le => b.1 = b.1.min(x.saturating_add(1)),
+                    CmpOp::Gt => b.0 = b.0.max(x.saturating_add(1)),
+                    CmpOp::Ge => b.0 = b.0.max(x),
+                    CmpOp::Eq => {
+                        b.0 = b.0.max(x);
+                        b.1 = b.1.min(x.saturating_add(1));
+                    }
+                    CmpOp::Ne => return,
+                }
+                *any = true;
+            }
+            _ => {}
+        }
+    }
+    let mut b = (i64::MIN, i64::MAX);
+    let mut any = false;
+    walk(pred, &format!("{var}.vt_s"), &mut b, &mut any);
+    any.then_some(b)
+}
+
+/// `GNOMON_MATCH_SCAN_VT=0` (read per call): a node scan reads every row
+/// of its scope, whatever the filter over it keeps.
+fn scan_vt_on() -> bool {
+    std::env::var("GNOMON_MATCH_SCAN_VT").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_KEYCSR_WIDE=0` (read per call): a join's key index is a
+/// direct array only up to four slots a key, a map past it.
+fn keycsr_wide_on() -> bool {
+    std::env::var("GNOMON_MATCH_KEYCSR_WIDE").map_or(true, |v| v.trim() != "0")
+}
+
+/// Slots a key a join's direct key array may take.
+const KEYCSR_WIDE_SLOTS: u64 = 8;
+
+/// `GNOMON_MATCH_CAST_DISTINCT=0` (read per call): `cast(identity, int)`
+/// parses every row's text.
+fn cast_distinct_on() -> bool {
+    std::env::var("GNOMON_MATCH_CAST_DISTINCT").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_TYPE_PASS=serial` (read per call): a label constraint
+/// outside a filter chain tests its rows one by one and always copies them;
+/// the chain's pass looks every row's pair up and clears the mask serially
+///.
+fn type_pass_on() -> bool {
+    std::env::var("GNOMON_MATCH_TYPE_PASS").map_or(true, |v| v.trim() != "serial")
+}
+
+/// `GNOMON_MATCH_UNIQUE_JOIN=0` (read per call): an inner identity join
+/// whose right keys are distinct indexes them like any other (a CSR of
+/// groups), emits each pair, and gathers both sides.
+fn unique_join_on() -> bool {
+    std::env::var("GNOMON_MATCH_UNIQUE_JOIN").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_SCAN_FUSE=0` (read per call): a current-belief edge scan
+/// collects every believed row's address first and tests the rows after: an
+/// EdgeScan's relationship test on one thread, a scan hop's hits in a second
+/// pass, and a join that chose the scan reads it whole and matches its keys
+/// after.
+fn scan_fuse_on() -> bool {
+    std::env::var("GNOMON_MATCH_SCAN_FUSE").map_or(true, |v| v.trim() != "0")
+}
+
+/// An expression of one node variable is evaluated per distinct version
+/// from this many rows,
+const VERSION_EVAL_MIN_ROWS: usize = 1 << 16;
+/// (`GNOMON_MATCH_VERSION_EVAL_ROWS`, read per call, sets it: the tests)
+fn version_eval_min_rows() -> usize {
+    std::env::var("GNOMON_MATCH_VERSION_EVAL_ROWS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(VERSION_EVAL_MIN_ROWS)
+}
+/// when the relation holds at most 1 / this as many distinct versions.
+const VERSION_EVAL_FRACTION: usize = 8;
+
+/// The distinct-identity cast from this many rows.
+const CAST_DISTINCT_MIN_ROWS: usize = 4096;
+
+/// A hop is kept for a later sub-pattern up to this many rows.
+const HOP_MEMO_MAX_ROWS: usize = 1 << 23;
+
+/// The answer's `Order` + `Limit` over a projection of a filter chain
+/// on an expansion (`order_input`): that Expand's node, the order's first
+/// key over the projection's input, and the rows the page needs.
+#[derive(Clone, Debug)]
+struct TopkHint {
+    expand: usize,
+    key: SortKey,
+    want: usize,
+}
+
+/// The hint inside a one-hop expansion's scan: with the rows each frontier
+/// position's node stands for (its source rows).
+#[derive(Clone, Debug)]
+struct TopkScan {
+    key: SortKey,
+    want: usize,
+    srcs: Vec<u64>,
 }
 
 /// A later closing step `X -[S, dir]-> T` over the variable `X` an
@@ -1682,6 +1965,36 @@ struct SemiHint {
     target: String,
     rel: Option<String>,
     dir: NeighborDir,
+}
+
+/// A later closing join `Join(on: n.uid = e.<near>, t.uid = e.<far>)`
+/// variables), with `n` bound by a node join on a column `near` of a join
+/// `J` below it: `J`'s right rows may only take a `near` that has an edge
+/// of `e`'s types to a `far` value of `J`'s left rows. `back` is the
+/// direction read from the `far` values. Only row-wise operators read by one
+/// consumer lie between `J` and the closing join, so `J`'s right rows that
+/// fail the test make only rows the closing join drops.
+#[derive(Clone, Debug)]
+struct WinSemi {
+    far: String,
+    near: String,
+    rels: Option<Vec<String>>,
+    back: NeighborDir,
+}
+
+/// `GNOMON_MATCH_WINDOW_SEMI=0` (read per call): a closing join over an
+/// EdgeScan filters nothing below it; the joins below make every row
+///. BI17 at SF10, window: 50.5M rows made, 913 kept.
+fn window_semi_on() -> bool {
+    std::env::var("GNOMON_MATCH_WINDOW_SEMI").map_or(true, |v| v.trim() != "0")
+}
+
+/// A join's right side is filtered by a closing join's semi-join from
+/// this many rows (`GNOMON_MATCH_WINDOW_SEMI_ROWS`, read per call, sets it:
+/// the tests); fewer rows make few rows above.
+const WINDOW_SEMI_MIN_ROWS: usize = 1 << 16;
+fn window_semi_min_rows() -> usize {
+    std::env::var("GNOMON_MATCH_WINDOW_SEMI_ROWS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(WINDOW_SEMI_MIN_ROWS)
 }
 
 impl<'s, 'a> Ctx<'s, 'a> {
@@ -1883,6 +2196,20 @@ impl<'s, 'a> Ctx<'s, 'a> {
         vt_mode: VtMode,
         rel_types: Option<&[String]>,
     ) -> DResult<Vec<Addr>> {
+        self.scan_addrs_vt(kind, belief, vt_mode, rel_types, None)
+    }
+
+    /// `scan_addrs`, the current-belief scan skipping the rows whose `vt_s`
+    /// filter, implies, which still tests every row it gets; the segments
+    /// whose `vt_s` span misses it are not read).
+    fn scan_addrs_vt(
+        &mut self,
+        kind: RowKind,
+        belief: BeliefMode,
+        vt_mode: VtMode,
+        rel_types: Option<&[String]>,
+        vt_s: Option<(i64, i64)>,
+    ) -> DResult<Vec<Addr>> {
         let plan = self.plan;
         let mut out: Vec<Addr> = Vec::new();
         if belief == BeliefMode::Current {
@@ -1909,6 +2236,12 @@ impl<'s, 'a> Ctx<'s, 'a> {
             // scan order, read in chunks on the pool and concatenated in order
             let mut pieces: Vec<(usize, usize, usize)> = Vec::new();
             for (k, p) in plans.iter().enumerate() {
+                if let Some((lo, hi)) = vt_s {
+                    let h = segs[p.idx].seg.header();
+                    if h.vt_min >= hi || h.vt_max < lo {
+                        continue;
+                    }
+                }
                 for &(lo, hi) in &p.ranges {
                     let mut a = lo;
                     while a < hi {
@@ -1931,6 +2264,9 @@ impl<'s, 'a> Ctx<'s, 'a> {
                             if !al[codes[row] as usize] {
                                 continue;
                             }
+                        }
+                        if vt_s.is_some_and(|(lo, hi)| s.vt_s[row] < lo || s.vt_s[row] >= hi) {
+                            continue;
                         }
                         if !this.vt_ok(s.vt_s[row], s.vt_e(row), vt_mode) {
                             continue;
@@ -1972,10 +2308,102 @@ impl<'s, 'a> Ctx<'s, 'a> {
         Ok(out)
     }
 
+    /// The current-belief edge scan of `scan_addrs` (the same believed
+    /// pieces, the same row tests, in the same chunks on the pool), each kept
+    /// row handed to `emit` with its segment index and row instead of
+    /// collected as an address: the caller's per-row work runs where the row
+    /// is read, in scan order, with no address list in between. Returns what
+    /// `emit` pushed and the rows the scan kept.
+    fn edge_scan_with<T: Send>(
+        &self,
+        vt_mode: VtMode,
+        rel_types: Option<&[String]>,
+        emit: impl Fn(&SegCols<'a>, usize, usize, &mut Vec<T>) + Sync,
+    ) -> DResult<(Vec<T>, usize)> {
+        let plan = self.plan;
+        let segs = &self.edges;
+        let targets: Vec<ScanTarget<'_, MmapSource>> =
+            segs.iter().map(|s| ScanTarget { segment: s.seg, lane: s.seg.header().lane, id: s.id }).collect();
+        let set = ScanSet::new(targets).with_closes(self.closes.clone()).with_designs(self.store.designs());
+        let req = ScanRequest {
+            as_of_tt: plan.as_of,
+            vt_min: Some(plan.t_a),
+            vt_max: Some(plan.t_b),
+            rel_types: rel_types.map(<[String]>::to_vec),
+            ..ScanRequest::default()
+        };
+        let (plans, _) = set.plan_believed(&req)?;
+        let mut pieces: Vec<(usize, usize, usize)> = Vec::new();
+        for (k, p) in plans.iter().enumerate() {
+            for &(lo, hi) in &p.ranges {
+                let mut a = lo;
+                while a < hi {
+                    let b = (a + SCAN_PIECE).min(hi);
+                    pieces.push((k, a, b));
+                    a = b;
+                }
+            }
+        }
+        let kept = std::sync::atomic::AtomicUsize::new(0);
+        let out = par_concat_from(pieces.len(), (4 * par_min()).div_ceil(SCAN_PIECE).max(2), |r| {
+            let mut out = Vec::new();
+            let mut n = 0usize;
+            for &(k, lo, hi) in &pieces[r] {
+                let p = &plans[k];
+                let s = &segs[p.idx];
+                let allowed = p.rel_allowed.as_deref();
+                for row in lo..hi {
+                    if let (Some(al), Some(codes)) = (allowed, p.rel_codes) {
+                        if !al[codes[row] as usize] {
+                            continue;
+                        }
+                    }
+                    if !self.vt_ok(s.vt_s[row], s.vt_e(row), vt_mode) {
+                        continue;
+                    }
+                    n += 1;
+                    emit(s, p.idx, row, &mut out);
+                }
+            }
+            kept.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            out
+        });
+        Ok((out, kept.into_inner()))
+    }
+
     /// Whether the scan reads fewer rows than a seek of `est` adjacency rows
     /// (`SEEK_ROW_FACTOR`). The estimate is at most the edge segments' stored
     /// rows, so above those the scan wins without it, and far below them
     /// (`SEEK_STORED_FACTOR`) the seek does.
+    /// Whether a strided `PRE_PROBE`-key sample of a sorted frontier
+    /// already puts the seek past `PRE_PROBE_MARGIN` times the edge
+    /// segments' stored rows, so the scan wins without the full probe.
+    fn preprobe_says_scan(&self, f: &[u32], dir: NeighborDir, va: i64, vb: i64, rels: Option<&[String]>) -> DResult<bool> {
+        if !preprobe_on() || f.len() <= SEEK_PROBE {
+            return Ok(false);
+        }
+        let t0 = trace().then(std::time::Instant::now);
+        let step = f.len() / PRE_PROBE;
+        let sample: Vec<u32> = (0..PRE_PROBE).map(|i| f[i * step]).collect();
+        let nb = self.store.neighbors_batch(&sample, dir, self.plan.as_of, Some(va), Some(vb), rels)?;
+        let est = nb.len() * f.len() / PRE_PROBE;
+        let stored: usize = self.edges.iter().map(|s| s.seg.rows() as usize).sum();
+        let margin = if preprobe_lean_on() { (1, 1) } else { PRE_PROBE_MARGIN };
+        let scan = est.saturating_mul(SEEK_ROW_FACTOR).saturating_mul(margin.1) > stored.saturating_mul(margin.0);
+        if trace() {
+            eprintln!(
+                "match trace:     pre-probe: {} of {} keys, {} rows estimated, {} stored: scan {} in {:.1} ms",
+                PRE_PROBE,
+                f.len(),
+                est,
+                stored,
+                scan,
+                lap(t0).as_secs_f64() * 1e3
+            );
+        }
+        Ok(scan)
+    }
+
     fn scan_beats_seek(&self, est: usize, rel_types: Option<&[String]>) -> DResult<bool> {
         let stored: usize = self.edges.iter().map(|s| s.seg.rows() as usize).sum();
         let need = est.saturating_mul(SEEK_ROW_FACTOR);
@@ -2052,7 +2480,13 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// when they are more than `1 / LABEL_FIRST_FRACTION` of the node lane
     /// (the believed plan of the whole lane is then the cheaper route). The
     /// same rows as `scan_addrs`: the same belief and valid-time tests.
-    fn labelled_node_addrs(&mut self, labels: &[String], belief: BeliefMode, vt_mode: VtMode) -> DResult<Option<Vec<Addr>>> {
+    fn labelled_node_addrs(
+        &mut self,
+        labels: &[String],
+        belief: BeliefMode,
+        vt_mode: VtMode,
+        vt_s: Option<(i64, i64)>,
+    ) -> DResult<Option<Vec<Addr>>> {
         let mut per: Vec<Vec<u32>> = Vec::with_capacity(self.nodes.len());
         let (mut rows, mut hits) = (0usize, 0usize);
         for si in 0..self.nodes.len() {
@@ -2087,6 +2521,9 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 let mut part = Vec::new();
                 for &r in &mine[rg] {
                     let row = r as usize;
+                    if vt_s.is_some_and(|(lo, hi)| s.vt_s[row] < lo || s.vt_s[row] >= hi) {
+                        continue;
+                    }
                     if !this.vt_ok(s.vt_s[row], s.vt_e(row), vt_mode) {
                         continue;
                     }
@@ -2110,22 +2547,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 return Ok(v.clone());
             }
         }
-        let mut by_ref: FxMap<u32, Vec<u32>> = FxMap::default();
-        for (row, &t) in s.tag.iter().enumerate() {
-            by_ref.entry(t).or_default().push(row as u32);
-        }
-        let strings = s.seg.strings()?;
-        let mut by_label: HashMap<String, Vec<u32>> = HashMap::new();
-        for (r, rows) in by_ref {
-            let l = strings.get(r)?.to_string();
-            by_label.entry(l).or_default().extend(rows);
-        }
-        let mut v: Vec<(String, Vec<u32>)> = by_label.into_iter().collect();
-        for (_, rows) in v.iter_mut() {
-            rows.sort_unstable();
-        }
-        v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let v = Arc::new(v);
+        let v = label_rows_of(s.tag, s.seg)?;
         if let Ok(mut g) = self.store.match_label_rows.lock() {
             g.insert(s.id, v.clone());
         }
@@ -2135,7 +2557,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// Every node version (segment order) whose row passes `pick`, valid in
     /// Σ's window (`vt_mode`) and admitted by `belief` at `as_of`: a row loop,
     /// belief decided per row.
-    fn node_rows_where(&self, belief: BeliefMode, vt_mode: VtMode, pick: impl Fn(&SegCols<'a>, usize) -> bool) -> DResult<Vec<Addr>> {
+    fn node_rows_where(&self, belief: BeliefMode, vt_mode: VtMode, pick: impl Fn(&SegCols<'a>, usize) -> bool + Sync) -> DResult<Vec<Addr>> {
         let mut out = Vec::new();
         for si in 0..self.nodes.len() {
             out.extend(self.node_rows_in(si, belief, vt_mode, &pick)?);
@@ -2145,13 +2567,57 @@ impl<'s, 'a> Ctx<'s, 'a> {
 
     /// `node_rows_where` over one segment: the rows `pick` keeps, in row
     /// order.
-    fn node_rows_in(&self, si: usize, belief: BeliefMode, vt_mode: VtMode, pick: impl Fn(&SegCols<'a>, usize) -> bool) -> DResult<Vec<Addr>> {
+    fn node_rows_in(&self, si: usize, belief: BeliefMode, vt_mode: VtMode, pick: impl Fn(&SegCols<'a>, usize) -> bool + Sync) -> DResult<Vec<Addr>> {
+        let s = &self.nodes[si];
+        if s.seg.tt_s_bounds().0 > self.plan.as_of {
+            return Ok(Vec::new());
+        }
+        // The segment's rows in contiguous chunks on the pool, kept in
+        // row order (IC2 at SF10: the batch version read of 116,540 targets,
+        // one pass over every node row, ~0.4 s on one thread).
+        // `GNOMON_MATCH_NODE_PASS=serial` (read per call): one thread.
+        // The first NODE_PASS_HEAD rows run here first, and the rest is
+        // split only when, at their pace, it would take NODE_PASS_GATE_NS or
+        // more: a small store's pass is cheaper than
+        // waking the pool (`GNOMON_MATCH_NODE_PASS=eager`: always split). The
+        // pool's part is a function of its own, so that the row loop here
+        // compiles as the one-thread loop (with the pool's closure in this
+        let n = s.tag.len();
+        let mode = NODE_PASS_PAR.with(|c| c.get());
+        if mode == NODE_PASS_SERIAL || n < par_min() {
+            return self.node_rows_range(si, 0..n, belief, vt_mode, &pick);
+        }
+        if mode == NODE_PASS_EAGER {
+            return self.node_rows_par(si, 0..n, belief, vt_mode, &pick);
+        }
+        let (head, gate) = node_pass_head();
+        let head = head.min(n);
+        let t0 = std::time::Instant::now();
+        let mut out = self.node_rows_range(si, 0..head, belief, vt_mode, &pick)?;
+        let rest_ns = t0.elapsed().as_nanos().saturating_mul((n - head) as u128) / head.max(1) as u128;
+        if head < n {
+            if rest_ns < gate {
+                out.extend(self.node_rows_range(si, head..n, belief, vt_mode, &pick)?);
+            } else {
+                out.extend(self.node_rows_par(si, head..n, belief, vt_mode, &pick)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `node_rows_in` over the rows `r` of segment `si`, on this thread.
+    #[inline(always)]
+    fn node_rows_range(
+        &self,
+        si: usize,
+        r: std::ops::Range<usize>,
+        belief: BeliefMode,
+        vt_mode: VtMode,
+        pick: &impl Fn(&SegCols<'a>, usize) -> bool,
+    ) -> DResult<Vec<Addr>> {
         let s = &self.nodes[si];
         let mut out = Vec::new();
-        if s.seg.tt_s_bounds().0 > self.plan.as_of {
-            return Ok(out);
-        }
-        for row in 0..s.tag.len() {
+        for row in r {
             if !pick(s, row) || !self.vt_ok(s.vt_s[row], s.vt_e(row), vt_mode) {
                 continue;
             }
@@ -2161,6 +2627,21 @@ impl<'s, 'a> Ctx<'s, 'a> {
             }
         }
         Ok(out)
+    }
+
+    /// `node_rows_in` over the rows `r` of segment `si`, in contiguous chunks
+    /// on the pool, kept in row order.
+    #[inline(never)]
+    fn node_rows_par(
+        &self,
+        si: usize,
+        r: std::ops::Range<usize>,
+        belief: BeliefMode,
+        vt_mode: VtMode,
+        pick: &(impl Fn(&SegCols<'a>, usize) -> bool + Sync),
+    ) -> DResult<Vec<Addr>> {
+        let base = r.start;
+        par_try_concat(r.len(), |q| self.node_rows_range(si, q.start + base..q.end + base, belief, vt_mode, pick))
     }
 
     fn believed(&self, kind: RowKind, a: Addr, belief: BeliefMode) -> Result<bool> {
@@ -2547,20 +3028,68 @@ fn match_ids(lu: &[u64], ru: &[u64], kind: JoinKind) -> DResult<(Vec<usize>, Vec
     Ok((li, ri))
 }
 
+/// The right keys' slots of an inner identity join when every key is
+/// distinct and below a direct array's bound (as `KeyCsr::build`'s, eight
+/// slots a key): `pos[key]` is its row, `u32::MAX` none; None otherwise.
+fn unique_slots(ru: &[u64]) -> Option<Vec<u32>> {
+    let max = *ru.iter().max()?;
+    if max >= (ru.len() as u64).saturating_mul(KEYCSR_WIDE_SLOTS).max(64) || ru.len() >= u32::MAX as usize {
+        return None;
+    }
+    let mut pos = vec![u32::MAX; max as usize + 1];
+    for (j, &k) in ru.iter().enumerate() {
+        let slot = &mut pos[k as usize];
+        if *slot != u32::MAX {
+            return None;
+        }
+        *slot = j as u32;
+    }
+    Some(pos)
+}
+
 /// A CSR index of join keys: for each distinct key, its rows in ascending
 /// order. Keys below a bound (dense node ids) index a direct array; others
 /// (two identities in one u64) an FxMap to a dense slot.
 struct KeyCsr {
     slots: Option<FxMap<u64, u32>>,
+    /// The map's keys are `key_mixed` (`GNOMON_MATCH_KEY_MIX`)
+    mixed: bool,
     offsets: Vec<u32>,
     rows: Vec<u32>,
+}
+
+/// `GNOMON_MATCH_KEY_MIX=0` (read per index build): a join key index's map
+/// hashes the packed key as it is. Two identity keys pack as
+/// `first << 32 | second`, and the map's multiplicative hash puts a key in a
+/// bucket by its low bits alone, so keys that share their second identity
+/// share a probe chain (BI17 at SF10, window: 15.7M keys of a two-ended
+/// closing hop, one probe chain per far person, 39M probes 121 s).
+fn key_mix_on() -> bool {
+    std::env::var("GNOMON_MATCH_KEY_MIX").map_or(true, |v| v.trim() != "0")
+}
+
+/// A bijection of u64 keys spreading every input bit over the low bits
+/// (the splitmix64 finaliser): the map's slots are the same keys, renamed, so
+/// a slot is a key's first appearance as before.
+#[inline]
+fn key_mixed(k: u64) -> u64 {
+    let mut z = k;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 impl KeyCsr {
     fn build(keys: &[u64]) -> KeyCsr {
         let max = keys.iter().copied().max().unwrap_or(0);
-        // a direct array only where it is no larger than four slots a key
-        let bound = ((keys.len() as u64) * 4).max(64);
+        // a direct array only where it is no larger than four slots a key;
+        // Eight (`GNOMON_MATCH_KEYCSR_WIDE=0`: four), filled in place
+        let wide = keycsr_wide_on();
+        let bound = ((keys.len() as u64) * if wide { KEYCSR_WIDE_SLOTS } else { 4 }).max(64);
+        if wide && max < bound {
+            return Self::build_direct(keys, max as usize + 1);
+        }
+        let mix = key_mix_on();
         let (slots, gid): (Option<FxMap<u64, u32>>, Vec<u32>) = if max < bound {
             (None, keys.iter().map(|&k| k as u32).collect())
         } else {
@@ -2569,7 +3098,7 @@ impl KeyCsr {
                 .iter()
                 .map(|&k| {
                     let n = m.len() as u32;
-                    *m.entry(k).or_insert(n)
+                    *m.entry(if mix { key_mixed(k) } else { k }).or_insert(n)
                 })
                 .collect();
             (Some(m), g)
@@ -2591,7 +3120,29 @@ impl KeyCsr {
             rows[pos[g as usize] as usize] = r as u32;
             pos[g as usize] += 1;
         }
-        KeyCsr { slots, offsets, rows }
+        KeyCsr { slots, mixed: mix, offsets, rows }
+    }
+
+    /// The direct array without a second copy of the offsets: counts at
+    /// each key's own slot, summed to group ends, then the rows placed from
+    /// the last down, which leaves each slot at its group's start. Each
+    /// group's rows ascend, as `build` lays them.
+    fn build_direct(keys: &[u64], groups: usize) -> KeyCsr {
+        let mut offsets = vec![0u32; groups + 1];
+        for &k in keys {
+            offsets[k as usize] += 1;
+        }
+        for g in 1..groups {
+            offsets[g] += offsets[g - 1];
+        }
+        offsets[groups] = keys.len() as u32;
+        let mut rows = vec![0u32; keys.len()];
+        for (r, &k) in keys.iter().enumerate().rev() {
+            let g = k as usize;
+            offsets[g] -= 1;
+            rows[offsets[g] as usize] = r as u32;
+        }
+        KeyCsr { slots: None, mixed: false, offsets, rows }
     }
 
     fn rows(&self, k: u64) -> &[u32] {
@@ -2602,7 +3153,7 @@ impl KeyCsr {
                 }
                 k as usize
             }
-            Some(m) => match m.get(&k) {
+            Some(m) => match m.get(&if self.mixed { key_mixed(k) } else { k }) {
                 Some(&g) => g as usize,
                 None => return &[],
             },
@@ -2639,6 +3190,58 @@ const NODE_SEEK_FRACTION: usize = 4;
 /// by seek, ~0.1 us a row by the scan and the CSR join).
 const SEEK_PROBE: usize = 1024;
 const SEEK_ROW_FACTOR: usize = 40;
+
+
+/// Before the `SEEK_PROBE` probe, a strided sample of this many keys.
+/// The probe reads its keys' adjacency segment by segment (IC3 at SF1: 1,024
+/// of 2,567 friends, 160 ms, then a 70 ms scan wins by 40x); the sample costs
+/// a sixteenth of it and decides alone when it extrapolates past the scan's
+/// stored rows by `PRE_PROBE_MARGIN`. Either path returns the same rows.
+const PRE_PROBE: usize = 64;
+/// As a ratio (3/2): the sample read 0.70x of the full probe's rows on IC3
+/// window at SF1; a wrong scan costs at most the scan.
+const PRE_PROBE_MARGIN: (usize, usize) = (3, 2);
+
+/// The sample decides the scan as soon as it extrapolates past the
+/// stored rows (no margin): a sample that leans to the scan is not checked by
+/// the `SEEK_PROBE` probe, whose rows the scan discards (IC9 at SF10: 64 of
+/// 10,840 friends extrapolate 7.3M rows x 40 > 213M stored, short of the 3/2
+/// margin; the probe then reads 1,024 friends' messages, 606 ms, to confirm
+/// it, est. 10.7M). A sample that overestimates near the rule costs at most
+/// the scan's own rows over the seek's; a sample that leans to the seek is
+/// probed as before, its probe's rows kept. Either path returns the same rows.
+/// `GNOMON_MATCH_PREPROBE_LEAN=0` (read per decision): the 3/2 margin
+///.
+fn preprobe_lean_on() -> bool {
+    std::env::var("GNOMON_MATCH_PREPROBE_LEAN").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_TOPK_HOP=0` (read per call): an answer's order and
+/// limit never cut the expansion under them.
+fn topk_hop_on() -> bool {
+    std::env::var("GNOMON_MATCH_TOPK_HOP").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_PREPROBE=0` (read once per process): no pre-probe, the
+/// `SEEK_PROBE` probe alone decides.
+fn preprobe_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNOMON_MATCH_PREPROBE").map_or(true, |v| v.trim() != "0"))
+}
+
+/// `GNOMON_MATCH_SCAN_GROUP=serial` (read once per process): the scan hop
+/// groups and sorts its hits on one thread.
+/// `GNOMON_MATCH_SCAN_PREFILTER=0` (read once per process): a scan hop
+/// groups every hit before the step's target predicates.
+fn scan_prefilter_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNOMON_MATCH_SCAN_PREFILTER").map_or(true, |v| v.trim() != "0"))
+}
+
+fn scan_group_parallel() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNOMON_MATCH_SCAN_GROUP").map_or(true, |v| v.trim() != "serial"))
+}
 
 /// The scan's own estimate plans every edge segment's believed ranges: 17-20
 /// ms at SF1 under an as-of belief, against a 1.5-3 ms probe (BI7's two
@@ -2690,8 +3293,15 @@ impl<'s, 'a> Ctx<'s, 'a> {
         }
         let node = self.plan.nodes[id].clone();
         let t_node = std::time::Instant::now();
+        // A node scan read only by a filter skips the rows whose vt_s
+        // the filter's conjuncts exclude (`GNOMON_MATCH_SCAN_VT=0`: it reads
+        // them all and the filter drops them)
+        self.scan_vt_now = if matches!(node.op, Op::NodeScan { uids: None, .. }) { self.scan_vt_bound(id) } else { None };
         let semi_expand = matches!(node.op, Op::Expand { .. }) && self.hints().contains_key(&id);
-        let out = if let Some(plan) = self.walk_distinct(id) {
+        let interval = if matches!(node.op, Op::Filter(_)) { self.interval_chain(id) } else { None };
+        let out = if let Some(ch) = interval {
+            self.run_interval_chain(id, &ch, memo)?
+        } else if let Some(plan) = self.walk_distinct(id) {
             self.run_walk_distinct(&plan, memo)?
         } else if let Some(chain) = self.filter_chain(id) {
             self.run_filter_chain(&chain, memo)?
@@ -2718,14 +3328,28 @@ impl<'s, 'a> Ctx<'s, 'a> {
             let want = self.uid_column(&input, &target)?;
             self.expand_to(input, &from, &into, hops, rel_type.as_deref(), dir, edge_var.as_deref(), Some(&want))?
         } else if let Some((seek, lcol)) = self.seek_plan(&node) {
-            self.index_join(&node, seek, &lcol, memo)?
+            let ws = self.wsemi_for(id);
+            let out = self.index_join(&node, seek, &lcol, memo, ws);
+            self.wsemi_now = None;
+            out?
         } else {
+            let ws = self.wsemi_for(id);
             let mut inputs = Vec::with_capacity(node.inputs.len());
             for &i in &node.inputs {
                 inputs.push(self.run(i, memo)?);
             }
-            self.apply(&node.op, inputs)?
+            if ws.is_some() {
+                // Set after the inputs ran, taken by this node's Join
+                // (any other node leaves a hint set by the join above it)
+                self.wsemi_now = ws;
+                let out = self.apply(&node.op, inputs);
+                self.wsemi_now = None;
+                out?
+            } else {
+                self.apply(&node.op, inputs)?
+            }
         };
+        self.scan_vt_now = None;
         check_rows(out.n)?;
         let mut out = out;
         self.drop_dead_cols(id, &mut out);
@@ -2859,8 +3483,18 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// the distinct left keys only when they are few (the rows the scan holds
     /// for them, in the scan's order, so the join's rows and their order are
     /// the scan's), else the whole scan.
-    fn index_join(&mut self, node: &PNode, seek: Seek, lcol: &str, memo: &mut FxMap<usize, Rel>) -> DResult<Rel> {
+    fn index_join(
+        &mut self,
+        node: &PNode,
+        seek: Seek,
+        lcol: &str,
+        memo: &mut FxMap<usize, Rel>,
+        ws: Option<WinSemi>,
+    ) -> DResult<Rel> {
         let left = self.run(node.inputs[0], memo)?;
+        // Set after the left side ran; the right side is an edge scan
+        // (no join under it), so this node's Join takes it
+        self.wsemi_now = ws;
         // a node variable's identities, or a column of identities (an edge end)
         let keys = match self.uid_column(&left, lcol) {
             Ok(ids) => Some(ids),
@@ -2884,6 +3518,13 @@ impl<'s, 'a> Ctx<'s, 'a> {
             Seek::Edges { .. } => (n_ids / INDEX_JOIN_FRACTION).max(INDEX_JOIN_MIN),
         };
         if f.is_empty() || f.len() > most || f.contains(&NO_ID) {
+            // Past the seek's key bound, a current-belief edge scan
+            // still keeps only the rows at the keys (`scan_join`)
+            if let Seek::Edges { scan, dir } = seek {
+                if !f.is_empty() && !f.contains(&NO_ID) {
+                    return self.scan_join(node, scan, dir, &f, left, memo);
+                }
+            }
             let right = self.run(node.inputs[1], memo)?;
             return self.apply(&node.op, vec![left, right]);
         }
@@ -2927,6 +3568,10 @@ impl<'s, 'a> Ctx<'s, 'a> {
                     unreachable!("seek_plan checks the op")
                 };
                 let (va, vb, as_of) = (self.plan.t_a, self.plan.t_b, self.plan.as_of);
+                let scan_id = scan;
+                if self.preprobe_says_scan(&f, dir, va, vb, rel_types.as_deref())? {
+                    return self.scan_join(node, scan_id, dir, &f, left, memo);
+                }
                 let probe = f.len().min(SEEK_PROBE);
                 let t0 = std::time::Instant::now();
                 let nb = self.store.neighbors_batch(&f[..probe], dir, as_of, Some(va), Some(vb), rel_types.as_deref())?;
@@ -2947,8 +3592,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
                         );
                     }
                     if scan {
-                        let right = self.run(node.inputs[1], memo)?;
-                        return self.apply(&node.op, vec![left, right]);
+                        return self.scan_join(node, scan_id, dir, &f, left, memo);
                     }
                     parts.push(self.store.neighbors_batch(&f[probe..], dir, as_of, Some(va), Some(vb), rel_types.as_deref())?);
                 }
@@ -2994,18 +3638,70 @@ impl<'s, 'a> Ctx<'s, 'a> {
                         .map(|a| (self.nodes[seg_of(a)].a[row_of(a)], a))
                         .collect()
                 };
+                let t_pass = lap(t0);
                 let wanted: Option<Vec<u32>> = labels.as_ref().map(|l| l.iter().map(|s| self.labels.code(s)).collect());
                 if let Some(w) = &wanted {
-                    let mut kept = Vec::with_capacity(pairs.len());
-                    for (id, a) in pairs {
-                        if w.contains(&self.label_code(a)?) {
-                            kept.push((id, a));
+                    if type_pass_on() && pairs.len() >= par_min() {
+                        // As the chain's label pass (`GNOMON_MATCH_TYPE_PASS`):
+                        // each row's (segment, tag) on the pool, each distinct
+                        // pair resolved once in row order, the rows kept on the
+                        // pool (BIH-R5 at SF10: 7.3M message versions)
+                        let this: &Self = self;
+                        let tags: Vec<u64> = par_concat(pairs.len(), |r| {
+                            pairs[r]
+                                .iter()
+                                .map(|&(_, a)| ((seg_of(a) as u64) << 32) | this.nodes[seg_of(a)].tag[row_of(a)] as u64)
+                                .collect()
+                        });
+                        // each chunk's first row of each pair, then the pairs in
+                        // the order of their first rows
+                        let firsts: Vec<(usize, u64)> = par_concat(tags.len(), |r| {
+                            let mut seen: FxMap<u64, ()> = FxMap::default();
+                            let mut out = Vec::new();
+                            for i in r {
+                                if seen.insert(tags[i], ()).is_none() {
+                                    out.push((i, tags[i]));
+                                }
+                            }
+                            out
+                        });
+                        let mut ok: FxMap<u64, bool> = FxMap::default();
+                        for (i, t) in firsts {
+                            if let std::collections::hash_map::Entry::Vacant(e) = ok.entry(t) {
+                                let c = self.label_code(pairs[i].1)?;
+                                e.insert(w.contains(&c));
+                            }
                         }
+                        // every pair passing keeps every row as it is
+                        if !ok.values().all(|&b| b) {
+                            let ok = &ok;
+                            let tags = &tags;
+                            let pr = &pairs;
+                            let kept: Vec<(u32, Addr)> =
+                                par_concat(pr.len(), |r| r.filter(|&i| ok[&tags[i]]).map(|i| pr[i]).collect());
+                            pairs = kept;
+                        }
+                    } else {
+                        let mut kept = Vec::with_capacity(pairs.len());
+                        for (id, a) in pairs {
+                            if w.contains(&self.label_code(a)?) {
+                                kept.push((id, a));
+                            }
+                        }
+                        pairs = kept;
                     }
-                    pairs = kept;
                 }
+                let t_label = lap(t0);
                 pairs.sort_unstable_by_key(|p| p.1);
                 pairs.dedup();
+                if trace() {
+                    eprintln!(
+                        "match trace:     node seek parts: pass {:.1} ms, labels {:.1} ms, sort {:.1} ms",
+                        t_pass.as_secs_f64() * 1e3,
+                        (t_label - t_pass).as_secs_f64() * 1e3,
+                        (lap(t0) - t_label).as_secs_f64() * 1e3
+                    );
+                }
                 Rel {
                     n: pairs.len(),
                     vars: vec![(var, Var::Node { ids: pairs.iter().map(|p| p.0).collect(), ver: pairs.iter().map(|p| p.1).collect(), depth: None })],
@@ -3022,6 +3718,69 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 lap(t0).as_secs_f64() * 1e3
             );
         }
+        self.apply(&node.op, vec![left, right])
+    }
+
+    /// The scan side of a current-belief edge seek that chose the scan: the
+    /// the EdgeScan itself, read by this Join alone, keyed on one end, the
+    /// scan keeps only the rows whose join end is one of the left keys `f`
+    /// (sorted, distinct, no `NO_ID`), in the scan's order. The join drops
+    /// every other row and keeps the rest in that order, so its rows and
+    /// their order are the same (BIH-R5 at SF10: 26.5M scanned rows, 7.3M
+    /// joined). The scan's kept rows still meet the row budget.
+    /// `GNOMON_MATCH_SCAN_FUSE=0`: the scan whole.
+    fn scan_join(
+        &mut self,
+        node: &PNode,
+        scan: usize,
+        dir: NeighborDir,
+        f: &[u32],
+        left: Rel,
+        memo: &mut FxMap<usize, Rel>,
+    ) -> DResult<Rel> {
+        let direct = scan_fuse_on()
+            && scan == node.inputs[1]
+            && dir != NeighborDir::Both
+            && self.uses(scan) == 1
+            && !memo.contains_key(&scan)
+            && !f.is_empty();
+        let Op::EdgeScan { var, rel_types, belief: BeliefMode::Current, vt_mode } = self.plan.nodes[scan].op.clone() else {
+            let right = self.run(node.inputs[1], memo)?;
+            return self.apply(&node.op, vec![left, right]);
+        };
+        if !direct {
+            let right = self.run(node.inputs[1], memo)?;
+            return self.apply(&node.op, vec![left, right]);
+        }
+        let t0 = trace().then(std::time::Instant::now);
+        let max = f[f.len() - 1] as usize;
+        let mut bits = vec![0u64; max / 64 + 1];
+        for &x in f {
+            bits[x as usize / 64] |= 1 << (x % 64);
+        }
+        let bits = &bits;
+        let want = |x: u32| bits.get(x as usize / 64).is_some_and(|w| w >> (x % 64) & 1 == 1);
+        let codes: Option<Vec<u32>> = rel_types.as_ref().map(|r| r.iter().filter_map(|s| self.rels.get(s)).collect());
+        let codes = &codes;
+        let src_end = dir == NeighborDir::Out;
+        let (addrs, kept) = self.edge_scan_with(vt_mode, rel_types.as_deref(), |s, si, row, out: &mut Vec<Addr>| {
+            let k = if src_end { s.a[row] } else { s.b[row] };
+            if want(k) && codes.as_ref().is_none_or(|c| c.contains(&s.rel_map[s.rel[row] as usize])) {
+                out.push(addr(si, row as u32));
+            }
+        })?;
+        check_rows(kept)?;
+        if let Some(t0) = t0 {
+            eprintln!(
+                "match trace:   scan join ({}): {} keys, {} scanned rows -> {} at the keys in {:.1} ms",
+                if src_end { "src" } else { "dst" },
+                f.len(),
+                kept,
+                addrs.len(),
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        let right = Rel { n: addrs.len(), vars: vec![(var, Var::Edge { ver: addrs })], cols: Vec::new() };
         self.apply(&node.op, vec![left, right])
     }
 
@@ -3107,15 +3866,72 @@ impl<'s, 'a> Ctx<'s, 'a> {
         if !is_pred(&self.plan.nodes[id].op) {
             return None;
         }
-        let mut preds = vec![self.plan.nodes[id].op.clone()];
+        // A filter every row passes is left out of the run
+        let mut dropped = false;
+        let mut preds = Vec::new();
+        let mut take = |at: usize, preds: &mut Vec<Op>| {
+            if self.always_passes(at) {
+                dropped = true;
+            } else {
+                preds.push(self.plan.nodes[at].op.clone());
+            }
+        };
+        take(id, &mut preds);
         let mut cur = self.plan.nodes[id].inputs[0];
         while is_pred(&self.plan.nodes[cur].op) && self.uses(cur) == 1 {
-            preds.push(self.plan.nodes[cur].op.clone());
+            take(cur, &mut preds);
             cur = self.plan.nodes[cur].inputs[0];
         }
         preds.reverse();
-        let under_expand = matches!(self.plan.nodes[cur].op, Op::Expand { .. }) && self.uses(cur) == 1;
-        (preds.len() > 1 || under_expand).then_some((preds, cur))
+        let under_expand = (matches!(self.plan.nodes[cur].op, Op::Expand { .. })
+            || (matches!(self.plan.nodes[cur].op, Op::CoValidExpand(_)) && covalid_local_on()))
+            && self.uses(cur) == 1;
+        (preds.len() > 1 || under_expand || dropped).then_some((preds, cur))
+    }
+
+    /// `Filter(a.eid != b.eid)`, the compiler's test that two steps of a
+    /// pattern bind two different edges, where plain one-hop Expands of the
+    /// chain below it bound `a` and `b` with two different relationship
+    /// types. An Expand binds only edges of its type and never a null edge,
+    /// and an edge's identity includes its relationship (`same_eid`), so
+    /// every row passes (BI4 at SF10: three such filters over 32.9M rows,
+    /// ~0.85 s each). Any other binding of either name, or a chain that
+    /// leaves the run of filters and expansions first: kept.
+    /// `GNOMON_MATCH_EDGE_DISTINCT=0` (read per call): every such filter is
+    /// evaluated.
+    fn always_passes(&self, id: usize) -> bool {
+        if std::env::var("GNOMON_MATCH_EDGE_DISTINCT").is_ok_and(|v| v.trim() == "0") {
+            return false;
+        }
+        let Op::Filter(Expr::Cmp(CmpOp::Ne, l, r)) = &self.plan.nodes[id].op else { return false };
+        let (Expr::Col(l), Expr::Col(r)) = (l.as_ref(), r.as_ref()) else { return false };
+        let (Some(a), Some(b)) = (l.strip_suffix(".eid"), r.strip_suffix(".eid")) else { return false };
+        if a == b {
+            return false;
+        }
+        let (mut ta, mut tb): (Option<&str>, Option<&str>) = (None, None);
+        let mut cur = self.plan.nodes[id].inputs.first().copied();
+        while let Some(c) = cur {
+            let node = &self.plan.nodes[c];
+            match &node.op {
+                Op::Filter(_) | Op::TypeConstraint { .. } => {}
+                Op::Expand { edge_var: Some(e), hops, rel_type, .. } if e == a || e == b => {
+                    let (Hops::Exact(1), Some(t)) = (hops, rel_type) else { return false };
+                    let slot = if e == a { &mut ta } else { &mut tb };
+                    if slot.is_some() {
+                        return false;
+                    }
+                    *slot = Some(t.as_str());
+                }
+                Op::Expand { .. } => {}
+                _ => break,
+            }
+            if ta.is_some() && tb.is_some() {
+                break;
+            }
+            cur = node.inputs.first().copied();
+        }
+        matches!((ta, tb), (Some(x), Some(y)) if x != y)
     }
 
     /// Every predicate of the run evaluated against one relation and the
@@ -3126,6 +3942,22 @@ impl<'s, 'a> Ctx<'s, 'a> {
     fn run_filter_chain(&mut self, chain: &(Vec<Op>, usize), memo: &mut FxMap<usize, Rel>) -> DResult<Rel> {
         let (preds, under) = chain;
         let Op::Expand { from, into, hops, rel_type, dir, edge_var } = self.plan.nodes[*under].op.clone() else {
+            // Over a CoValidExpand read by this chain alone, the
+            // predicates reading the target's own fields go into the search
+            if let Op::CoValidExpand(c) = &self.plan.nodes[*under].op {
+                let c = c.clone();
+                let (local, rest): (Vec<Op>, Vec<Op>) = preds.iter().cloned().partition(|p| covalid_local(p, &c.into));
+                if covalid_local_on() && self.uses(*under) == 1 && !local.is_empty() {
+                    let input = self.run(self.plan.nodes[*under].inputs[0], memo)?;
+                    let input = self.covalid_expand_where(input, &c, &local)?;
+                    let mut mask = vec![true; input.n];
+                    for p in &rest {
+                        self.and_mask(p, &input, &mut mask)?;
+                    }
+                    let idx: Vec<usize> = (0..input.n).filter(|&i| mask[i]).collect();
+                    return Ok(if idx.len() == input.n { input } else { input.take(&idx) });
+                }
+            }
             let input = self.run(*under, memo)?;
             let mut mask = vec![true; input.n];
             for p in preds {
@@ -3152,12 +3984,40 @@ impl<'s, 'a> Ctx<'s, 'a> {
         let rest: &[Op] = &rest;
         let t_exp = std::time::Instant::now();
         let semi = self.semi_sets(*under, &input)?;
+        // The answer's top-k, when this chain is the projection's input
+        // and every predicate reads the target alone (no row is dropped
+        // after the expansion's count)
+        self.topk_now = None;
+        if let Some(h) = self.topk.take_if(|h| h.expand == *under) {
+            if want.is_none()
+                && rest.is_empty()
+                && !local.is_empty()
+                && semi.is_none()
+                && matches!(hops, Hops::Exact(1))
+                && !fallible(&h.key.key)
+                && target_local(&Op::Filter(h.key.key.clone()), &into)
+            {
+                self.topk_now = Some((h.key, h.want));
+                self.topk_tried = false;
+            }
+        }
         let (rows, vars) = self.expansion(
             &input, &from, &into, hops, rel_type.as_deref(), dir, edge_var.as_deref(), want.as_deref(), &local,
             semi.as_ref(),
         )?;
         if trace() {
             eprintln!("match trace:   expansion -> {} rows in {:.3} ms", rows.len(), t_exp.elapsed().as_secs_f64() * 1e3);
+        }
+        // No predicate left after the expansion: its rows are the
+        // answer's (what the cut below returns when every row survives)
+        if rest.is_empty() && rows_fast_on() {
+            let t_g = trace().then(std::time::Instant::now);
+            let mut out = input.take(&rows);
+            out.vars.extend(vars);
+            if trace() {
+                eprintln!("match trace:   chain rows {} gathered in {:.1} ms", out.n, lap(t_g).as_secs_f64() * 1e3);
+            }
+            return Ok(out);
         }
         // a thin relation: the new variables and the input columns named
         let mut names: Vec<String> = Vec::new();
@@ -3205,6 +4065,67 @@ impl<'s, 'a> Ctx<'s, 'a> {
             out.vars.push((k, v.take(&keep)));
         }
         Ok(out)
+    }
+
+    /// `mult[j]` the rows target `j` makes (>= 1 each); `key`: the answer
+    /// order's first key, reading the target alone; `want`: the rows its page
+    /// needs. When the order's own cut runs (`order_input`: want < rows / 4,
+    /// with the uncut row count), the targets whose key is worse than the
+    /// `want`-th row's are cut (ties kept whole): exactly the rows that cut
+    /// drops, so it keeps the same rows, in the same order, and reads no
+    /// other key. Returns the targets kept and the uncut row count; None when
+    /// the order's cut would not run (no cut here either).
+    fn topk_cut(&mut self, into: &str, pass: &Passing, mult: &[u64], key: &SortKey, want: usize) -> DResult<Option<(Vec<bool>, usize)>> {
+        let t0 = trace().then(std::time::Instant::now);
+        let n = mult.iter().sum::<u64>() as usize;
+        let want = want.min(n);
+        if want == 0 || want.saturating_mul(4) >= n || pass.0.is_empty() {
+            return Ok(None);
+        }
+        let rel = Rel {
+            n: pass.0.len(),
+            vars: vec![(into.to_string(), Var::Node { ids: pass.0.clone(), ver: pass.1.clone(), depth: None })],
+            cols: Vec::new(),
+        };
+        let col = self.eval(&key.key, &rel)?;
+        if col.len() != rel.n || (!col.is_null(0) && self.cmp_values(&col, 0, &col, 0).is_err()) {
+            return Ok(None);
+        }
+        let this: &Self = self;
+        let cmp = |a: &usize, b: &usize| this.key_order(&col, key, *a, *b).unwrap_or(Ordering::Equal).then(a.cmp(b));
+        // every target makes a row, so the want-th row's target is among the
+        // first `want` targets in key order
+        let mut idx: Vec<usize> = (0..rel.n).collect();
+        let k = want.min(idx.len());
+        if k < idx.len() {
+            idx.select_nth_unstable_by(k - 1, cmp);
+            idx.truncate(k);
+        }
+        idx.sort_by(cmp);
+        let mut acc = 0u64;
+        let mut last = idx[idx.len() - 1];
+        for &j in &idx {
+            acc += mult[j];
+            if acc >= want as u64 {
+                last = j;
+                break;
+            }
+        }
+        let col = &col;
+        let cut: Vec<bool> = par_concat(rel.n, |r| {
+            r.map(|j| this.key_order(col, key, j, last).map_or(true, |o| o != Ordering::Greater)).collect()
+        });
+        if trace() {
+            eprintln!(
+                "match trace:     top-k into the hop: {} rows of {} targets, want {}: {} targets kept in {:.1} ms",
+                n,
+                rel.n,
+                want,
+                cut.iter().filter(|&&b| b).count(),
+                lap(t0).as_secs_f64() * 1e3
+            );
+        }
+        Ok(Some((cut, n)))
     }
 
     /// The candidate targets (sorted, distinct) that pass every predicate
@@ -3268,15 +4189,37 @@ impl<'s, 'a> Ctx<'s, 'a> {
                     .collect()
                 });
                 let mut ok: FxMap<u64, bool> = FxMap::default();
+                // A run of one pair is looked up once (the first row of
+                // each pair still resolves it, in row order)
+                let fast = type_pass_on();
+                let mut prev = NONE;
                 for (i, &t) in tags.iter().enumerate() {
+                    if fast && t == prev {
+                        continue;
+                    }
+                    prev = t;
                     if t < GONE && !ok.contains_key(&t) {
                         let c = self.label_code(ver[i])?;
                         ok.insert(t, wanted.contains(&c));
                     }
                 }
-                for (slot, &t) in mask.iter_mut().zip(&tags) {
-                    if t == GONE || (t != NONE && !ok[&t]) {
-                        *slot = false;
+                if fast {
+                    let ok = &ok;
+                    let keep: Vec<bool> = par_concat(tags.len(), |r| {
+                        r.map(|i| {
+                            let t = tags[i];
+                            !(t == GONE || (t != NONE && !ok[&t]))
+                        })
+                        .collect()
+                    });
+                    for (slot, k) in mask.iter_mut().zip(keep) {
+                        *slot &= k;
+                    }
+                } else {
+                    for (slot, &t) in mask.iter_mut().zip(&tags) {
+                        if t == GONE || (t != NONE && !ok[&t]) {
+                            *slot = false;
+                        }
                     }
                 }
             }
@@ -3340,6 +4283,231 @@ impl<'s, 'a> Ctx<'s, 'a> {
         self.semi.as_ref().expect("built above")
     }
 
+    /// The plan's closing-join semi-joins, found once (`WinSemi`): for
+    /// each inner `Join` on two keys `(n.uid, e.a), (t.uid, e.b)` whose right
+    /// input is an EdgeScan `e` read by it alone (`{a, b}` = `{src, dst}`),
+    /// the join below it that first yields the column binding `n`.
+    /// `GNOMON_MATCH_WINDOW_SEMI=0`: none.
+    fn wsemi_hints(&mut self) -> &FxMap<usize, WinSemi> {
+        if self.wsemi.is_none() {
+            let mut out: FxMap<usize, WinSemi> = FxMap::default();
+            if window_semi_on() {
+                let plan = self.plan;
+                for node in &plan.nodes {
+                    let Op::Join { on, kind: JoinKind::Inner } = &node.op else { continue };
+                    if on.len() != 2 || node.inputs.len() != 2 || self.uses(node.inputs[1]) != 1 {
+                        continue;
+                    }
+                    let Op::EdgeScan { var, rel_types, .. } = &plan.nodes[node.inputs[1]].op else { continue };
+                    let (src, dst) = (format!("{var}.src"), format!("{var}.dst"));
+                    for (ni, fi) in [(0, 1), (1, 0)] {
+                        let ((near_l, near_r), (far_l, far_r)) = (&on[ni], &on[fi]);
+                        let back = if *near_r == src && *far_r == dst {
+                            NeighborDir::In
+                        } else if *near_r == dst && *far_r == src {
+                            NeighborDir::Out
+                        } else {
+                            continue;
+                        };
+                        let Some(nv) = near_l.strip_suffix(".uid") else { continue };
+                        if far_l.strip_suffix(".uid").is_none() {
+                            continue;
+                        }
+                        if let Some((j, near)) = self.wsemi_site(node.inputs[0], nv, near_l, far_l) {
+                            out.entry(j).or_insert(WinSemi { far: far_l.clone(), near, rels: rel_types.clone(), back });
+                            break;
+                        }
+                    }
+                }
+            }
+            self.wsemi = Some(out);
+        }
+        self.wsemi.as_ref().expect("built above")
+    }
+
+    /// The hint of join node `id`, if any.
+    fn wsemi_for(&mut self, id: usize) -> Option<WinSemi> {
+        if !matches!(self.plan.nodes[id].op, Op::Join { kind: JoinKind::Inner, .. }) {
+            return None;
+        }
+        self.wsemi_hints().get(&id).cloned()
+    }
+
+    /// Below a closing join's left input `start`, the join `B` binding
+    /// node variable `nv` from a column `X` (`Join(on: X = nv.uid)` over a
+    /// NodeScan of `nv`), then below `B` the inner join whose right input
+    /// yields `X`, with its own key on another column: `(J, X)`. Every node
+    /// on the way, `J` included, is a row-wise operator over its first input
+    /// read by one consumer (filters, type tests, projections keeping all and
+    /// naming neither key, inner joins, expansions).
+    fn wsemi_site(&self, start: usize, nv: &str, near_l: &str, far_l: &str) -> Option<(usize, String)> {
+        let plan = self.plan;
+        let pass = |id: usize| -> bool {
+            self.uses(id) == 1
+                && match &plan.nodes[id].op {
+                    Op::Filter(_) | Op::TypeConstraint { .. } => true,
+                    Op::Project { bindings, keep_all: true } => {
+                        bindings.iter().all(|(n, _)| n != near_l && n != far_l && !n.starts_with(&format!("{nv}.")))
+                    }
+                    Op::Join { kind: JoinKind::Inner, .. } => plan.nodes[id].inputs.len() == 2,
+                    Op::Expand { into, .. } => into != nv,
+                    Op::CoValidExpand(c) => c.into != nv,
+                    _ => false,
+                }
+        };
+        let mut cur = start;
+        let x = loop {
+            if !pass(cur) {
+                return None;
+            }
+            let n = &plan.nodes[cur];
+            if let Op::Join { on, .. } = &n.op {
+                if let Op::NodeScan { var, .. } = &plan.nodes[n.inputs[1]].op {
+                    if var == nv {
+                        let [(l, r)] = on.as_slice() else { return None };
+                        if r != near_l {
+                            return None;
+                        }
+                        cur = n.inputs[0];
+                        break l.clone();
+                    }
+                }
+            }
+            cur = *n.inputs.first()?;
+        };
+        loop {
+            if !pass(cur) {
+                return None;
+            }
+            let n = &plan.nodes[cur];
+            if let Op::Join { on, .. } = &n.op {
+                if self.wsemi_yields(n.inputs[1], &x) {
+                    let (_, rk) = on.first()?;
+                    return (*rk != x).then_some((cur, x));
+                }
+            }
+            cur = *n.inputs.first()?;
+        }
+    }
+
+    /// Whether `id` (an EdgeScan, or `dir: both`'s union of projections
+    /// of one) yields column `x`, read by one consumer.
+    fn wsemi_yields(&self, id: usize, x: &str) -> bool {
+        let plan = self.plan;
+        if self.uses(id) != 1 {
+            return false;
+        }
+        match &plan.nodes[id].op {
+            Op::EdgeScan { var, .. } => x == format!("{var}.src") || x == format!("{var}.dst"),
+            Op::Union => plan.nodes[id].inputs.iter().all(|&p| {
+                matches!(&plan.nodes[p].op, Op::Project { bindings, keep_all: true }
+                    if bindings.iter().any(|(n, _)| n == x)
+                        && plan.nodes[p].inputs.len() == 1
+                        && matches!(plan.nodes[plan.nodes[p].inputs[0]].op, Op::EdgeScan { .. }))
+            }),
+            _ => false,
+        }
+    }
+
+    /// A join's right rows under its hint: from `WINDOW_SEMI_MIN_ROWS`
+    /// rows, when the left rows' `far` values are distinct identities (no
+    /// null, at most 1,024) whose adjacency slices hold no more rows than the
+    /// right side, the right rows keep a `near` that is null or the other end
+    /// of an edge of the closing join's types at a `far` value. Every edge
+    /// version in the slices counts (any belief, any valid time): a superset
+    /// of the closing join's rows, so it drops only rows the closing join
+    /// drops. The kept rows keep their order.
+    fn wsemi_filter(&mut self, h: &WinSemi, left: &Rel, right: Rel) -> DResult<Rel> {
+        use crate::tcsr::Direction;
+        if right.n < window_semi_min_rows() {
+            return Ok(right);
+        }
+        let t0 = trace().then(std::time::Instant::now);
+        let Ok(tcol) = self.uid_column(left, &h.far) else { return Ok(right) };
+        if tcol.contains(&NO_ID) {
+            return Ok(right);
+        }
+        let mut far: Vec<u32> = tcol;
+        far.sort_unstable();
+        far.dedup();
+        if far.is_empty() || far.len() > 1024 {
+            return Ok(right);
+        }
+        let reads = self.edge_seek_reads(&far, h.back)?;
+        if reads > right.n {
+            if trace() {
+                eprintln!("match trace:   window semi-join on {}: {} slice rows > {} right rows, none", h.far, reads, right.n);
+            }
+            return Ok(right);
+        }
+        let xs: Vec<u32> = match self.uid_column(&right, &h.near) {
+            Ok(v) => v,
+            Err(_) => {
+                let c = self.eval(&Expr::Col(h.near.clone()), &right)?;
+                match c.v {
+                    Vals::Uid(ids) => match c.null {
+                        Some(m) => ids.iter().zip(&m).map(|(&i, &n)| if n { NO_ID } else { i }).collect(),
+                        None => ids,
+                    },
+                    _ => return Ok(right),
+                }
+            }
+        };
+        let files: FxMap<u64, String> = self.store.edge_files().into_iter().map(|(f, id)| (id, f)).collect();
+        let codes: Option<Vec<u32>> = h.rels.as_ref().map(|r| r.iter().filter_map(|x| self.rels.get(x)).collect());
+        let d = if h.back == NeighborDir::In { Direction::In } else { Direction::Out };
+        let n_ids = self.store.dict().len() as usize;
+        let mut bits = vec![0u64; n_ids / 64 + 1];
+        let mut near_n = 0usize;
+        for (si, s) in self.edges.iter().enumerate() {
+            if s.seg.rows() == 0 || s.seg.tt_s_bounds().0 > self.plan.as_of {
+                continue;
+            }
+            let Some(file) = files.get(&s.id) else { return unsupported("an edge segment without a file") };
+            let idx = self.store.tcsr_index(file)?;
+            for &u in &far {
+                for &r in idx.dir(d).slice(u) {
+                    if let Some(c) = &codes {
+                        if !c.contains(&self.rel_code(addr(si, r))) {
+                            continue;
+                        }
+                    }
+                    let v = if d == Direction::In { s.a[r as usize] } else { s.b[r as usize] } as usize;
+                    if v / 64 >= bits.len() {
+                        bits.resize(v / 64 + 1, 0);
+                    }
+                    if bits[v / 64] >> (v % 64) & 1 == 0 {
+                        near_n += 1;
+                    }
+                    bits[v / 64] |= 1 << (v % 64);
+                }
+            }
+        }
+        let bits = &bits;
+        let xs = &xs;
+        let keep: Vec<usize> = par_concat(right.n, |r| {
+            r.filter(|&i| {
+                let v = xs[i];
+                v == NO_ID || bits.get(v as usize / 64).is_some_and(|w| w >> (v % 64) & 1 == 1)
+            })
+            .collect()
+        });
+        if let Some(t0) = t0 {
+            eprintln!(
+                "match trace:   window semi-join on {} -> {}: {} far, {} slice rows, {} near; right {} -> {} rows in {:.1} ms",
+                h.far,
+                h.near,
+                far.len(),
+                reads,
+                near_n,
+                right.n,
+                keep.len(),
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        Ok(if keep.len() == right.n { right } else { right.take(&keep) })
+    }
+
     /// The semi-join sets of an expansion with a hint: per distinct target
     /// value (at most 1,024 of them), its neighbours in the reverse direction.
     fn semi_sets(&mut self, exp: usize, input: &Rel) -> DResult<Option<SemiSets>> {
@@ -3371,6 +4539,22 @@ impl<'s, 'a> Ctx<'s, 'a> {
         Ok(Some((tcol, sets)))
     }
 
+    /// The `vt_s` bound of node scan `id` when its only consumer is a
+    /// filter whose conjuncts imply one (`vt_s_bound`).
+    fn scan_vt_bound(&self, id: usize) -> Option<(i64, i64)> {
+        if !scan_vt_on() {
+            return None;
+        }
+        let Op::NodeScan { var, .. } = &self.plan.nodes[id].op else { return None };
+        let mut users = self.plan.nodes.iter().filter(|n| n.inputs.contains(&id));
+        let (Some(user), None) = (users.next(), users.next()) else { return None };
+        let Op::Filter(pred) = &user.op else { return None };
+        if user.inputs.len() != 1 || self.plan.root == id {
+            return None;
+        }
+        vt_s_bound(pred, var)
+    }
+
     /// `Some((expand node, target column))` when `node` is the compiler's
     /// cycle-closing filter `into.uid = target` directly over the `Expand`
     /// that bound a fresh `into`, used by nothing else.
@@ -3389,8 +4573,9 @@ impl<'s, 'a> Ctx<'s, 'a> {
     fn apply(&mut self, op: &Op, mut inputs: Vec<Rel>) -> DResult<Rel> {
         match op {
             Op::NodeScan { var, labels, uids, belief, vt_mode } => {
+                let vt_s = self.scan_vt_now.take();
                 let by_label = match (uids, labels) {
-                    (None, Some(l)) => self.labelled_node_addrs(l, *belief, *vt_mode)?,
+                    (None, Some(l)) => self.labelled_node_addrs(l, *belief, *vt_mode, vt_s)?,
                     _ => None,
                 };
                 // rows read by label carry one of the labels already
@@ -3404,7 +4589,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
                         })
                     }
                     (None, None) => self
-                        .scan_addrs(RowKind::Node, *belief, *vt_mode, None)?
+                        .scan_addrs_vt(RowKind::Node, *belief, *vt_mode, None, vt_s)?
                         .into_iter()
                         .map(|a| (self.nodes[seg_of(a)].a[row_of(a)], a))
                         .collect(),
@@ -3435,6 +4620,18 @@ impl<'s, 'a> Ctx<'s, 'a> {
                     cols: Vec::new(),
                 })
             }
+            Op::EdgeScan { var, rel_types, belief: BeliefMode::Current, vt_mode } if scan_fuse_on() => {
+                // The relationship test inside the scan's chunks, not
+                // after it on one thread (BIH-R5 at SF10: 26.5M rows)
+                let codes: Option<Vec<u32>> = rel_types.as_ref().map(|r| r.iter().filter_map(|s| self.rels.get(s)).collect());
+                let codes = &codes;
+                let (addrs, _) = self.edge_scan_with(*vt_mode, rel_types.as_deref(), |s, si, row, out: &mut Vec<Addr>| {
+                    if codes.as_ref().is_none_or(|c| c.contains(&s.rel_map[s.rel[row] as usize])) {
+                        out.push(addr(si, row as u32));
+                    }
+                })?;
+                Ok(Rel { n: addrs.len(), vars: vec![(var.clone(), Var::Edge { ver: addrs })], cols: Vec::new() })
+            }
             Op::EdgeScan { var, rel_types, belief, vt_mode } => {
                 let addrs = self.scan_addrs(RowKind::Edge, *belief, *vt_mode, rel_types.as_deref())?;
                 // the version-key route does not test relation names per row
@@ -3453,9 +4650,36 @@ impl<'s, 'a> Ctx<'s, 'a> {
             }
             Op::Filter(pred) => {
                 let input = inputs.pop().expect("one input");
+                let t0 = trace().then(std::time::Instant::now);
                 let mask = self.predicate(pred, &input)?;
+                let t_pred = lap(t0);
                 let idx: Vec<usize> = (0..input.n).filter(|&i| mask[i]).collect();
-                Ok(if idx.len() == input.n { input } else { input.take(&idx) })
+                let out = if idx.len() == input.n { input } else { input.take(&idx) };
+                if let Some(t0) = t0.filter(|_| out.n >= DEAD_COLS_MIN) {
+                    eprintln!(
+                        "match trace:   filter: predicate {:.1} ms, rows {:.1} ms ({} kept)",
+                        t_pred.as_secs_f64() * 1e3,
+                        (t0.elapsed() - t_pred).as_secs_f64() * 1e3,
+                        out.n
+                    );
+                }
+                Ok(out)
+            }
+            Op::TypeConstraint { var, labels } if type_pass_on() => {
+                // The filter chain's label pass (on the pool, each
+                // distinct (segment, tag) resolved once in row order); every
+                // row kept returns the input as it is
+                let input = inputs.pop().expect("one input");
+                if !matches!(input.var(var), Some(Var::Node { .. })) {
+                    return unsupported("TypeConstraint on a non-node variable");
+                }
+                let mut mask = vec![true; input.n];
+                self.and_mask(op, &input, &mut mask)?;
+                if mask.iter().all(|&b| b) {
+                    return Ok(input);
+                }
+                let idx: Vec<usize> = (0..input.n).filter(|&i| mask[i]).collect();
+                Ok(input.take(&idx))
             }
             Op::TypeConstraint { var, labels } => {
                 let input = inputs.pop().expect("one input");
@@ -3476,7 +4700,11 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 let input = inputs.pop().expect("one input");
                 let mut cols = Vec::with_capacity(bindings.len());
                 for (name, e) in bindings {
+                    let t0 = trace().then(std::time::Instant::now);
                     cols.push((name.clone(), self.eval(e, &input)?));
+                    if let Some(t0) = t0.filter(|_| input.n >= DEAD_COLS_MIN) {
+                        eprintln!("match trace:   project {name}: {:.1} ms ({} rows)", t0.elapsed().as_secs_f64() * 1e3, input.n);
+                    }
                 }
                 if *keep_all {
                     let mut out = input;
@@ -3489,8 +4717,11 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 }
             }
             Op::Join { on, kind } => {
-                let right = inputs.pop().expect("two inputs");
+                let mut right = inputs.pop().expect("two inputs");
                 let left = inputs.pop().expect("two inputs");
+                if let Some(h) = self.wsemi_now.take() {
+                    right = self.wsemi_filter(&h, &left, right)?;
+                }
                 self.join(left, right, on, *kind)
             }
             Op::Aggregate { group_by, aggs } => {
@@ -3712,6 +4943,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
         semi: Option<&SemiSets>,
     ) -> DResult<Expansion> {
         let seeds = self.uid_column(input, from)?;
+        let topk = self.topk_now.take().filter(|_| matches!(hops, Hops::Exact(1)) && want.is_none() && semi.is_none());
         let keep = |row: usize, v: u32| {
             want.is_none_or(|w| w[row] == v && v != NO_ID)
                 && semi.is_none_or(|(tcol, sets)| {
@@ -3746,7 +4978,38 @@ impl<'s, 'a> Ctx<'s, 'a> {
                         sorted_distinct(cur.iter().map(|c| c.1).collect())
                     };
                     let t1 = trace().then(std::time::Instant::now);
-                    let mut adj = self.neighbors(&frontier, dir, t, rels.as_deref())?;
+                    let pre = (last && !target_preds.is_empty()).then_some((target_preds, into));
+                    // The source rows of each frontier node (a one-hop step)
+                    let srcs: Option<Vec<u64>> = topk.as_ref().filter(|_| one && pre.is_some()).map(|_| {
+                        let fp = FrontierPos::new(&frontier);
+                        let mut c = vec![0u64; frontier.len()];
+                        for &s in &seeds {
+                            if s != NO_ID {
+                                c[fp.get(s).expect("frontier holds every seed")] += 1;
+                            }
+                        }
+                        c
+                    });
+                    if let (Some((key, n)), Some(c)) = (topk.as_ref(), srcs.as_ref()) {
+                        self.topk_scan = Some(TopkScan { key: key.clone(), want: *n, srcs: c.clone() });
+                    }
+                    let got = match self.closing_reverse(&frontier, want.filter(|_| one && last), dir, t, rels.as_deref())? {
+                        Some(adj) => Ok((adj, None)),
+                        None => {
+                            // A last hop whose few passing targets read their reverse adjacency
+                            let rev = if one && last && want.is_none() && semi.is_none() && topk.is_none() {
+                                self.target_reverse(&frontier, target_preds, into, dir, t, rels.as_deref())?
+                            } else {
+                                None
+                            };
+                            match rev {
+                                Some(adj) => Ok((adj, None)),
+                                None => self.neighbors_pre(&frontier, dir, t, rels.as_deref(), pre),
+                            }
+                        }
+                    };
+                    self.topk_scan = None;
+                    let (mut adj, pre_pass) = got?;
                     t_nb += lap(t1);
                     // one semi-join target for every row: filter each adjacency
                     // list once, not once per row that reaches it
@@ -3759,12 +5022,34 @@ impl<'s, 'a> Ctx<'s, 'a> {
                         }
                     }
                     // the predicates on the target alone, once per distinct target
-                    let pass = if last && !target_preds.is_empty() {
+                    let mut pass = if pre_pass.is_some() {
+                        // the scan hop kept the passing hits only
+                        pre_pass
+                    } else if last && !target_preds.is_empty() {
                         let cand = sorted_distinct(adj.iter().flatten().map(|&(v, _)| v).collect());
                         Some(self.targets_passing(target_preds, into, cand)?)
                     } else {
                         None
                     };
+                    // The answer's top-k on the passing targets, unless the
+                    // scan hop decided it already
+                    if let (Some((key, n)), Some(c), Some(p), false) = (topk.as_ref(), srcs.as_ref(), pass.as_ref(), self.topk_tried) {
+                        self.topk_tried = true;
+                        let mut mult = vec![0u64; p.0.len()];
+                        for (pi, list) in adj.iter().enumerate() {
+                            for &(v, _) in list {
+                                if let Ok(j) = p.0.binary_search(&v) {
+                                    mult[j] += c[pi];
+                                }
+                            }
+                        }
+                        if let Some((cut, full)) = self.topk_cut(into, p, &mult, key, *n)? {
+                            let (ids, vers): Passing =
+                                p.0.iter().zip(&p.1).zip(&cut).filter_map(|((&v, &a), &k)| k.then_some((v, a))).unzip();
+                            pass = Some((ids, vers));
+                            self.topk_rows = Some(full);
+                        }
+                    }
                     t_pass += lap(t1);
                     let ok = |v: u32| pass.as_ref().is_none_or(|p| p.0.binary_search(&v).is_ok());
                     let fp = FrontierPos::new(&frontier);
@@ -4431,9 +5716,192 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// One hop for a sorted distinct frontier: per frontier node, its
     /// `(neighbour, edge address)` list under Σ (valid at the instant `t`,
     /// believed at `as_of`), through the per-segment adjacency index.
+    /// A one-hop closing step (expand-into: row `i` keeps only the
+    /// edges to `want[i]`) over a large frontier whose wanted targets are few
+    /// is read from the targets' side: their adjacency in the reverse
+    /// direction, kept where the far end is a frontier node, each frontier
+    /// node's list ordered by (vt_s, version id) as the TCSR read orders it
+    /// (`neighbors_by_scan`). The lists hold only edges to wanted targets,
+    /// which are the only ones the step keeps, in the same order. IC5 at
+    /// SF10: 2.07M posts' creators read by the index (4.4 s) to keep those of
+    /// 307 friends. When the reverse read is not smaller than the frontier,
+    /// None (the forward read). `GNOMON_MATCH_CLOSE_REVERSE=0` (read per call):
+    /// always the forward read.
+    fn closing_reverse(
+        &mut self,
+        frontier: &[u32],
+        want: Option<&[u32]>,
+        dir: NeighborDir,
+        t: i64,
+        rels: Option<&[String]>,
+    ) -> DResult<Option<NeighborLists>> {
+        let Some(want) = want else { return Ok(None) };
+        let rdir = match dir {
+            NeighborDir::Out => NeighborDir::In,
+            NeighborDir::In => NeighborDir::Out,
+            NeighborDir::Both => return Ok(None),
+        };
+        if frontier.len() <= SEEK_PROBE || std::env::var("GNOMON_MATCH_CLOSE_REVERSE").is_ok_and(|v| v.trim() == "0") {
+            return Ok(None);
+        }
+        let wd = sorted_distinct(want.iter().copied().filter(|&v| v != NO_ID).collect());
+        if wd.len().saturating_mul(16) > frontier.len() {
+            return Ok(None);
+        }
+        let t0 = trace().then(std::time::Instant::now);
+        let rev = self.neighbors(&wd, rdir, t, rels)?;
+        if rev.items.len() >= frontier.len() {
+            if trace() {
+                eprintln!("match trace:     closing step: {} targets read {} edges, not under the {} frontier nodes", wd.len(), rev.items.len(), frontier.len());
+            }
+            return Ok(None);
+        }
+        let fp = FrontierPos::new(frontier);
+        let mut hits: Vec<HitK> = Vec::new();
+        for (q, list) in rev.iter().enumerate() {
+            for &(u, e) in list {
+                if let Some(p) = fp.get(u) {
+                    let s = &self.edges[seg_of(e)];
+                    let r = row_of(e);
+                    hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 0, wd[q], e));
+                }
+            }
+        }
+        let adj = group_hits(frontier.len(), hits);
+        if trace() {
+            eprintln!(
+                "match trace:     closing step from its {} targets: {} edges, {} to the {} frontier nodes in {:.1} ms",
+                wd.len(),
+                rev.items.len(),
+                adj.items.len(),
+                frontier.len(),
+                lap(t0).as_secs_f64() * 1e3
+            );
+        }
+        Ok(Some(adj))
+    }
+
+    /// The last one-hop step's lists from its targets when the target
+    /// predicates (a label constraint and at least one filter on `into`)
+    /// leave few: the label's identities (every stored row of the label, a
+    /// superset of any version the scope believes) are tested by
+    /// `targets_passing`, and when at most 1/16 of the frontier pass, their
+    /// reverse adjacency is read, kept where it reaches the frontier, and
+    /// grouped in the TCSR read's order (as `closing_reverse`). Every edge of
+    /// a frontier node to a passing target is in that target's reverse list,
+    /// so the lists are the forward lists cut to the passing targets; the
+    /// expansion still tests the targets it gets. `None` keeps the forward
+    /// read. `GNOMON_MATCH_TARGET_REVERSE=0` (read per call): always forward.
+    fn target_reverse(
+        &mut self,
+        frontier: &[u32],
+        preds: &[Op],
+        into: &str,
+        dir: NeighborDir,
+        t: i64,
+        rels: Option<&[String]>,
+    ) -> DResult<Option<NeighborLists>> {
+        if frontier.len() <= SEEK_PROBE || std::env::var("GNOMON_MATCH_TARGET_REVERSE").is_ok_and(|v| v.trim() == "0") {
+            return Ok(None);
+        }
+        let rdir = match dir {
+            NeighborDir::Out => NeighborDir::In,
+            NeighborDir::In => NeighborDir::Out,
+            NeighborDir::Both => return Ok(None),
+        };
+        let Some(labels) = preds.iter().find_map(|p| match p {
+            Op::TypeConstraint { var, labels } if var == into => Some(labels.clone()),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        if !preds.iter().any(|p| matches!(p, Op::Filter(_))) {
+            return Ok(None);
+        }
+        let t0 = trace().then(std::time::Instant::now);
+        let most = frontier.len() / 16;
+        let mut cand: Vec<u32> = Vec::new();
+        for si in 0..self.nodes.len() {
+            let by_label = self.label_rows(si)?;
+            for (l, rs) in by_label.iter() {
+                if labels.iter().any(|x| x == l) {
+                    if cand.len() + rs.len() > most.saturating_mul(4) {
+                        return Ok(None);
+                    }
+                    cand.extend(rs.iter().map(|&r| self.nodes[si].a[r as usize]));
+                }
+            }
+        }
+        let cand = sorted_distinct(cand);
+        let (ids, _) = self.targets_passing(preds, into, cand)?;
+        if ids.len() > most {
+            return Ok(None);
+        }
+        let rev = self.neighbors(&ids, rdir, t, rels)?;
+        if rev.items.len() >= frontier.len() {
+            if trace() {
+                eprintln!("match trace:     target reverse: {} targets read {} edges, not under the {} frontier nodes", ids.len(), rev.items.len(), frontier.len());
+            }
+            return Ok(None);
+        }
+        let fp = FrontierPos::new(frontier);
+        let mut hits: Vec<HitK> = Vec::new();
+        for (q, list) in rev.iter().enumerate() {
+            for &(u, e) in list {
+                if let Some(p) = fp.get(u) {
+                    let s = &self.edges[seg_of(e)];
+                    let r = row_of(e);
+                    hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 0, ids[q], e));
+                }
+            }
+        }
+        let adj = group_hits(frontier.len(), hits);
+        if trace() {
+            eprintln!(
+                "match trace:     target reverse from {} passing targets: {} edges, {} to the {} frontier nodes in {:.1} ms",
+                ids.len(),
+                rev.items.len(),
+                adj.items.len(),
+                frontier.len(),
+                lap(t0).as_secs_f64() * 1e3
+            );
+        }
+        Ok(Some(adj))
+    }
+
     fn neighbors(&mut self, frontier: &[u32], dir: NeighborDir, t: i64, rels: Option<&[String]>) -> DResult<NeighborLists> {
+        Ok(self.neighbors_pre(frontier, dir, t, rels, None)?.0)
+    }
+
+    /// `neighbors`, with the step's target predicates when it is the last hop:
+    /// a hop taken by one scan evaluates them on the hits' distinct far
+    /// ends before grouping and keeps only the passing hits, returning the
+    /// passing set; the other paths return the lists unfiltered and no set.
+    fn neighbors_pre(
+        &mut self,
+        frontier: &[u32],
+        dir: NeighborDir,
+        t: i64,
+        rels: Option<&[String]>,
+        pre: Option<(&[Op], &str)>,
+    ) -> DResult<(NeighborLists, Option<Passing>)> {
         if frontier.is_empty() {
-            return Ok(NeighborLists::empty(0));
+            return Ok((NeighborLists::empty(0), None));
+        }
+        // The hop this call last read by the index, for the same
+        // frontier, direction, instant and relationships: its lists (which
+        // path a hop takes depends on those alone, so the hop would take
+        // the index again and read the same rows)
+        let memo_on = hop_memo_on();
+        if memo_on {
+            if let Some(m) = self.hop_memo.as_ref().filter(|m| {
+                m.dir == dir && m.t == t && m.rels.as_deref() == rels && m.frontier.as_slice() == frontier
+            }) {
+                if trace() {
+                    eprintln!("match trace:     hop memo: {} nodes -> {} (read before)", frontier.len(), m.lists.items.len());
+                }
+                return Ok((m.lists.clone(), None));
+            }
         }
         if let Some([rel]) = rels {
             let t0 = std::time::Instant::now();
@@ -4443,7 +5911,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 if trace() {
                     eprintln!("match trace:     hop by the relation's rows: {} nodes -> {} in {:.1} ms", frontier.len(), lists.items.len(), t0.elapsed().as_secs_f64() * 1e3);
                 }
-                return Ok(lists);
+                return Ok((lists, None));
             }
         }
         let t0 = std::time::Instant::now();
@@ -4451,6 +5919,14 @@ impl<'s, 'a> Ctx<'s, 'a> {
         // scan when the rows extrapolated to every key pass 1 /
         // SEEK_ROW_FACTOR of the scan's (the edge seek's rule)
         let mut probed: Option<crate::store::NeighborRows> = None;
+        if frontier.len() > SEEK_PROBE && t == self.plan.t_a && self.plan.t_b == t + 1 && self.preprobe_says_scan(frontier, dir, t, t + 1, rels)? {
+            let (lists, pass) = self.neighbors_by_scan(frontier, dir, rels, pre)?;
+            crate::phase::add(crate::phase::Phase::MatchHopNs, t0.elapsed().as_nanos() as u64);
+            if trace() {
+                eprintln!("match trace:     hop by one scan: {} nodes -> {} in {:.1} ms", frontier.len(), lists.items.len(), t0.elapsed().as_secs_f64() * 1e3);
+            }
+            return Ok((lists, pass));
+        }
         if frontier.len() > SEEK_PROBE && t == self.plan.t_a && self.plan.t_b == t + 1 {
             let probe = self.store.neighbors_batch(&frontier[..SEEK_PROBE], dir, self.plan.as_of, Some(t), Some(t + 1), rels)?;
             let t_probe = t0.elapsed();
@@ -4467,12 +5943,12 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 );
             }
             if scan {
-                let lists = self.neighbors_by_scan(frontier, dir, rels)?;
+                let (lists, pass) = self.neighbors_by_scan(frontier, dir, rels, pre)?;
                 crate::phase::add(crate::phase::Phase::MatchHopNs, t0.elapsed().as_nanos() as u64);
                 if trace() {
                     eprintln!("match trace:     hop by one scan: {} nodes -> {} in {:.1} ms", frontier.len(), lists.items.len(), t0.elapsed().as_secs_f64() * 1e3);
                 }
-                return Ok(lists);
+                return Ok((lists, pass));
             }
             probed = Some(probe);
         }
@@ -4504,7 +5980,17 @@ impl<'s, 'a> Ctx<'s, 'a> {
             };
             items.push((nb.nbr[j], addr(si, nb.seg_row[j])));
         }
-        Ok(NeighborLists { off: nb.offsets.clone(), items })
+        let lists = NeighborLists { off: nb.offsets.clone(), items };
+        if memo_on && frontier.len() > SEEK_PROBE && lists.items.len() <= HOP_MEMO_MAX_ROWS {
+            self.hop_memo = Some(HopMemo {
+                frontier: frontier.to_vec(),
+                dir,
+                t,
+                rels: rels.map(<[String]>::to_vec),
+                lists: lists.clone(),
+            });
+        }
+        Ok((lists, None))
     }
 
     /// `neighbors` at the call's instant for a sorted distinct frontier, by
@@ -4512,17 +5998,94 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// in `neighbors_batch`'s order -- by (vt_s, version id), an out-edge
     /// before an in-edge on a tie (a self-loop) -- so the expansion's rows
     /// and their order are the TCSR read's.
-    fn neighbors_by_scan(&mut self, frontier: &[u32], dir: NeighborDir, rels: Option<&[String]>) -> DResult<NeighborLists> {
+    fn neighbors_by_scan(
+        &mut self,
+        frontier: &[u32],
+        dir: NeighborDir,
+        rels: Option<&[String]>,
+        pre: Option<(&[Op], &str)>,
+    ) -> DResult<(NeighborLists, Option<Passing>)> {
         let t0 = trace().then(std::time::Instant::now);
-        let addrs = self.scan_addrs(RowKind::Edge, BeliefMode::Current, VtMode::Overlap, rels)?;
-        let t_scan = lap(t0);
         let codes: Option<Vec<u32>> = rels.map(|r| r.iter().filter_map(|s| self.rels.get(s)).collect());
         let fp = FrontierPos::new(frontier);
         let at = |u: u32| fp.get(u);
+        // The hits found where the scan reads each row
+        // (`GNOMON_MATCH_SCAN_FUSE=0`: the address list first)
+        let fused = if scan_group_parallel() && scan_fuse_on() { Some(self.scan_hits_fused(rels, &codes, dir, &at)?) } else { None };
+        let addrs = if fused.is_some() { Vec::new() } else { self.scan_addrs(RowKind::Edge, BeliefMode::Current, VtMode::Overlap, rels)? };
+        let t_scan = lap(t0);
+        let addrs_len = fused.as_ref().map_or(addrs.len(), |f| f.1);
+        let this: &Self = self;
+        if scan_group_parallel() {
+            let mut hits = match fused {
+                Some((h, _)) => h,
+                None => this.scan_hits(&addrs, &codes, dir, &at),
+            };
+            let t_hit = lap(t0);
+            let mut pass = None;
+            if let Some((preds, into)) = pre.filter(|p| !p.0.is_empty() && scan_prefilter_on()) {
+                let cand = sorted_distinct(par_concat(hits.len(), |r| hits[r].iter().map(|h| h.5).collect()));
+                let n_cand = cand.len();
+                let p = self.targets_passing(preds, into, cand)?;
+                // a predicate every candidate passes (a label the relation
+                // already implies) filters nothing: the hits stay as read
+                if p.0.len() < n_cand {
+                    let max = p.0.last().copied().unwrap_or(0) as usize;
+                    let mut bits = vec![0u64; max / 64 + 1];
+                    for &x in &p.0 {
+                        bits[x as usize / 64] |= 1 << (x % 64);
+                    }
+                    let ok = |x: u32| bits.get(x as usize / 64).is_some_and(|w| w >> (x % 64) & 1 == 1);
+                    hits = par_concat(hits.len(), |r| hits[r].iter().filter(|h| ok(h.5)).copied().collect());
+                }
+                // The answer's top-k on the passing targets, before grouping
+                let mut p = p;
+                if let Some(tk) = self.topk_scan.take() {
+                    self.topk_tried = true;
+                    let pj: Vec<u32> = par_concat(hits.len(), |r| {
+                        hits[r].iter().map(|h| p.0.binary_search(&h.5).expect("a kept hit passes") as u32).collect()
+                    });
+                    let mut mult = vec![0u64; p.0.len()];
+                    for (h, &j) in hits.iter().zip(&pj) {
+                        mult[j as usize] += tk.srcs[h.0 as usize];
+                    }
+                    if let Some((cut, full)) = self.topk_cut(into, &p, &mult, &tk.key, tk.want)? {
+                        let cut = &cut;
+                        let pj = &pj;
+                        hits = par_concat(hits.len(), |r| {
+                            let base = r.start;
+                            hits[r].iter().enumerate().filter(|(i, _)| cut[pj[base + i] as usize]).map(|(_, h)| *h).collect()
+                        });
+                        let (ids, vers): Passing =
+                            p.0.iter().zip(&p.1).zip(cut).filter_map(|((&v, &a), &k)| k.then_some((v, a))).unzip();
+                        p = (ids, vers);
+                        self.topk_rows = Some(full);
+                    }
+                }
+                pass = Some(p);
+            }
+            let t_pre = lap(t0);
+            let out = group_hits(frontier.len(), hits);
+            if trace() {
+                eprintln!(
+                    "match trace:     scan hop split: hits {:.1} ms, target prefilter {:.1} ms, group {:.1} ms",
+                    (t_hit - t_scan).as_secs_f64() * 1e3,
+                    (t_pre - t_hit).as_secs_f64() * 1e3,
+                    (lap(t0) - t_pre).as_secs_f64() * 1e3
+                );
+            }
+            if trace() {
+                eprintln!(
+                    "match trace:     scan hop parts: scan {:.1} ms ({} rows), hits and group {:.1} ms (parallel)",
+                    t_scan.as_secs_f64() * 1e3,
+                    addrs_len,
+                    (lap(t0) - t_scan).as_secs_f64() * 1e3
+                );
+            }
+            return Ok((out, pass));
+        }
         // (frontier position, far node, edge, orientation)
         type Hit = (u32, u32, Addr, u8);
-        let addrs_len = addrs.len();
-        let this: &Self = self;
         let hits: Vec<Hit> = par_concat(addrs.len(), |range| {
             let mut hits = Vec::new();
             for &a in &addrs[range] {
@@ -4588,7 +6151,79 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 (lap(t0) - t_hits).as_secs_f64() * 1e3
             );
         }
-        Ok(out)
+        Ok((out, None))
+    }
+
+    /// `neighbors_by_scan`'s hits, grouped by frontier position and each
+    /// list sorted by (vt_s, version id, orientation) -- the serial path's
+    /// lists exactly, since those keys are distinct within a list. The keys
+    /// are read in the parallel hit pass beside the endpoints, the hits are
+    /// scattered into their lists (stable), and the lists are sorted in
+    /// parallel over contiguous runs of whole lists (IC3 at SF1: 1.16M hits,
+    /// the serial count, scatter and keyed sort 210 ms).
+    fn scan_hits(
+        &self,
+        addrs: &[Addr],
+        codes: &Option<Vec<u32>>,
+        dir: NeighborDir,
+        at: &(dyn Fn(u32) -> Option<usize> + Sync),
+    ) -> Vec<HitK> {
+        par_concat(addrs.len(), |range| {
+            let mut hits = Vec::new();
+            for &a in &addrs[range] {
+                if let Some(c) = codes {
+                    if !c.contains(&self.rel_code(a)) {
+                        continue;
+                    }
+                }
+                let s = &self.edges[seg_of(a)];
+                let r = row_of(a);
+                let (src, dst) = (s.a[r], s.b[r]);
+                if matches!(dir, NeighborDir::Out | NeighborDir::Both) {
+                    if let Some(p) = at(src) {
+                        hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 0, dst, a));
+                    }
+                }
+                if matches!(dir, NeighborDir::In | NeighborDir::Both) {
+                    if let Some(p) = at(dst) {
+                        hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 1, src, a));
+                    }
+                }
+            }
+            hits
+        })
+    }
+
+    /// `scan_hits` inside the scan's own chunks (`edge_scan_with`): the
+    /// same hits in the same order, with no address list of every believed
+    /// row in between (IC9 at SF10: 31.5M rows for 1.04M hits). Returns the
+    /// hits and the rows the scan kept.
+    fn scan_hits_fused(
+        &self,
+        rels: Option<&[String]>,
+        codes: &Option<Vec<u32>>,
+        dir: NeighborDir,
+        at: &(dyn Fn(u32) -> Option<usize> + Sync),
+    ) -> DResult<(Vec<HitK>, usize)> {
+        self.edge_scan_with(VtMode::Overlap, rels, |s, si, r, hits: &mut Vec<HitK>| {
+            if let Some(c) = codes {
+                if !c.contains(&s.rel_map[s.rel[r] as usize]) {
+                    return;
+                }
+            }
+            let a = addr(si, r as u32);
+            let (src, dst) = (s.a[r], s.b[r]);
+            if matches!(dir, NeighborDir::Out | NeighborDir::Both) {
+                if let Some(p) = at(src) {
+                    hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 0, dst, a));
+                }
+            }
+            if matches!(dir, NeighborDir::In | NeighborDir::Both) {
+                if let Some(p) = at(dst) {
+                    hits.push((p as u32, s.vt_s[r], s.vid_hi[r], s.vid_lo[r], 1, src, a));
+                }
+            }
+        })
     }
 
     /// One edge segment's rare relationships and their rows, from the
@@ -4600,34 +6235,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
                 return Ok(v.clone());
             }
         }
-        let names = &s.seg.header().rel_types;
-        let mut counts = vec![0usize; names.len()];
-        for &c in s.rel {
-            if let Some(n) = counts.get_mut(c as usize) {
-                *n += 1;
-            }
-        }
-        let rows_n = s.rel.len();
-        let rare: Vec<bool> = counts.iter().map(|&n| n.saturating_mul(RARE_REL_FRACTION) <= rows_n).collect();
-        let mut lists: Vec<Vec<u32>> = vec![Vec::new(); names.len()];
-        for (row, &c) in s.rel.iter().enumerate() {
-            if rare.get(c as usize).copied().unwrap_or(false) {
-                lists[c as usize].push(row as u32);
-            }
-        }
-        let mut rare_rows = Vec::new();
-        let mut common = Vec::new();
-        for (i, name) in names.iter().enumerate() {
-            if counts[i] == 0 {
-                continue;
-            }
-            if rare[i] {
-                rare_rows.push((name.clone(), std::mem::take(&mut lists[i])));
-            } else {
-                common.push(name.clone());
-            }
-        }
-        let v: RelRows = Arc::new((rare_rows, common));
+        let v = rel_rows_of(s.rel, &s.seg.header().rel_types);
         if let Ok(mut g) = self.store.match_rel_rows.lock() {
             g.insert(s.id, v.clone());
         }
@@ -4787,6 +6395,153 @@ enum KeyVal {
     Eid(u32, u32, u32, Arc<str>),
 }
 
+/// (frontier position, vt_s, vid_hi, vid_lo, orientation, far node, edge)
+type HitK = (u32, i64, u64, u32, u8, u32, Addr);
+
+/// Scan-hop hits grouped by frontier position, each list sorted by
+/// (vt_s, version id, orientation): the scatter is stable and those keys
+/// are distinct within a list, so the lists are the serial path's.
+fn group_hits(n_front: usize, hits: Vec<HitK>) -> NeighborLists {
+    let threads = MATCH_THREADS.with(|c| c.get());
+    if threads > 1 && hits.len() >= 4 * par_min() && scan_scatter_parallel() {
+        return group_hits_parallel(n_front, hits, threads);
+    }
+    group_hits_serial(n_front, hits)
+}
+
+/// `GNOMON_MATCH_SCAN_SCATTER=serial` (read once per process): the scan hop's
+/// hits are counted and scattered on one thread.
+fn scan_scatter_parallel() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNOMON_MATCH_SCAN_SCATTER").map_or(true, |v| v.trim() != "serial"))
+}
+
+/// `group_hits` with the count and the scatter on the pool too. Each
+/// contiguous chunk of hits is grouped by position on its own (a counting
+/// sort, stable); a worker then builds a run of whole lists, each list the
+/// chunks' slices for that position in chunk order -- the serial scatter's
+/// order -- and sorts its lists. BI4 at SF10: 32.9M hits from 678,885
+/// forums, 5.4 s of grouping on one thread for the count and the scatter.
+fn group_hits_parallel(n_front: usize, hits: Vec<HitK>, threads: usize) -> NeighborLists {
+    let n = hits.len();
+    let width = threads.min(n.div_ceil(par_min()).max(1));
+    let size = n.div_ceil(width);
+    let hits = &hits;
+    // per chunk: its offsets by position and its hits grouped by position
+    let locals: Vec<(Vec<u32>, Vec<HitK>)> = crate::pool::run(width, |c| {
+        let part = &hits[(c * size).min(n)..((c + 1) * size).min(n)];
+        let mut loff = vec![0u32; n_front + 1];
+        for h in part {
+            loff[h.0 as usize + 1] += 1;
+        }
+        for p in 0..n_front {
+            loff[p + 1] += loff[p];
+        }
+        // a counting sort by position (stable)
+        let mut next = loff.clone();
+        let mut g: Vec<HitK> = vec![(0, 0, 0, 0, 0, 0, 0); part.len()];
+        for h in part {
+            let k = &mut next[h.0 as usize];
+            g[*k as usize] = *h;
+            *k += 1;
+        }
+        (loff, g)
+    });
+    let mut off = vec![0u32; n_front + 1];
+    for p in 0..n_front {
+        let cnt: u32 = locals.iter().map(|(l, _)| l[p + 1] - l[p]).sum();
+        off[p + 1] = off[p] + cnt;
+    }
+    // runs of whole lists, about equal in hits
+    let mut cuts = vec![0usize];
+    let target = n.div_ceil(threads);
+    let mut last = 0usize;
+    for p in 1..n_front {
+        if off[p] as usize >= last + target && cuts.len() < threads {
+            cuts.push(p);
+            last = off[p] as usize;
+        }
+    }
+    cuts.push(n_front);
+    let locals = &locals;
+    let off_ref = &off;
+    let parts: Vec<Vec<(u32, Addr)>> = crate::pool::run(cuts.len() - 1, |w| {
+        let (p0, p1) = (cuts[w], cuts[w + 1]);
+        let mut run: Vec<HitK> = Vec::with_capacity((off_ref[p1] - off_ref[p0]) as usize);
+        for p in p0..p1 {
+            let a = run.len();
+            for (loff, g) in locals.iter() {
+                run.extend_from_slice(&g[loff[p] as usize..loff[p + 1] as usize]);
+            }
+            if run.len() - a > 1 {
+                run[a..].sort_unstable_by_key(|h| (h.1, h.2, h.3, h.4));
+            }
+        }
+        run.into_iter().map(|h| (h.5, h.6)).collect()
+    });
+    let mut items = Vec::with_capacity(n);
+    for p in parts {
+        items.extend(p);
+    }
+    NeighborLists { off, items }
+}
+
+fn group_hits_serial(n_front: usize, hits: Vec<HitK>) -> NeighborLists {
+        let mut off = vec![0u32; n_front + 1];
+        for h in &hits {
+            off[h.0 as usize + 1] += 1;
+        }
+        for p in 0..n_front {
+            off[p + 1] += off[p];
+        }
+        let mut grouped: Vec<HitK> = vec![(0, 0, 0, 0, 0, 0, 0); hits.len()];
+        let mut next = off.clone();
+        for h in &hits {
+            let k = &mut next[h.0 as usize];
+            grouped[*k as usize] = *h;
+            *k += 1;
+        }
+        drop(hits);
+        // contiguous runs of whole lists, about equal in hits, one per worker
+        let threads = MATCH_THREADS.with(|c| c.get());
+        let width = if threads > 1 && grouped.len() >= par_min() { threads } else { 1 };
+        let mut cuts = vec![0usize];
+        let target = grouped.len().div_ceil(width.max(1));
+        let mut last = 0usize;
+        for p in 1..n_front {
+            if off[p] as usize >= last + target && cuts.len() < width {
+                cuts.push(p);
+                last = off[p] as usize;
+            }
+        }
+        cuts.push(n_front);
+        {
+            let mut rest: &mut [HitK] = &mut grouped;
+            let mut runs: Vec<std::sync::Mutex<(&mut [HitK], usize, usize)>> = Vec::new();
+            for w in cuts.windows(2) {
+                let (lo, hi) = (off[w[0]] as usize, off[w[1]] as usize);
+                let (head, tail) = std::mem::take(&mut rest).split_at_mut(hi - lo);
+                runs.push(std::sync::Mutex::new((head, w[0], w[1])));
+                rest = tail;
+            }
+            let off = &off;
+            crate::pool::run(runs.len(), |w| {
+                let mut g = runs[w].lock().expect("scan-hop run mutex poisoned");
+                let (ref mut run, p0, p1) = *g;
+                let base = off[p0] as usize;
+                for p in p0..p1 {
+                    let (a, b) = (off[p] as usize - base, off[p + 1] as usize - base);
+                    if b - a > 1 {
+                        run[a..b].sort_unstable_by_key(|h| (h.1, h.2, h.3, h.4));
+                    }
+                }
+            });
+        }
+        let items = par_concat(grouped.len(), |r| grouped[r].iter().map(|h| (h.5, h.6)).collect());
+        NeighborLists { off, items }
+    }
+
+
 impl<'s, 'a> Ctx<'s, 'a> {
     /// Column `c` as key parts, row by row.
     fn keys_of(&self, c: &Col) -> DResult<Vec<KeyVal>> {
@@ -4835,7 +6590,11 @@ fn float_key(f: f64) -> KeyVal {
 
 impl<'s, 'a> Ctx<'s, 'a> {
     fn join(&mut self, left: Rel, right: Rel, on: &[(String, String)], kind: JoinKind) -> DResult<Rel> {
+        let t0 = trace().then(std::time::Instant::now);
         if let (Some(lu), Some(ru)) = (self.id_keys(&left, on, true), self.id_keys(&right, on, false)) {
+            if let Some(t0) = t0 {
+                eprintln!("match trace:   join keys {} x {} in {:.1} ms", lu.len(), ru.len(), t0.elapsed().as_secs_f64() * 1e3);
+            }
             return self.join_ids(left, right, &lu, &ru, kind);
         }
         let lk: Vec<Vec<KeyVal>> = on.iter().map(|(l, _)| self.keys_by_name(&left, l)).collect::<DResult<_>>()?;
@@ -4917,6 +6676,11 @@ impl<'s, 'a> Ctx<'s, 'a> {
     /// the smaller-left path; the copies of the variables, ~10 ms.
     fn join_ids(&mut self, left: Rel, right: Rel, lu: &[u64], ru: &[u64], kind: JoinKind) -> DResult<Rel> {
         let t0 = trace().then(std::time::Instant::now);
+        if kind == JoinKind::Inner && unique_join_on() && ru.len() >= par_min() {
+            if let Some(pos) = unique_slots(ru) {
+                return Ok(self.join_unique(left, right, lu, &pos, t0));
+            }
+        }
         let (li, ri) = match_ids(lu, ru, kind)?;
         check_rows(li.len())?;
         let t_match = t0.map(|t| t.elapsed());
@@ -4937,6 +6701,44 @@ impl<'s, 'a> Ctx<'s, 'a> {
             );
         }
         Ok(out)
+    }
+
+    /// `join_ids` for an inner join whose right keys are distinct
+    /// (`unique_slots`): each left row has at most its one right row, so the
+    /// join's rows are the left rows with a match, in left order, each beside
+    /// its match -- the general path's rows. The matches are looked up on the
+    /// pool; when every left row matches, the left side is kept as it is
+    /// (no gather) and only the right side is gathered (BIH-R5 at SF10: 7.3M
+    /// edge rows, each to its one message version).
+    fn join_unique(&mut self, left: Rel, right: Rel, lu: &[u64], pos: &[u32], t0: Option<std::time::Instant>) -> Rel {
+        let ri: Vec<u32> = par_concat(lu.len(), |r| {
+            lu[r].iter().map(|&k| pos.get(k as usize).copied().unwrap_or(u32::MAX)).collect()
+        });
+        let t_match = t0.map(|t| t.elapsed());
+        let all = ri.iter().all(|&j| j != u32::MAX);
+        let (mut out, rj): (Rel, Vec<usize>) = if all {
+            (left, par_concat(ri.len(), |r| ri[r].iter().map(|&j| j as usize).collect()))
+        } else {
+            let li: Vec<usize> = (0..ri.len()).filter(|&i| ri[i] != u32::MAX).collect();
+            let rj = li.iter().map(|&i| ri[i] as usize).collect();
+            (left.take(&li), rj)
+        };
+        let r = right.take(&rj);
+        out.n = rj.len();
+        out.vars.extend(r.vars);
+        out.cols.extend(r.cols);
+        if let (Some(t0), Some(t_match)) = (t0, t_match) {
+            eprintln!(
+                "match trace:   unique-key join {} x {} -> {} rows ({}): slots and match {:.1} ms, gather {:.1} ms",
+                lu.len(),
+                pos.len(),
+                rj.len(),
+                if all { "every left row" } else { "some left rows" },
+                t_match.as_secs_f64() * 1e3,
+                (t0.elapsed() - t_match).as_secs_f64() * 1e3
+            );
+        }
+        out
     }
 
     fn keys_by_name(&mut self, rel: &Rel, name: &str) -> DResult<Vec<KeyVal>> {
@@ -5097,6 +6899,13 @@ impl<'s, 'a> Ctx<'s, 'a> {
         } else {
             None
         };
+        // One count of distinct identities per group of packed keys, by
+        // sorting each partition's (key, identity, row) triples
+        if let Some(pk) = packed.as_deref() {
+            if let Some(out) = self.count_distinct_sorted(input, group_by, &key_cols, pk, aggs, t0)? {
+                return Ok(out);
+            }
+        }
         let key_parts: Vec<Vec<KeyVal>> = if packed.is_some() {
             Vec::new()
         } else {
@@ -5249,6 +7058,100 @@ impl<'s, 'a> Ctx<'s, 'a> {
 }
 
 impl<'s, 'a> Ctx<'s, 'a> {
+    /// `aggregate` for one `count_distinct` of an identity column
+    /// without nulls over one or two packed identity keys (BI4 at SF10:
+    /// 32.9M rows into 9.08M (forum, country) groups, ~6.4 s with a distinct
+    /// set per group). The rows are split by a hash of their key; each
+    /// partition sorts its (key, identity, row) triples and reads per group
+    /// its first row (the least row index) and its distinct identities; the
+    /// groups are put in first-row order. The fold's groups, order and
+    /// counts exactly. None for any other aggregate.
+    /// `GNOMON_MATCH_DISTINCT_SORT=0` (read per call): the fold.
+    #[allow(clippy::type_complexity)]
+    fn count_distinct_sorted(
+        &mut self,
+        input: &Rel,
+        group_by: &[(String, Expr)],
+        key_cols: &[Col],
+        packed: &[u128],
+        aggs: &[Agg],
+        t0: Option<std::time::Instant>,
+    ) -> DResult<Option<Rel>> {
+        if std::env::var("GNOMON_MATCH_DISTINCT_SORT").is_ok_and(|v| v.trim() == "0") {
+            return Ok(None);
+        }
+        let n = input.n;
+        let [a] = aggs else { return Ok(None) };
+        if a.func != AggFn::CountDistinct {
+            return Ok(None);
+        }
+        let Some(of) = a.of.as_ref() else { return Ok(None) };
+        let c = self.eval(of, input)?;
+        let Col { v: Vals::Uid(ids), null } = &c else { return Ok(None) };
+        if null.as_ref().is_some_and(|m| m.iter().any(|&b| b)) || ids.len() != n {
+            return Ok(None);
+        }
+        let width = if n >= fold_parallel_rows() { crate::scan::scan_threads().clamp(1, 64) } else { 1 };
+        let part = |k: u128| -> usize {
+            let h = ((k as u64) ^ ((k >> 64) as u64).rotate_left(29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            ((h >> 32) % width as u64) as usize
+        };
+        let chunk = n.div_ceil(width);
+        let split: Vec<Vec<Vec<(u128, u32, u32)>>> = crate::pool::run(width, |ch| {
+            let mut by: Vec<Vec<(u128, u32, u32)>> = (0..width).map(|_| Vec::new()).collect();
+            for i in (ch * chunk).min(n)..((ch + 1) * chunk).min(n) {
+                by[part(packed[i])].push((packed[i], ids[i], i as u32));
+            }
+            by
+        });
+        let t_keys = lap(t0);
+        // per partition: (first row, distinct count) of each of its groups
+        let parts: Vec<Vec<(u32, i64)>> = crate::pool::run(width, |w| {
+            let mut v: Vec<(u128, u32, u32)> = Vec::with_capacity(split.iter().map(|by| by[w].len()).sum());
+            for by in &split {
+                v.extend_from_slice(&by[w]);
+            }
+            v.sort_unstable();
+            let mut out = Vec::new();
+            let mut j = 0;
+            while j < v.len() {
+                let k = v[j].0;
+                let (mut first, mut count, mut last_id) = (v[j].2, 1i64, v[j].1);
+                j += 1;
+                while j < v.len() && v[j].0 == k {
+                    first = first.min(v[j].2);
+                    if v[j].1 != last_id {
+                        count += 1;
+                        last_id = v[j].1;
+                    }
+                    j += 1;
+                }
+                out.push((first, count));
+            }
+            out
+        });
+        drop(split);
+        let mut groups: Vec<(u32, i64)> = parts.into_iter().flatten().collect();
+        groups.sort_unstable_by_key(|g| g.0);
+        let first: Vec<usize> = groups.iter().map(|g| g.0 as usize).collect();
+        let mut out = Rel { n: first.len(), vars: Vec::new(), cols: Vec::new() };
+        for ((name, _), kc) in group_by.iter().zip(key_cols) {
+            out.cols.push((name.clone(), kc.take(&first)));
+        }
+        out.cols.push((a.alias.clone(), Col { v: Vals::I64(groups.iter().map(|g| g.1).collect()), null: None }));
+        if trace() {
+            eprintln!(
+                "match trace:   aggregate (distinct by sort): keys {:.1} ms, sort and count {:.1} ms ({} rows, {} groups, {} workers)",
+                t_keys.as_secs_f64() * 1e3,
+                (lap(t0) - t_keys).as_secs_f64() * 1e3,
+                n,
+                first.len(),
+                width
+            );
+        }
+        Ok(Some(out))
+    }
+
     /// `collect` per group (rows in input order): the elements of the rows
     /// whose components are not all null, ordered by the aggregate's keys and
     /// then by the components (ascending, nulls first), equal elements kept
@@ -5716,8 +7619,24 @@ impl<'s, 'a> Ctx<'s, 'a> {
             let n = input.n;
             return Ok((input, n));
         };
-        let inner = self.run(node.inputs[0], memo)?;
-        let n = inner.n;
+        // The filter chain on one expansion under the projection may cut
+        // its targets to those this order's cut keeps (`topk_cut`)
+        let chain_top = node.inputs[0];
+        self.topk = None;
+        self.topk_rows = None;
+        let need = cap.map_or(page_end, |c| c.min(page_end));
+        if topk_hop_on() && need > 0 && self.uses(chain_top) == 1 {
+            if let Some((_, under)) = self.filter_chain(chain_top) {
+                if matches!(self.plan.nodes[under].op, Op::Expand { .. }) {
+                    self.topk = Some(TopkHint { expand: under, key: k1.clone(), want: need });
+                }
+            }
+        }
+        let inner = self.run(chain_top, memo);
+        self.topk = None;
+        let inner = inner?;
+        // the rows before a cut: the order's own decisions read them
+        let n = self.topk_rows.take().unwrap_or(inner.n);
         let want = page_end.min(cap.map_or(n, |c| c.min(n)));
         if want == 0 || want * 4 >= n {
             let out = self.apply(&Op::Project { bindings, keep_all: true }, vec![inner])?;
@@ -5727,7 +7646,7 @@ impl<'s, 'a> Ctx<'s, 'a> {
         let last = *top.last().expect("want > 0 rows");
         let col = self.eval(&k1.key, &inner)?;
         let mut keep = Vec::with_capacity(want * 2);
-        for i in 0..n {
+        for i in 0..inner.n {
             if self.key_order(&col, &k1, i, last)? != Ordering::Greater {
                 keep.push(i);
             }
@@ -5800,6 +7719,111 @@ impl<'s, 'a> Ctx<'s, 'a> {
 
     fn uid_text(&self, id: u32) -> DResult<&str> {
         self.store.dict().uid(id).map_or_else(|| refuse("a dense id outside the dictionary"), Ok)
+    }
+
+    /// An expression that reads one node variable's own fields and
+    /// properties (not its depth, not a projected column) is a function of
+    /// that variable's version: over a large relation with few distinct
+    /// versions, evaluated once per distinct version and gathered (BI13's
+    /// month count from `p.vt_s` over 3.4M rows of 9,641 persons). `None`
+    /// when it does not apply. `GNOMON_MATCH_VERSION_EVAL=0` (read per call):
+    /// evaluated per row.
+    fn eval_by_versions(&mut self, e: &Expr, rel: &Rel) -> DResult<Option<Col>> {
+        if std::env::var("GNOMON_MATCH_VERSION_EVAL").is_ok_and(|v| v.trim() == "0") {
+            return Ok(None);
+        }
+        let mut names = Vec::new();
+        expr_names(e, &mut names);
+        let Some((var, _)) = names.first().and_then(|n| n.split_once('.')) else { return Ok(None) };
+        let var = var.to_string();
+        if !names
+            .iter()
+            .all(|n| rel.col(n).is_none() && n.split_once('.').is_some_and(|(v, f)| v == var && f != "depth"))
+        {
+            return Ok(None);
+        }
+        let Some(Var::Node { ver, .. }) = rel.var(&var) else { return Ok(None) };
+        let n = rel.n;
+        // the distinct versions: runs first (rows of one version are often
+        // adjacent), then sorted
+        let mut d: Vec<Addr> = Vec::new();
+        for (i, &a) in ver.iter().enumerate() {
+            if i == 0 || a != ver[i - 1] {
+                d.push(a);
+                if d.len() > n / 4 {
+                    return Ok(None);
+                }
+            }
+        }
+        d.sort_unstable();
+        d.dedup();
+        if d.len() > n / VERSION_EVAL_FRACTION {
+            return Ok(None);
+        }
+        let ids: Vec<u32> = d
+            .iter()
+            .map(|&a| if a == NO_ADDR { NO_ID } else { self.nodes[seg_of(a)].a[row_of(a)] })
+            .collect();
+        let sub = Rel { n: d.len(), vars: vec![(var, Var::Node { ids, ver: d.clone(), depth: None })], cols: Vec::new() };
+        let c = self.eval(e, &sub)?;
+        let d = &d;
+        let idx: Vec<usize> = par_concat(n, |r| {
+            let mut last = (NO_ADDR, usize::MAX);
+            r.map(|i| {
+                let a = ver[i];
+                if a != last.0 || last.1 == usize::MAX {
+                    last = (a, d.binary_search(&a).expect("every version is in the distinct list"));
+                }
+                last.1
+            })
+            .collect()
+        });
+        Ok(Some(c.take(&idx)))
+    }
+
+    /// `cast(<identity column>, int)` from the column's distinct
+    /// identities: each one's text parsed once (on the pool), the rows
+    /// gathered from them. `None` (the row loop answers, with its own error)
+    /// when it is not an identity column, or some identity's text is not a
+    /// canonical decimal. `GNOMON_MATCH_CAST_DISTINCT=0` (read per call): the
+    /// row loop parses every row (BI11: 10.6M rows, three casts).
+    fn cast_uids(&self, a: &Col, n: usize) -> DResult<Option<Col>> {
+        let Vals::Uid(ids) = &a.v else { return Ok(None) };
+        if n < CAST_DISTINCT_MIN_ROWS || !cast_distinct_on() {
+            return Ok(None);
+        }
+        let live = |i: usize| !a.is_null(i);
+        let mut seen = vec![0u64; (self.store.dict().len() as usize).div_ceil(64) + 1];
+        for i in 0..n {
+            if live(i) {
+                let v = ids[i] as usize;
+                if v / 64 >= seen.len() {
+                    return Ok(None);
+                }
+                seen[v / 64] |= 1 << (v % 64);
+            }
+        }
+        let mut distinct: Vec<u32> = Vec::new();
+        for (w, &bits) in seen.iter().enumerate() {
+            let mut b = bits;
+            while b != 0 {
+                distinct.push((w * 64) as u32 + b.trailing_zeros());
+                b &= b - 1;
+            }
+        }
+        let this: &Self = self;
+        let parsed: Vec<Option<i64>> = par_concat(distinct.len(), |r| {
+            r.map(|k| this.store.dict().uid(distinct[k]).and_then(canonical_decimal)).collect()
+        });
+        if parsed.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+        let vals: Vec<i64> = parsed.into_iter().map(|v| v.expect("checked above")).collect();
+        let out = par_concat(n, |r| {
+            r.map(|i| if live(i) { vals[distinct.binary_search(&ids[i]).expect("every live id was seen")] } else { 0 })
+                .collect()
+        });
+        Ok(Some(Col { v: Vals::I64(out), null: a.null.clone() }))
     }
 
     /// The text of a string-like value, or `None` for a non-string column.
@@ -5942,6 +7966,11 @@ impl<'s, 'a> Ctx<'s, 'a> {
 
     fn eval(&mut self, e: &Expr, rel: &Rel) -> DResult<Col> {
         let n = rel.n;
+        if n >= version_eval_min_rows() && !matches!(e, Expr::Lit(_) | Expr::Col(_) | Expr::TProp { .. } | Expr::Prop { .. }) {
+            if let Some(c) = self.eval_by_versions(e, rel)? {
+                return Ok(c);
+            }
+        }
         match e {
             Expr::Lit(l) => Ok(match l {
                 Lit::Null => Col { v: Vals::Null(n), null: None },
@@ -6132,6 +8161,9 @@ impl<'s, 'a> Ctx<'s, 'a> {
             }
             Expr::CastInt(x) => {
                 let a = self.eval(x, rel)?;
+                if let Some(c) = self.cast_uids(&a, n)? {
+                    return Ok(c);
+                }
                 let mut out = vec![0i64; n];
                 for (i, slot) in out.iter_mut().enumerate() {
                     if a.is_null(i) {
@@ -6590,6 +8622,31 @@ impl<'s, 'a> Ctx<'s, 'a> {
 
 /// Does a predicate read nothing but the target `into` (not its depth,
 /// which varies by row)? Such a predicate is a function of the target id.
+/// `GNOMON_MATCH_COVALID_PAR=0` (read per call): a CoValidExpand runs
+/// its searches' starts and levels on one thread.
+fn covalid_par_on() -> bool {
+    std::env::var("GNOMON_MATCH_COVALID_PAR").map_or(true, |v| v.trim() != "0")
+}
+
+/// `GNOMON_MATCH_COVALID_LOCAL=0` (read per call): a filter chain over a
+/// CoValidExpand tests the expansion's rows.
+fn covalid_local_on() -> bool {
+    std::env::var("GNOMON_MATCH_COVALID_LOCAL").map_or(true, |v| v.trim() != "0")
+}
+
+/// A predicate a CoValidExpand decides per found target version: it
+/// reads the target alone (`target_local`) and none of the fields the
+/// expansion's rows carry beside the version (depth, the fragment's ps/pe).
+fn covalid_local(p: &Op, into: &str) -> bool {
+    if !target_local(p, into) {
+        return false;
+    }
+    let Op::Filter(e) = p else { return true };
+    let mut names = Vec::new();
+    expr_names(e, &mut names);
+    names.iter().all(|n| n.split_once('.').is_some_and(|(_, f)| !matches!(f, "ps" | "pe" | "depth")))
+}
+
 fn target_local(p: &Op, into: &str) -> bool {
     match p {
         Op::TypeConstraint { var, .. } => var == into,
@@ -6818,6 +8875,282 @@ impl<'s, 'a> Ctx<'s, 'a> {
     }
 }
 
+// --------------------------------------------------------------------------
+// The common-interval chain in one pass
+// --------------------------------------------------------------------------
+
+/// `GNOMON_MATCH_INTERVAL_FUSE=0` (read per call): a filter over a chain
+/// of projections of integer greater/lesser picks (the common interval of
+/// the bound versions) evaluates each projection over every row and then
+/// the filter.
+fn interval_fuse_on() -> bool {
+    std::env::var("GNOMON_MATCH_INTERVAL_FUSE").map_or(true, |v| v.trim() != "0")
+}
+
+/// One operand of the fused chain: an integer literal, a bound version's
+/// valid-time end, a computed column of the input, or an earlier binding.
+#[derive(Clone, Copy, Debug)]
+enum IvLeaf {
+    Lit(i64),
+    Field { var: usize, end: bool },
+    Col(usize),
+    Bind(usize),
+}
+
+/// One binding of the fused chain: `pick(cmp(a, b), t, f)` or a copy of `a`.
+#[derive(Clone, Debug)]
+struct IvBind {
+    name: String,
+    op: Option<CmpOp>,
+    a: IvLeaf,
+    b: IvLeaf,
+    t: IvLeaf,
+    f: IvLeaf,
+}
+
+/// The fused chain under a filter: the input node, the bindings in order,
+/// the filter's comparison and which bindings to keep as columns.
+#[derive(Clone, Debug)]
+struct IvChain {
+    input: usize,
+    vars: Vec<String>,
+    cols: Vec<String>,
+    binds: Vec<IvBind>,
+    pred: (CmpOp, IvLeaf, IvLeaf),
+}
+
+impl<'s, 'a> Ctx<'s, 'a> {
+    /// A Filter `Cmp(x, y)` over a chain of keep-all Projects (each read by
+    /// the next alone) whose bindings are `if(cmp(a, b), a|b, b|a)` picks or
+    /// copies over integer literals, `<var>.vt_s` / `<var>.vt_e` and earlier
+    /// bindings: the shape of the common-interval chain the compiler emits
+    /// (`_sequenced`, `_carry`). Columns of the chain's input are resolved
+    /// when it runs (`run_interval_chain`); None when the shape differs.
+    fn interval_chain(&self, id: usize) -> Option<IvChain> {
+        if !interval_fuse_on() {
+            return None;
+        }
+        let node = &self.plan.nodes[id];
+        let Op::Filter(Expr::Cmp(pop, pl, pr)) = &node.op else { return None };
+        let mut projects = Vec::new();
+        let mut cur = *node.inputs.first()?;
+        while let Op::Project { bindings, keep_all: true } = &self.plan.nodes[cur].op {
+            if self.uses(cur) != 1 {
+                break;
+            }
+            projects.push(bindings.clone());
+            cur = self.plan.nodes[cur].inputs[0];
+        }
+        if projects.is_empty() {
+            return None;
+        }
+        projects.reverse();
+        let mut chain = IvChain { input: cur, vars: Vec::new(), cols: Vec::new(), binds: Vec::new(), pred: (*pop, IvLeaf::Lit(0), IvLeaf::Lit(0)) };
+        // a name: an earlier binding (the latest of that name), else a field
+        // of a variable, else a column of the input
+        fn leaf(ch: &mut IvChain, e: &Expr) -> Option<IvLeaf> {
+            match e {
+                Expr::Lit(Lit::Int(x)) => Some(IvLeaf::Lit(*x)),
+                Expr::Col(name) => {
+                    if let Some(k) = ch.binds.iter().rposition(|b| b.name == *name) {
+                        return Some(IvLeaf::Bind(k));
+                    }
+                    if let Some((var, field)) = name.split_once('.') {
+                        if field == "vt_s" || field == "vt_e" {
+                            let v = match ch.vars.iter().position(|x| x == var) {
+                                Some(v) => v,
+                                None => {
+                                    ch.vars.push(var.to_string());
+                                    ch.vars.len() - 1
+                                }
+                            };
+                            return Some(IvLeaf::Field { var: v, end: field == "vt_e" });
+                        }
+                    }
+                    let c = match ch.cols.iter().position(|x| x == name) {
+                        Some(c) => c,
+                        None => {
+                            ch.cols.push(name.clone());
+                            ch.cols.len() - 1
+                        }
+                    };
+                    Some(IvLeaf::Col(c))
+                }
+                _ => None,
+            }
+        }
+        for bindings in &projects {
+            // a projection's bindings read the projection's input: resolve
+            // them all before any of them binds
+            let mut made = Vec::new();
+            for (name, e) in bindings {
+                let b = match e {
+                    Expr::If(c, t, f) => {
+                        let Expr::Cmp(op @ (CmpOp::Gt | CmpOp::Ge | CmpOp::Lt | CmpOp::Le), x, y) = c.as_ref() else { return None };
+                        IvBind { name: name.clone(), op: Some(*op), a: leaf(&mut chain, x)?, b: leaf(&mut chain, y)?, t: leaf(&mut chain, t)?, f: leaf(&mut chain, f)? }
+                    }
+                    Expr::Col(_) | Expr::Lit(Lit::Int(_)) => {
+                        let a = leaf(&mut chain, e)?;
+                        IvBind { name: name.clone(), op: None, a, b: a, t: a, f: a }
+                    }
+                    _ => return None,
+                };
+                made.push(b);
+            }
+            chain.binds.extend(made);
+        }
+        chain.pred = (*pop, leaf(&mut chain, pl)?, leaf(&mut chain, pr)?);
+        Some(chain)
+    }
+
+    /// `interval_chain`'s rows: one pass on the pool over the input's rows
+    /// computing every binding (each projection's integer picks, as the
+    /// projections evaluate them) and the filter's comparison, then the
+    /// columns read downstream added and the rows that pass kept, in order:
+    /// the projections' and the filter's rows. Every operand must be a
+    /// non-null integer (a bound version on every row, integer columns
+    /// without nulls); otherwise the chain runs as written.
+    fn run_interval_chain(&mut self, id: usize, ch: &IvChain, memo: &mut FxMap<usize, Rel>) -> DResult<Rel> {
+        let t0 = trace().then(std::time::Instant::now);
+        let input = self.run(ch.input, memo)?;
+        let n = input.n;
+        // a field name the input also holds as a column reads the column
+        if ch.vars.iter().any(|v| input.col(&format!("{v}.vt_s")).is_some() || input.col(&format!("{v}.vt_e")).is_some()) {
+            return self.interval_chain_as_written(id, input);
+        }
+        let mut vers: Vec<(RowKind, &[Addr])> = Vec::new();
+        for v in &ch.vars {
+            match input.var(v) {
+                Some(Var::Node { ver, .. }) if !ver.contains(&NO_ADDR) => vers.push((RowKind::Node, ver.as_slice())),
+                Some(Var::Edge { ver }) if !ver.contains(&NO_ADDR) => vers.push((RowKind::Edge, ver.as_slice())),
+                _ => return self.interval_chain_as_written(id, input),
+            }
+        }
+        let mut cols: Vec<&[i64]> = Vec::new();
+        for c in &ch.cols {
+            match input.col(c) {
+                Some(Col { v: Vals::I64(x), null: None }) => cols.push(x.as_slice()),
+                _ => return self.interval_chain_as_written(id, input),
+            }
+        }
+        // the bindings a later operator reads (by name, as `drop_dead_cols`
+        // decides; the last binding of a name wins)
+        let keep: Vec<usize> = (0..ch.binds.len())
+            .filter(|&k| !ch.binds[k + 1..].iter().any(|b| b.name == ch.binds[k].name))
+            .filter(|&k| !ch.binds[k].name.starts_with('_') || self.read_after(id, &ch.binds[k].name))
+            .collect();
+        let this: &Self = self;
+        let nb = ch.binds.len();
+        let width = MATCH_THREADS.with(|c| c.get()).min(n.div_ceil(par_min())).max(1);
+        let size = n.div_ceil(width).max(1);
+        let parts = crate::pool::run(width, |w| {
+            let (lo, hi) = ((w * size).min(n), ((w + 1) * size).min(n));
+            let mut vals = vec![0i64; nb];
+            let mut out: Vec<Vec<i64>> = keep.iter().map(|_| Vec::with_capacity(hi - lo)).collect();
+            let mut pass = Vec::with_capacity(hi - lo);
+            for i in lo..hi {
+                let get = |l: IvLeaf, vals: &[i64]| -> i64 {
+                    match l {
+                        IvLeaf::Lit(x) => x,
+                        IvLeaf::Field { var, end } => {
+                            let (kind, ver) = vers[var];
+                            let s = this.seg(kind, ver[i]);
+                            if end { s.vt_e(row_of(ver[i])) } else { s.vt_s[row_of(ver[i])] }
+                        }
+                        IvLeaf::Col(c) => cols[c][i],
+                        IvLeaf::Bind(k) => vals[k],
+                    }
+                };
+                for (k, b) in ch.binds.iter().enumerate() {
+                    let v = match b.op {
+                        None => get(b.a, &vals),
+                        Some(op) => {
+                            let (x, y) = (get(b.a, &vals), get(b.b, &vals));
+                            let hit = match op {
+                                CmpOp::Gt => x > y,
+                                CmpOp::Ge => x >= y,
+                                CmpOp::Lt => x < y,
+                                _ => x <= y,
+                            };
+                            if hit { get(b.t, &vals) } else { get(b.f, &vals) }
+                        }
+                    };
+                    vals[k] = v;
+                }
+                for (o, &k) in out.iter_mut().zip(&keep) {
+                    o.push(vals[k]);
+                }
+                let (x, y) = (get(ch.pred.1, &vals), get(ch.pred.2, &vals));
+                pass.push(match ch.pred.0 {
+                    CmpOp::Eq => x == y,
+                    CmpOp::Ne => x != y,
+                    CmpOp::Lt => x < y,
+                    CmpOp::Le => x <= y,
+                    CmpOp::Gt => x > y,
+                    CmpOp::Ge => x >= y,
+                });
+            }
+            (out, pass)
+        });
+        let mut outs: Vec<Vec<i64>> = keep.iter().map(|_| Vec::with_capacity(n)).collect();
+        let mut pass = Vec::with_capacity(n);
+        for (o, p) in parts {
+            for (dst, src) in outs.iter_mut().zip(o) {
+                dst.extend(src);
+            }
+            pass.extend(p);
+        }
+        let t_pass = lap(t0);
+        let mut rel = input;
+        for (&k, v) in keep.iter().zip(outs) {
+            rel.set_col(&ch.binds[k].name, Col { v: Vals::I64(v), null: None });
+        }
+        let idx: Vec<usize> = (0..n).filter(|&i| pass[i]).collect();
+        let out = if idx.len() == n { rel } else { rel.take(&idx) };
+        if let Some(t0) = t0 {
+            eprintln!(
+                "match trace:   interval chain in one pass: {} bindings over {} rows, {} kept: pass {:.1} ms, rows {:.1} ms",
+                nb,
+                n,
+                out.n,
+                t_pass.as_secs_f64() * 1e3,
+                (t0.elapsed() - t_pass).as_secs_f64() * 1e3
+            );
+        }
+        Ok(out)
+    }
+
+    /// `interval_chain`'s projections and filter as written, over its input.
+    fn interval_chain_as_written(&mut self, id: usize, input: Rel) -> DResult<Rel> {
+        let mut path = Vec::new();
+        let mut cur = id;
+        loop {
+            path.push(cur);
+            let next = self.plan.nodes[cur].inputs[0];
+            if !matches!(self.plan.nodes[next].op, Op::Project { keep_all: true, .. }) || self.uses(next) != 1 {
+                break;
+            }
+            cur = next;
+        }
+        let mut rel = input;
+        for &k in path.iter().rev() {
+            let op = self.plan.nodes[k].op.clone();
+            rel = self.apply(&op, vec![rel])?;
+            check_rows(rel.n)?;
+            self.drop_dead_cols(k, &mut rel);
+        }
+        Ok(rel)
+    }
+
+    /// Whether an operator downstream of node `id` (or the answer) names
+    /// the column `name` (`drop_dead_cols`'s textual test).
+    fn read_after(&mut self, id: usize, name: &str) -> bool {
+        let mut probe = Rel { n: DEAD_COLS_MIN.max(par_min()), vars: Vec::new(), cols: vec![(name.to_string(), Col { v: Vals::Null(0), null: None })] };
+        self.drop_dead_cols(id, &mut probe);
+        !probe.cols.is_empty()
+    }
+}
+
 impl NativeStore {
     /// Execute one compiled `match` plan (`plan_json`, format 1) and return
     /// the page `[offset, offset + limit)` of its answer with the answer's
@@ -6882,6 +9215,156 @@ impl NativeStore {
         Ok(out)
     }
 
+    /// The warm open's share of `Ctx::label_rows` for one node segment
+    /// (`GNOMON_STORE_WARM_OPEN`): the same rows, kept in the same cache.
+    pub(crate) fn warm_match_node_segment(&self, id: u64, seg: &Segment<MmapSource>) -> Result<LabelRows> {
+        if let Ok(g) = self.match_label_rows.lock() {
+            if let Some(v) = g.get(&id) {
+                return Ok(v.clone());
+            }
+        }
+        let v = label_rows_of(seg.u32_column("label_ref")?, seg)?;
+        if let Ok(mut g) = self.match_label_rows.lock() {
+            g.insert(id, v.clone());
+        }
+        Ok(v)
+    }
+
+    /// The warm open's share of `Ctx::rel_rows` for one edge segment.
+    pub(crate) fn warm_match_edge_segment(&self, id: u64, seg: &Segment<MmapSource>) -> Result<()> {
+        if let Ok(g) = self.match_rel_rows.lock() {
+            if g.contains_key(&id) {
+                return Ok(());
+            }
+        }
+        let v = rel_rows_of(seg.u16_column("rel_code")?, &seg.header().rel_types);
+        if let Ok(mut g) = self.match_rel_rows.lock() {
+            g.insert(id, v);
+        }
+        Ok(())
+    }
+
+    /// The warm open's `match_label_counts`: node versions per label, summed
+    /// over the node segments' label rows, kept for this generation.
+    pub(crate) fn warm_label_counts(&self, counts: HashMap<String, u64>) {
+        let gen = self.generation();
+        let mut out: Vec<(String, u64)> = counts.into_iter().collect();
+        out.sort_unstable();
+        if let Ok(mut g) = self.match_labels.lock() {
+            if !matches!(g.as_ref(), Some((k, _)) if *k == gen) {
+                *g = Some((gen, Arc::new(out)));
+            }
+        }
+    }
+
+    /// Per relationship type, `(name, edge versions, distinct source
+    /// identities, distinct target identities)` over every version (as
+    /// `match_label_counts` counts): the `match` compiler's second-anchor
+    /// estimate of a hop's fan from either end. One pass over the edge
+    /// segments' type, source and target columns, in chunks on the pool, a
+    /// bitset of identities per end and type; cached per generation.
+    pub fn match_rel_ends(&self) -> Result<Vec<(String, u64, u64, u64)>> {
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        let gen = self.generation();
+        if let Ok(g) = self.match_rel_ends.lock() {
+            if let Some((k, v)) = g.as_ref() {
+                if *k == gen {
+                    return Ok(v.as_ref().clone());
+                }
+            }
+        }
+        let words = self.dict().len() as usize / 64 + 1;
+        let mut names: Vec<String> = Vec::new();
+        let mut segs = Vec::new();
+        for (f, _id) in self.edge_files() {
+            let seg = self.open_segment(&f)?;
+            if seg.rows() == 0 {
+                continue;
+            }
+            let map: Vec<usize> = seg
+                .header()
+                .rel_types
+                .iter()
+                .map(|r| match names.iter().position(|n| n == r) {
+                    Some(i) => i,
+                    None => {
+                        names.push(r.clone());
+                        names.len() - 1
+                    }
+                })
+                .collect();
+            segs.push((seg, map));
+        }
+        let bits = |n: usize| -> Vec<AtomicU64> { (0..n).map(|_| AtomicU64::new(0)).collect() };
+        let src: Vec<Vec<AtomicU64>> = (0..names.len()).map(|_| bits(words)).collect();
+        let dst: Vec<Vec<AtomicU64>> = (0..names.len()).map(|_| bits(words)).collect();
+        let count = bits(names.len());
+        let threads = self.designs().match_threads().max(1);
+        for (seg, map) in &segs {
+            let codes = seg.u16_column("rel_code")?;
+            let a = seg.u32_column("src_id")?;
+            let b = seg.u32_column("dst_id")?;
+            let n = codes.len().min(a.len()).min(b.len());
+            let width = threads.min(n.div_ceil(1 << 16)).max(1);
+            let size = n.div_ceil(width);
+            crate::pool::run(width, |w| {
+                let mut local = vec![0u64; names.len()];
+                for r in (w * size).min(n)..((w + 1) * size).min(n) {
+                    let Some(&k) = map.get(codes[r] as usize) else { continue };
+                    local[k] += 1;
+                    for (set, id) in [(&src[k], a[r]), (&dst[k], b[r])] {
+                        let m = 1u64 << (id % 64);
+                        if let Some(x) = set.get(id as usize / 64) {
+                            if x.load(Relaxed) & m == 0 {
+                                x.fetch_or(m, Relaxed);
+                            }
+                        }
+                    }
+                }
+                for (k, c) in local.into_iter().enumerate() {
+                    if c > 0 {
+                        count[k].fetch_add(c, Relaxed);
+                    }
+                }
+            });
+        }
+        let ones = |set: &[AtomicU64]| set.iter().map(|x| x.load(Relaxed).count_ones() as u64).sum::<u64>();
+        let mut out: Vec<(String, u64, u64, u64)> = names
+            .iter()
+            .enumerate()
+            .map(|(k, nm)| (nm.clone(), count[k].load(Relaxed), ones(&src[k]), ones(&dst[k])))
+            .collect();
+        out.sort_unstable();
+        if let Ok(mut g) = self.match_rel_ends.lock() {
+            *g = Some((gen, Arc::new(out.clone())));
+        }
+        Ok(out)
+    }
+
+    /// The adjacency-index rows of the identities `uids` in direction
+    /// `dir` ("out", "in" or "both") over every edge segment, before any
+    /// test (every relationship type, version and belief): an upper bound
+    /// of a first hop's rows, the `match` compiler's second-anchor probe.
+    /// An identity outside the dictionary reads none.
+    pub fn match_adjacency_rows(&self, uids: &[String], dir: &str) -> Result<u64> {
+        use crate::tcsr::Direction;
+        let dirs: &[Direction] = match dir {
+            "out" => &[Direction::Out],
+            "in" => &[Direction::In],
+            _ => &[Direction::Out, Direction::In],
+        };
+        let ids: Vec<u32> = uids.iter().filter_map(|u| self.dict().dense_id(u)).collect();
+        let mut n = 0u64;
+        for (f, _id) in self.edge_files() {
+            let idx = self.tcsr_index(&f)?;
+            for &d in dirs {
+                let side = idx.dir(d);
+                n += ids.iter().map(|&u| side.slice(u).len() as u64).sum::<u64>();
+            }
+        }
+        Ok(n)
+    }
+
     /// `match_plan` for a weight pattern, column-wise (`PairsOut`); `None`
     /// sends the caller to the rows.
     pub fn match_plan_pairs(&self, plan_json: &str) -> Result<Option<PairsOut>> {
@@ -6916,6 +9399,8 @@ impl NativeStore {
     /// go back to the handle's cache.
     fn with_ctx<R>(&self, plan: &Plan, f: impl FnOnce(&mut Ctx<'_, '_>) -> DResult<R>) -> DResult<R> {
         let _threads = ThreadsGuard::set(self.designs().match_threads(), self.designs().match_par_rows);
+        ROWS_FAST.with(|c| c.set(std::env::var("GNOMON_MATCH_ROWS_FAST").map_or(true, |v| v.trim() != "0")));
+        NODE_PASS_PAR.with(|c| c.set(node_pass_mode()));
         let node_files = self.node_files();
         let edge_files = self.edge_files();
         let mut node_segs = Vec::with_capacity(node_files.len());
@@ -6950,8 +9435,17 @@ impl NativeStore {
             props: FxMap::default(),
             node_map: None,
             semi: None,
+            wsemi: None,
+            wsemi_now: None,
             downstream: FxMap::default(),
             edge_est: std::sync::Mutex::new(FxMap::default()),
+            topk: None,
+            topk_now: None,
+            topk_scan: None,
+            topk_tried: false,
+            topk_rows: None,
+            hop_memo: None,
+            scan_vt_now: None,
         };
         let out = f(&mut ctx);
         // the typed columns this call filled go back to the handle's cache
@@ -7314,6 +9808,35 @@ mod tests {
         let mut want: Vec<usize> = (0..n).collect();
         want.sort_by_key(|&i| (vals[i], i));
         assert!(one.5 == want);
+    }
+
+    /// The in-place direct key index holds the rows the map form and
+    /// the counted direct form hold, for every key, in the same order.
+    #[test]
+    fn the_direct_key_index_is_the_other_forms() {
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for case in 0..300 {
+            let n = (next() % 200) as usize;
+            let span = [1u64, 3, 50, 700, 1_600][case % 5];
+            let keys: Vec<u64> = (0..n).map(|_| next() % span).collect();
+            let max = keys.iter().copied().max().unwrap_or(0);
+            let direct = KeyCsr::build_direct(&keys, max as usize + 1);
+            // the map form, forced: every key shifted past any direct bound
+            let shifted: Vec<u64> = keys.iter().map(|&k| k + (1 << 40)).collect();
+            let map = KeyCsr::build(&shifted);
+            assert!(n == 0 || map.slots.is_some());
+            for k in 0..=max + 2 {
+                let want: Vec<u32> = (0..n as u32).filter(|&r| keys[r as usize] == k).collect();
+                assert_eq!(direct.rows(k), want.as_slice(), "case {case} key {k}");
+                assert_eq!(map.rows(k + (1 << 40)), want.as_slice(), "case {case} key {k}");
+            }
+        }
     }
 
     #[test]

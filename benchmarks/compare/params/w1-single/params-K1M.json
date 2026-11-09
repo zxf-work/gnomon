@@ -1,0 +1,544 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "w1-single-v1",
+ "log": {
+  "name": "synth-1000000.eventlog.jsonl",
+  "sha256": "0fe0ff1b0e6bd8e2675071fa32464f4bffd74aba6091eb8e6c352b7cf2036039"
+ },
+ "selection": {
+  "notes": [
+   "one instance per registry id: the registry's own arguments (extcmp.queries on this log), the instances v3 timed"
+  ]
+ },
+ "counts": {
+  "hist.single": 1,
+  "hist.asof": 1,
+  "snap.hop2": 1,
+  "reach.window": 1,
+  "paths.k": 1,
+  "series.count": 1,
+  "burst.zscore": 1,
+  "agg.rel_bucket": 1,
+  "series.count.w10": 1,
+  "burst.zscore.w10": 1,
+  "agg.rel_bucket.w10": 1,
+  "diff.global": 1,
+  "nbr.evolution": 1,
+  "coactive.narrow": 1,
+  "resolve.substr": 1,
+  "motif.filtered": 1,
+  "diff.belief": 1,
+  "resolve.exact": 1,
+  "resolve.prefix": 1
+ },
+ "instances": [
+  {
+   "query": "hist.single",
+   "instance": "a0677afc",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "6354ff68",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "as_of_tt": 1790904440979828,
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b8c43d20",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "hops": 2,
+    "seeds": [
+     "n1"
+    ],
+    "t_valid": 500000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "5381faeb",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "src": "n1",
+    "window": {
+     "t_a": 0,
+     "t_b": 100000
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "9840e8cd",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "dst": "n2",
+    "k": 3,
+    "max_hops": 3,
+    "src": "n1",
+    "window": {
+     "t_a": 0,
+     "t_b": 250000
+    }
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "6e98fa7e",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "stride": 10000,
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "d0d802d5",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    },
+    "stride": 10000,
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "4e5ecf17",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "limit": 1000,
+    "stride": 10000,
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "a44e87ab",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "stride": 1,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "739654e4",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    },
+    "stride": 1,
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "d33cb074",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "limit": 1000,
+    "stride": 1,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "efacca0d",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "t1": 500000,
+    "t2": 525000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "00f31832",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "t1": 500000,
+    "t2": 600000,
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "9e4004f8",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "a_spec": {
+     "src": "n1"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    },
+    "b_spec": {
+     "src": "n2"
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "160eaac8",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "query": "n1"
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "ca7fa029",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "delta": 20000,
+    "motif": "M_triangle_cyclic",
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n1001",
+     "n1002",
+     "n1003",
+     "n1004",
+     "n1005",
+     "n1006",
+     "n1007",
+     "n1008",
+     "n1009",
+     "n101",
+     "n1010",
+     "n1011",
+     "n1012",
+     "n1013",
+     "n1014",
+     "n1015",
+     "n1016",
+     "n1017",
+     "n1018",
+     "n1019",
+     "n102",
+     "n1020",
+     "n1021",
+     "n1022",
+     "n1023",
+     "n1024",
+     "n1025",
+     "n1026",
+     "n1027",
+     "n1028",
+     "n1029",
+     "n103",
+     "n1030",
+     "n1031",
+     "n1032",
+     "n1033",
+     "n1034",
+     "n1035",
+     "n1036",
+     "n1037",
+     "n1038",
+     "n1039",
+     "n104",
+     "n1040",
+     "n1041",
+     "n1042",
+     "n1043",
+     "n1044",
+     "n1045",
+     "n1046",
+     "n1047",
+     "n1048",
+     "n1049",
+     "n105",
+     "n1050",
+     "n1051",
+     "n1052",
+     "n1053",
+     "n1054",
+     "n1055",
+     "n1056",
+     "n1057",
+     "n1058",
+     "n1059",
+     "n106",
+     "n1060",
+     "n1061",
+     "n1062",
+     "n1063",
+     "n1064",
+     "n1065",
+     "n1066",
+     "n1067",
+     "n1068",
+     "n1069",
+     "n107",
+     "n1070",
+     "n1071",
+     "n1072",
+     "n1073",
+     "n1074",
+     "n1075",
+     "n1076",
+     "n1077",
+     "n1078",
+     "n1079",
+     "n108",
+     "n1080",
+     "n1081",
+     "n1082",
+     "n1083",
+     "n1084",
+     "n1085",
+     "n1086",
+     "n1087",
+     "n1088",
+     "n1089",
+     "n109",
+     "n1090",
+     "n1091",
+     "n1092",
+     "n1093",
+     "n1094",
+     "n1095",
+     "n1096",
+     "n1097",
+     "n1098",
+     "n1099",
+     "n11",
+     "n110",
+     "n1100",
+     "n1101",
+     "n1102",
+     "n1103",
+     "n1104",
+     "n1105",
+     "n1106",
+     "n1107",
+     "n1108",
+     "n1109",
+     "n111",
+     "n1110",
+     "n1111",
+     "n1112",
+     "n1113",
+     "n1114",
+     "n1115",
+     "n1116",
+     "n1117",
+     "n1118",
+     "n1119",
+     "n112",
+     "n1120",
+     "n1121",
+     "n1122",
+     "n1123",
+     "n1124",
+     "n1125",
+     "n1126",
+     "n1127",
+     "n1128",
+     "n1129",
+     "n113",
+     "n1130",
+     "n1131",
+     "n1132",
+     "n1133",
+     "n1134",
+     "n1135",
+     "n1136",
+     "n1137",
+     "n1138",
+     "n1139",
+     "n114",
+     "n1140",
+     "n1141",
+     "n1142",
+     "n1143",
+     "n1144",
+     "n1145",
+     "n1146",
+     "n1147",
+     "n1148",
+     "n1149",
+     "n115",
+     "n1150",
+     "n1151",
+     "n1152",
+     "n1153",
+     "n1154",
+     "n1155",
+     "n1156",
+     "n1157",
+     "n1158",
+     "n1159",
+     "n116",
+     "n1160",
+     "n1161",
+     "n1162",
+     "n1163",
+     "n1164",
+     "n1165",
+     "n1166",
+     "n1167",
+     "n1168",
+     "n1169",
+     "n117",
+     "n1170",
+     "n1171",
+     "n1172",
+     "n1173",
+     "n1174",
+     "n1175",
+     "n1176",
+     "n1177"
+    ],
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "diff.belief",
+   "instance": "c1521d3f",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "limit": 1000,
+    "t1": 1790904440979828,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "resolve.exact",
+   "instance": "35efcfb7",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "mode": "exact",
+    "query": "n1"
+   }
+  },
+  {
+   "query": "resolve.prefix",
+   "instance": "d3e78920",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "mode": "prefix",
+    "query": "alp"
+   }
+  }
+ ]
+}

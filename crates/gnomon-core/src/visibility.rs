@@ -1013,7 +1013,6 @@ mod tests {
 
     #[test]
     fn close_view_of_an_all_current_segment_is_none() {
-        // E10: the case that must allocate nothing, asserted on the variant
         // rather than on the slice, because "returns an empty slice" is also
         // true of a Merged(vec![]) that has already paid for the merge.
         let empty = CloseIndex::default();

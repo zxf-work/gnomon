@@ -1,0 +1,845 @@
+{
+ "row": "BI8",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "p",
+      "labels": [
+       "Person"
+      ],
+      "uids": "$scored"
+     }
+    ],
+    "steps": [],
+    "where": [
+     {
+      "cmp": ">",
+      "l": {
+       "arith": "+",
+       "l": {
+        "arith": "*",
+        "l": {
+         "lit": 100
+        },
+        "r": {
+         "coalesce": [
+          {
+           "col": "owni.n"
+          },
+          {
+           "lit": 0
+          }
+         ]
+        }
+       },
+       "r": {
+        "coalesce": [
+         {
+          "col": "ownm.n"
+         },
+         {
+          "lit": 0
+         }
+        ]
+       }
+      },
+      "r": {
+       "lit": 0
+      }
+     }
+    ],
+    "lookups": [
+     {
+      "as": "owni",
+      "on": {
+       "col": "p.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "q",
+          "labels": [
+           "Person"
+          ]
+         },
+         {
+          "var": "t",
+          "labels": [
+           "Tag"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "q",
+          "to": "t",
+          "rel_type": "HAS_INTEREST",
+          "dir": "out"
+         }
+        ],
+        "where": [
+         {
+          "cmp": "=",
+          "l": {
+           "tprop": [
+            "t",
+            "name"
+           ],
+           "tau": "str"
+          },
+          "r": {
+           "lit": "$tag"
+          }
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "q.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "count"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "as": "ownm",
+      "on": {
+       "col": "p.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "q",
+          "labels": [
+           "Person"
+          ]
+         },
+         {
+          "var": "m",
+          "labels": [
+           "Post",
+           "Comment"
+          ]
+         },
+         {
+          "var": "t",
+          "labels": [
+           "Tag"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "m",
+          "to": "q",
+          "rel_type": "HAS_CREATOR",
+          "dir": "out"
+         },
+         {
+          "from": "m",
+          "to": "t",
+          "rel_type": "HAS_TAG",
+          "dir": "out"
+         }
+        ],
+        "where": [
+         {
+          "cmp": "=",
+          "l": {
+           "tprop": [
+            "t",
+            "name"
+           ],
+           "tau": "str"
+          },
+          "r": {
+           "lit": "$tag"
+          }
+         },
+         {
+          "cmp": ">",
+          "l": {
+           "col": "m.vt_s"
+          },
+          "r": {
+           "lit": "$startDate",
+           "tau": "ts"
+          }
+         },
+         {
+          "cmp": "<",
+          "l": {
+           "col": "m.vt_s"
+          },
+          "r": {
+           "lit": "$endDate",
+           "tau": "ts"
+          }
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "q.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "count"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "as": "fs",
+      "on": {
+       "col": "p.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "p2",
+          "labels": [
+           "Person"
+          ],
+          "uids": "$scored"
+         },
+         {
+          "var": "f",
+          "labels": [
+           "Person"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "p2",
+          "to": "f",
+          "rel_type": "KNOWS",
+          "dir": "both"
+         }
+        ],
+        "lookups": [
+         {
+          "as": "fri",
+          "on": {
+           "col": "f.uid"
+          },
+          "key": "p",
+          "match": {
+           "pattern": {
+            "nodes": [
+             {
+              "var": "q",
+              "labels": [
+               "Person"
+              ]
+             },
+             {
+              "var": "t",
+              "labels": [
+               "Tag"
+              ]
+             }
+            ],
+            "steps": [
+             {
+              "from": "q",
+              "to": "t",
+              "rel_type": "HAS_INTEREST",
+              "dir": "out"
+             }
+            ],
+            "where": [
+             {
+              "cmp": "=",
+              "l": {
+               "tprop": [
+                "t",
+                "name"
+               ],
+               "tau": "str"
+              },
+              "r": {
+               "lit": "$tag"
+              }
+             }
+            ]
+           },
+           "group": {
+            "by": [
+             {
+              "as": "p",
+              "expr": {
+               "col": "q.uid"
+              }
+             }
+            ],
+            "aggs": [
+             {
+              "as": "n",
+              "fn": "count"
+             }
+            ]
+           }
+          }
+         },
+         {
+          "as": "frm",
+          "on": {
+           "col": "f.uid"
+          },
+          "key": "p",
+          "match": {
+           "pattern": {
+            "nodes": [
+             {
+              "var": "q",
+              "labels": [
+               "Person"
+              ]
+             },
+             {
+              "var": "m",
+              "labels": [
+               "Post",
+               "Comment"
+              ]
+             },
+             {
+              "var": "t",
+              "labels": [
+               "Tag"
+              ]
+             }
+            ],
+            "steps": [
+             {
+              "from": "m",
+              "to": "q",
+              "rel_type": "HAS_CREATOR",
+              "dir": "out"
+             },
+             {
+              "from": "m",
+              "to": "t",
+              "rel_type": "HAS_TAG",
+              "dir": "out"
+             }
+            ],
+            "where": [
+             {
+              "cmp": "=",
+              "l": {
+               "tprop": [
+                "t",
+                "name"
+               ],
+               "tau": "str"
+              },
+              "r": {
+               "lit": "$tag"
+              }
+             },
+             {
+              "cmp": ">",
+              "l": {
+               "col": "m.vt_s"
+              },
+              "r": {
+               "lit": "$startDate",
+               "tau": "ts"
+              }
+             },
+             {
+              "cmp": "<",
+              "l": {
+               "col": "m.vt_s"
+              },
+              "r": {
+               "lit": "$endDate",
+               "tau": "ts"
+              }
+             }
+            ]
+           },
+           "group": {
+            "by": [
+             {
+              "as": "p",
+              "expr": {
+               "col": "q.uid"
+              }
+             }
+            ],
+            "aggs": [
+             {
+              "as": "n",
+              "fn": "count"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "p2.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "total",
+          "fn": "sum",
+          "of": {
+           "arith": "+",
+           "l": {
+            "arith": "*",
+            "l": {
+             "lit": 100
+            },
+            "r": {
+             "coalesce": [
+              {
+               "col": "fri.n"
+              },
+              {
+               "lit": 0
+              }
+             ]
+            }
+           },
+           "r": {
+            "coalesce": [
+             {
+              "col": "frm.n"
+             },
+             {
+              "lit": 0
+             }
+            ]
+           }
+          }
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "return": {
+    "rows": [
+     {
+      "as": "personId",
+      "expr": {
+       "col": "p.uid"
+      }
+     },
+     {
+      "as": "score",
+      "expr": {
+       "arith": "+",
+       "l": {
+        "arith": "*",
+        "l": {
+         "lit": 100
+        },
+        "r": {
+         "coalesce": [
+          {
+           "col": "owni.n"
+          },
+          {
+           "lit": 0
+          }
+         ]
+        }
+       },
+       "r": {
+        "coalesce": [
+         {
+          "col": "ownm.n"
+         },
+         {
+          "lit": 0
+         }
+        ]
+       }
+      }
+     },
+     {
+      "as": "friendsScore",
+      "expr": {
+       "coalesce": [
+        {
+         "col": "fs.total"
+        },
+        {
+         "lit": 0
+        }
+       ]
+      }
+     },
+     {
+      "as": "total",
+      "expr": {
+       "arith": "+",
+       "l": {
+        "arith": "+",
+        "l": {
+         "arith": "*",
+         "l": {
+          "lit": 100
+         },
+         "r": {
+          "coalesce": [
+           {
+            "col": "owni.n"
+           },
+           {
+            "lit": 0
+           }
+          ]
+         }
+        },
+        "r": {
+         "coalesce": [
+          {
+           "col": "ownm.n"
+          },
+          {
+           "lit": 0
+          }
+         ]
+        }
+       },
+       "r": {
+        "coalesce": [
+         {
+          "col": "fs.total"
+         },
+         {
+          "lit": 0
+         }
+        ]
+       }
+      }
+     }
+    ],
+    "order_by": [
+     {
+      "expr": {
+       "col": "total"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "personId"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     }
+    ],
+    "limit": 100
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "tag": {
+     "pick": [
+      "tags",
+      0
+     ]
+    },
+    "startDate": {
+     "date": "2011-06-01"
+    },
+    "endDate": {
+     "date": "2012-06-01"
+    },
+    "scored": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "p",
+         "labels": [
+          "Person"
+         ]
+        }
+       ],
+       "steps": [],
+       "where": [
+        {
+         "cmp": ">",
+         "l": {
+          "arith": "+",
+          "l": {
+           "arith": "*",
+           "l": {
+            "lit": 100
+           },
+           "r": {
+            "coalesce": [
+             {
+              "col": "owni.n"
+             },
+             {
+              "lit": 0
+             }
+            ]
+           }
+          },
+          "r": {
+           "coalesce": [
+            {
+             "col": "ownm.n"
+            },
+            {
+             "lit": 0
+            }
+           ]
+          }
+         },
+         "r": {
+          "lit": 0
+         }
+        }
+       ],
+       "lookups": [
+        {
+         "as": "owni",
+         "on": {
+          "col": "p.uid"
+         },
+         "key": "p",
+         "match": {
+          "pattern": {
+           "nodes": [
+            {
+             "var": "q",
+             "labels": [
+              "Person"
+             ]
+            },
+            {
+             "var": "t",
+             "labels": [
+              "Tag"
+             ]
+            }
+           ],
+           "steps": [
+            {
+             "from": "q",
+             "to": "t",
+             "rel_type": "HAS_INTEREST",
+             "dir": "out"
+            }
+           ],
+           "where": [
+            {
+             "cmp": "=",
+             "l": {
+              "tprop": [
+               "t",
+               "name"
+              ],
+              "tau": "str"
+             },
+             "r": {
+              "lit": "$tag"
+             }
+            }
+           ]
+          },
+          "group": {
+           "by": [
+            {
+             "as": "p",
+             "expr": {
+              "col": "q.uid"
+             }
+            }
+           ],
+           "aggs": [
+            {
+             "as": "n",
+             "fn": "count"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "as": "ownm",
+         "on": {
+          "col": "p.uid"
+         },
+         "key": "p",
+         "match": {
+          "pattern": {
+           "nodes": [
+            {
+             "var": "q",
+             "labels": [
+              "Person"
+             ]
+            },
+            {
+             "var": "m",
+             "labels": [
+              "Post",
+              "Comment"
+             ]
+            },
+            {
+             "var": "t",
+             "labels": [
+              "Tag"
+             ]
+            }
+           ],
+           "steps": [
+            {
+             "from": "m",
+             "to": "q",
+             "rel_type": "HAS_CREATOR",
+             "dir": "out"
+            },
+            {
+             "from": "m",
+             "to": "t",
+             "rel_type": "HAS_TAG",
+             "dir": "out"
+            }
+           ],
+           "where": [
+            {
+             "cmp": "=",
+             "l": {
+              "tprop": [
+               "t",
+               "name"
+              ],
+              "tau": "str"
+             },
+             "r": {
+              "lit": "$tag"
+             }
+            },
+            {
+             "cmp": ">",
+             "l": {
+              "col": "m.vt_s"
+             },
+             "r": {
+              "lit": "$startDate",
+              "tau": "ts"
+             }
+            },
+            {
+             "cmp": "<",
+             "l": {
+              "col": "m.vt_s"
+             },
+             "r": {
+              "lit": "$endDate",
+              "tau": "ts"
+             }
+            }
+           ]
+          },
+          "group": {
+           "by": [
+            {
+             "as": "p",
+             "expr": {
+              "col": "q.uid"
+             }
+            }
+           ],
+           "aggs": [
+            {
+             "as": "n",
+             "fn": "count"
+            }
+           ]
+          }
+         }
+        }
+       ]
+      },
+      "return": {
+       "rows": [
+        {
+         "as": "uid",
+         "expr": {
+          "col": "p.uid"
+         }
+        }
+       ]
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {
+       "tag": {
+        "pick": [
+         "tags",
+         0
+        ]
+       },
+       "startDate": {
+        "date": "2011-06-01"
+       },
+       "endDate": {
+        "date": "2012-06-01"
+       }
+      }
+     },
+     "col": "uid",
+     "all": true
+    }
+   }
+  }
+ ]
+}

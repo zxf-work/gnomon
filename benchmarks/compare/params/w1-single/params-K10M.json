@@ -1,0 +1,544 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "w1-single-v1",
+ "log": {
+  "name": "synth-10000000.eventlog.jsonl",
+  "sha256": "d6cd2275fe9ad01c4aa48dd1e203cb0f2c39ea8b1d17012604096e9d9a7e42cb"
+ },
+ "selection": {
+  "notes": [
+   "one instance per registry id: the registry's own arguments (extcmp.queries on this log), the instances v3 timed"
+  ]
+ },
+ "counts": {
+  "hist.single": 1,
+  "hist.asof": 1,
+  "snap.hop2": 1,
+  "reach.window": 1,
+  "paths.k": 1,
+  "series.count": 1,
+  "burst.zscore": 1,
+  "agg.rel_bucket": 1,
+  "series.count.w10": 1,
+  "burst.zscore.w10": 1,
+  "agg.rel_bucket.w10": 1,
+  "diff.global": 1,
+  "nbr.evolution": 1,
+  "coactive.narrow": 1,
+  "resolve.substr": 1,
+  "motif.filtered": 1,
+  "diff.belief": 1,
+  "resolve.exact": 1,
+  "resolve.prefix": 1
+ },
+ "instances": [
+  {
+   "query": "hist.single",
+   "instance": "a0677afc",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "26b3f808",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "as_of_tt": 1791043099494522,
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a9718db0",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "hops": 2,
+    "seeds": [
+     "n1"
+    ],
+    "t_valid": 5000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "b8b394fa",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "src": "n1",
+    "window": {
+     "t_a": 0,
+     "t_b": 1000000
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "348584fb",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "dst": "n2",
+    "k": 3,
+    "max_hops": 3,
+    "src": "n1",
+    "window": {
+     "t_a": 0,
+     "t_b": 2500000
+    }
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "2ceeea75",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "stride": 100000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "3ef07ba6",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    },
+    "stride": 100000,
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "eb66f3cb",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "limit": 1000,
+    "stride": 100000,
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "a44e87ab",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "stride": 1,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "739654e4",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    },
+    "stride": 1,
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "d33cb074",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "limit": 1000,
+    "stride": 1,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "22853f21",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "t1": 5000000,
+    "t2": 5250000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "192ae236",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "t1": 5000000,
+    "t2": 6000000,
+    "uid": "n1"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "9e4004f8",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "a_spec": {
+     "src": "n1"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    },
+    "b_spec": {
+     "src": "n2"
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "160eaac8",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "query": "n1"
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "63f91169",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "delta": 200000,
+    "motif": "M_triangle_cyclic",
+    "node_filter": [
+     "n0",
+     "n1",
+     "n10",
+     "n100",
+     "n1000",
+     "n10000",
+     "n10001",
+     "n10002",
+     "n10003",
+     "n10004",
+     "n10005",
+     "n10006",
+     "n10007",
+     "n10008",
+     "n10009",
+     "n1001",
+     "n10010",
+     "n10011",
+     "n10012",
+     "n10013",
+     "n10014",
+     "n10015",
+     "n10016",
+     "n10017",
+     "n10018",
+     "n10019",
+     "n1002",
+     "n10020",
+     "n10021",
+     "n10022",
+     "n10023",
+     "n10024",
+     "n10025",
+     "n10026",
+     "n10027",
+     "n10028",
+     "n10029",
+     "n1003",
+     "n10030",
+     "n10031",
+     "n10032",
+     "n10033",
+     "n10034",
+     "n10035",
+     "n10036",
+     "n10037",
+     "n10038",
+     "n10039",
+     "n1004",
+     "n10040",
+     "n10041",
+     "n10042",
+     "n10043",
+     "n10044",
+     "n10045",
+     "n10046",
+     "n10047",
+     "n10048",
+     "n10049",
+     "n1005",
+     "n10050",
+     "n10051",
+     "n10052",
+     "n10053",
+     "n10054",
+     "n10055",
+     "n10056",
+     "n10057",
+     "n10058",
+     "n10059",
+     "n1006",
+     "n10060",
+     "n10061",
+     "n10062",
+     "n10063",
+     "n10064",
+     "n10065",
+     "n10066",
+     "n10067",
+     "n10068",
+     "n10069",
+     "n1007",
+     "n10070",
+     "n10071",
+     "n10072",
+     "n10073",
+     "n10074",
+     "n10075",
+     "n10076",
+     "n10077",
+     "n10078",
+     "n10079",
+     "n1008",
+     "n10080",
+     "n10081",
+     "n10082",
+     "n10083",
+     "n10084",
+     "n10085",
+     "n10086",
+     "n10087",
+     "n10088",
+     "n10089",
+     "n1009",
+     "n10090",
+     "n10091",
+     "n10092",
+     "n10093",
+     "n10094",
+     "n10095",
+     "n10096",
+     "n10097",
+     "n10098",
+     "n10099",
+     "n101",
+     "n1010",
+     "n10100",
+     "n10101",
+     "n10102",
+     "n10103",
+     "n10104",
+     "n10105",
+     "n10106",
+     "n10107",
+     "n10108",
+     "n10109",
+     "n1011",
+     "n10110",
+     "n10111",
+     "n10112",
+     "n10113",
+     "n10114",
+     "n10115",
+     "n10116",
+     "n10117",
+     "n10118",
+     "n10119",
+     "n1012",
+     "n10120",
+     "n10121",
+     "n10122",
+     "n10123",
+     "n10124",
+     "n10125",
+     "n10126",
+     "n10127",
+     "n10128",
+     "n10129",
+     "n1013",
+     "n10130",
+     "n10131",
+     "n10132",
+     "n10133",
+     "n10134",
+     "n10135",
+     "n10136",
+     "n10137",
+     "n10138",
+     "n10139",
+     "n1014",
+     "n10140",
+     "n10141",
+     "n10142",
+     "n10143",
+     "n10144",
+     "n10145",
+     "n10146",
+     "n10147",
+     "n10148",
+     "n10149",
+     "n1015",
+     "n10150",
+     "n10151",
+     "n10152",
+     "n10153",
+     "n10154",
+     "n10155",
+     "n10156",
+     "n10157",
+     "n10158",
+     "n10159",
+     "n1016",
+     "n10160",
+     "n10161",
+     "n10162",
+     "n10163",
+     "n10164",
+     "n10165",
+     "n10166",
+     "n10167",
+     "n10168",
+     "n10169",
+     "n1017",
+     "n10170",
+     "n10171",
+     "n10172",
+     "n10173",
+     "n10174",
+     "n10175",
+     "n10176"
+    ],
+    "window": {
+     "t_a": 0,
+     "t_b": 10000000
+    }
+   }
+  },
+  {
+   "query": "diff.belief",
+   "instance": "1aeb7024",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "limit": 1000,
+    "t1": 1791043099494522,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 1000,
+     "t_b": 1010
+    }
+   }
+  },
+  {
+   "query": "resolve.exact",
+   "instance": "35efcfb7",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "mode": "exact",
+    "query": "n1"
+   }
+  },
+  {
+   "query": "resolve.prefix",
+   "instance": "d3e78920",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "mode": "prefix",
+    "query": "alp"
+   }
+  }
+ ]
+}

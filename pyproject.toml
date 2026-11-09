@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "Anonymous" }]
+authors = [{ name = "Xiaofei Zhang" }]
 keywords = ["temporal-graph", "bi-temporal", "storage-engine", "database"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
@@ -24,6 +24,16 @@ dependencies = [
 # Not needed to use the engine; the test suite uses it as an independent
 # second implementation to compare against.
 duckdb = ["duckdb>=1.1", "pyarrow>=17"]
+# The comparison kit's clients for the server systems (PostgreSQL,
+# ClickHouse, Neo4j / Memgraph / AeonG over Bolt) and its table assembly.
+# The kit's setup step installs this extra; LadybugDB and Raphtory come from
+# benchmarks/compare/kit/python.lock.
+eval = [
+    "psycopg[binary]>=3.2",
+    "clickhouse-connect>=0.8",
+    "neo4j>=5.20",
+    "pandas>=2.2",
+]
 dev = [
     "duckdb>=1.1",
     "pyarrow>=17",
@@ -35,6 +45,9 @@ dev = [
 
 [project.scripts]
 gnomon = "gnomon.cli:main"
+
+[project.urls]
+Repository = "https://github.com/zxf-work/gnomon"
 
 [build-system]
 requires = ["maturin>=1.7,<2.0"]

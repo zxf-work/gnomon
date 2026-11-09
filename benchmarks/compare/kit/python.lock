@@ -1,0 +1,5 @@
+# installed with `uv pip install` on top of the engine commit's own uv.lock
+# (`uv sync --extra eval --extra duckdb`); exact versions used on the rehearsal
+ladybug==0.21.2
+raphtory==0.17.0
+maturin==1.15.0

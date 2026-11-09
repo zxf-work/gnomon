@@ -1,0 +1,3801 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "p1-v1",
+ "log": {
+  "path": "K1M-d10.eventlog.jsonl",
+  "sha256": "5f2c0970335969e36a3a8320c87ab3928714282f6b7c9f0dd9620f5cf308b788"
+ },
+ "selection": {
+  "percentiles": [
+   10,
+   50,
+   90,
+   99
+  ],
+  "shuffle": "md5(version, 'order', query, instance)",
+  "instance_id": "md5(version, query, canonical args)[:8]",
+  "notes": [
+   "T points: the batches at quantiles 10/30/50/70/90 % of the store's correction history (363 batches that ingest no events)",
+   "b.reach: percentiles of the reachable-set size",
+   "hub stratum (w2_hub_stratum.py): top hubs by cumulative degree ['n0', 'n4729', 'n9458', 'n4187', 'n8916']; per seeded query and class, the first instance of the class with its seed replaced by each of the top-k hubs (k per query: {'snap.hop2': 5, 'reach.window': 3, 'paths.k': 3, 'nbr.evolution': 5, 'coactive.narrow': 5, 'b.reach@now': 5, 'b.reach@T': 1, 'b.snap.hop2@now': 1, 'b.snap.hop2@T': 1})"
+  ]
+ },
+ "counts": {
+  "b.diff": 20,
+  "b.reach@now": 25,
+  "b.reach@T": 25,
+  "b.hist": 20,
+  "b.diff@ctl": 8,
+  "b.hist@now": 20,
+  "b.snap.hop2@now": 21,
+  "b.snap.hop2@T": 25
+ },
+ "instances": [
+  {
+   "query": "b.diff",
+   "instance": "3c952046",
+   "stratum": "from q50",
+   "class": "window s-2",
+   "factors": {
+    "rows": 20391,
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1792279775499019,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "c4a66a03",
+   "stratum": "p99",
+   "class": "source",
+   "factors": {
+    "reachable": 9572
+   },
+   "args": {
+    "src": "n346",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "498f88b5",
+   "stratum": "hub",
+   "class": "as-of q10",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "79a8faea"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "07dbbb8f",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "e0c9e8df1d396972ece55210",
+    "src": "n9458",
+    "dst": "n9470",
+    "rel_type": "R",
+    "disc": "#278494"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "2aa23691",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "63c1eac18d59a3c0ed9cceaf",
+    "src": "n8117",
+    "dst": "n6694",
+    "rel_type": "R",
+    "disc": "#592144"
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "59697317",
+   "stratum": "shift -2",
+   "class": "window shift -2 L/2",
+   "factors": {
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    }
+   },
+   "args": {
+    "t1": 675000,
+    "t2": 725000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "bda266f7",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "8d8aebaee5c42f6fe65ba651",
+    "src": "n5908",
+    "dst": "n5908",
+    "rel_type": "R",
+    "disc": "#192092"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "3ed36cc3",
+   "stratum": "p90",
+   "class": "as-of q30",
+   "factors": {
+    "reachable": 9571,
+    "T": "q30"
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "37433b2d",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "c0606a588a742566bbc6354b",
+    "src": "n1870",
+    "dst": "n1876",
+    "rel_type": "S",
+    "disc": "#960000"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "2c847be6",
+   "stratum": "p10",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 2077,
+    "set": "block3309"
+   },
+   "args": {
+    "seeds": [
+     "n3309",
+     "n3310",
+     "n3311",
+     "n3312",
+     "n3313",
+     "n3314",
+     "n3315",
+     "n3316",
+     "n3317",
+     "n3318",
+     "n3319",
+     "n3320",
+     "n3321",
+     "n3322",
+     "n3323",
+     "n3324",
+     "n3325",
+     "n3326",
+     "n3327",
+     "n3328"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "e5be23d7",
+   "stratum": "p90",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 4092,
+    "set": "rand10"
+   },
+   "args": {
+    "seeds": [
+     "n106",
+     "n6139",
+     "n6468",
+     "n4652",
+     "n3655",
+     "n3343",
+     "n2225",
+     "n8948",
+     "n3766",
+     "n9047",
+     "n8076",
+     "n3485",
+     "n5262",
+     "n3303",
+     "n7105",
+     "n9708",
+     "n4513",
+     "n1045",
+     "n8830",
+     "n6146"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "a82af045",
+   "stratum": "p90",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 4034,
+    "set": "block7521"
+   },
+   "args": {
+    "seeds": [
+     "n7521",
+     "n7522",
+     "n7523",
+     "n7524",
+     "n7525",
+     "n7526",
+     "n7527",
+     "n7528",
+     "n7529",
+     "n7530",
+     "n7531",
+     "n7532",
+     "n7533",
+     "n7534",
+     "n7535",
+     "n7536",
+     "n7537",
+     "n7538",
+     "n7539",
+     "n7540"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "f0c85844",
+   "stratum": "p99",
+   "class": "as-of q90",
+   "factors": {
+    "reachable": 9572,
+    "T": "q90"
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "0f2a9b69",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "8b97814418592339fdfc9ef8",
+    "src": "n1954",
+    "dst": "n1997",
+    "rel_type": "S",
+    "disc": "#741867"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "a8a72e5b",
+   "stratum": "p10",
+   "class": "source",
+   "factors": {
+    "reachable": 0
+   },
+   "args": {
+    "src": "n9517",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "79a8faea",
+   "stratum": "p90",
+   "class": "as-of q10",
+   "factors": {
+    "reachable": 9571,
+    "T": "q10"
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "6b3a6328",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "81502d8828d6723200ee3f6c",
+    "src": "n4107",
+    "dst": "n4109",
+    "rel_type": "R",
+    "disc": "#512303"
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "8414cf77",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "37cf559e2cb2cd69a2e7a255",
+    "src": "n8484",
+    "dst": "n9458",
+    "rel_type": "S",
+    "disc": "#934257"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "27013f9d",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "93efd7e974bed4f1f4b73d06",
+    "src": "n2019",
+    "dst": "n2006",
+    "rel_type": "R",
+    "disc": "#140042"
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "92829641",
+   "stratum": "from q30",
+   "class": "window s+0",
+   "factors": {
+    "rows": 20492,
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1792279775292610,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "7ccfe228",
+   "stratum": "p99",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 4858,
+    "set": "block377"
+   },
+   "args": {
+    "seeds": [
+     "n377",
+     "n378",
+     "n379",
+     "n380",
+     "n381",
+     "n382",
+     "n383",
+     "n384",
+     "n385",
+     "n386",
+     "n387",
+     "n388",
+     "n389",
+     "n390",
+     "n391",
+     "n392",
+     "n393",
+     "n394",
+     "n395",
+     "n396"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "ef7ce8cc",
+   "stratum": "from q10",
+   "class": "window s-2",
+   "factors": {
+    "rows": 20429,
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1792279775083895,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "fb1c8f68",
+   "stratum": "p90",
+   "class": "as-of q10",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73",
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "338a3369",
+   "stratum": "hub",
+   "class": "as-of q70",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "56b9bf6e"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "dcf6d53b",
+   "stratum": "p90",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n4223",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "1b74b777",
+   "stratum": "hub",
+   "class": "as-of q50",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "9dc6cd34"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "03239e6e",
+   "stratum": "hub",
+   "class": "as-of q90",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "dde23210"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "1f66a205",
+   "stratum": "from q70",
+   "class": "window s-1",
+   "factors": {
+    "rows": 20428,
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1792279775626845,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "dd411f40",
+   "stratum": "p50",
+   "class": "as-of q90",
+   "factors": {
+    "reachable": 9571,
+    "T": "q90"
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "7c0c059f",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "6660c9db3fe656217201888d",
+    "src": "n9231",
+    "dst": "n9797",
+    "rel_type": "R",
+    "disc": "#560000"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "7ad48441",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "a84a3e1b9bbc7e0b9d1cb60c",
+    "src": "n416",
+    "dst": "n421",
+    "rel_type": "S",
+    "disc": "#461010"
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "447f8b7f",
+   "stratum": "shift -3",
+   "class": "window shift -3 L/2",
+   "factors": {
+    "window": {
+     "t_a": 650000,
+     "t_b": 700000
+    }
+   },
+   "args": {
+    "t1": 650000,
+    "t2": 700000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "9cb8e97a",
+   "stratum": "from q90",
+   "class": "window s-1",
+   "factors": {
+    "rows": 20428,
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1792279817317099,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "df7d8d25",
+   "stratum": "hub",
+   "class": "contiguous",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "2c847be6"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "dcff98c2",
+   "stratum": "from q50",
+   "class": "window s+1",
+   "factors": {
+    "rows": 20247,
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1792279775499019,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "f7b11397",
+   "stratum": "p10",
+   "class": "as-of q50",
+   "factors": {
+    "reachable": 0,
+    "T": "q50"
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "90fb2506",
+   "stratum": "p10",
+   "class": "as-of q70",
+   "factors": {
+    "reachable": 0,
+    "T": "q70"
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "418b9393",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "dae16bfad8d05071729eb933",
+    "src": "n2019",
+    "dst": "n2026",
+    "rel_type": "S",
+    "disc": "#420000"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "94bd9633",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "ac57fb878a59378e90de866e",
+    "src": "n1546",
+    "dst": "n1505",
+    "rel_type": "R",
+    "disc": "#515000"
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "562399c1",
+   "stratum": "from q30",
+   "class": "window s+1",
+   "factors": {
+    "rows": 20285,
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1792279775292610,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "b9fcca70",
+   "stratum": "p10",
+   "class": "source",
+   "factors": {
+    "reachable": 0
+   },
+   "args": {
+    "src": "n7960",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "c858f4a2",
+   "stratum": "p99",
+   "class": "source",
+   "factors": {
+    "reachable": 9572
+   },
+   "args": {
+    "src": "n3874",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "56b9bf6e",
+   "stratum": "p10",
+   "class": "as-of q70",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94",
+    "T": "q70"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "87899fda",
+   "stratum": "p99",
+   "class": "source",
+   "factors": {
+    "reachable": 9572
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "4781530b",
+   "stratum": "p99",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 5173,
+    "set": "block2561"
+   },
+   "args": {
+    "seeds": [
+     "n2561",
+     "n2562",
+     "n2563",
+     "n2564",
+     "n2565",
+     "n2566",
+     "n2567",
+     "n2568",
+     "n2569",
+     "n2570",
+     "n2571",
+     "n2572",
+     "n2573",
+     "n2574",
+     "n2575",
+     "n2576",
+     "n2577",
+     "n2578",
+     "n2579",
+     "n2580"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "e009b5ef",
+   "stratum": "p10",
+   "class": "source",
+   "factors": {
+    "reachable": 0
+   },
+   "args": {
+    "src": "n687",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "578078bb",
+   "stratum": "p90",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n4236",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "610f96d0",
+   "stratum": "from q10",
+   "class": "window s+1",
+   "factors": {
+    "rows": 20285,
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1792279775083895,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "ef1108c3",
+   "stratum": "p10",
+   "class": "as-of q10",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94",
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "3f914c6c",
+   "stratum": "p99",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "8f70f0ce",
+   "stratum": "p90",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 4122,
+    "set": "rand93"
+   },
+   "args": {
+    "seeds": [
+     "n832",
+     "n5128",
+     "n3412",
+     "n4758",
+     "n6918",
+     "n6842",
+     "n2852",
+     "n1231",
+     "n2029",
+     "n1830",
+     "n3937",
+     "n246",
+     "n5785",
+     "n7570",
+     "n6057",
+     "n4007",
+     "n1913",
+     "n7261",
+     "n4604",
+     "n8020"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "ca08de33",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "93efd7e974bed4f1f4b73d06",
+    "src": "n2019",
+    "dst": "n2006",
+    "rel_type": "R",
+    "disc": "#140042"
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "34f8e7dc",
+   "stratum": "shift -1",
+   "class": "window shift -1 L/2",
+   "factors": {
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   },
+   "args": {
+    "t1": 700000,
+    "t2": 750000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "9dc6cd34",
+   "stratum": "p50",
+   "class": "as-of q50",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18",
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "c0a38da6",
+   "stratum": "p99",
+   "class": "as-of q50",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286",
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "0057c821",
+   "stratum": "from q30",
+   "class": "window s-1",
+   "factors": {
+    "rows": 20477,
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1792279775292610,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "dde23210",
+   "stratum": "p90",
+   "class": "as-of q90",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73",
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "88ef997f",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "c0606a588a742566bbc6354b",
+    "src": "n1870",
+    "dst": "n1876",
+    "rel_type": "S",
+    "disc": "#960000"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "826c09f0",
+   "stratum": "p10",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "8f5195a4",
+   "stratum": "p99",
+   "class": "as-of q30",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286",
+    "T": "q30"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "8b2460a6",
+   "stratum": "hub",
+   "class": "source",
+   "factors": {
+    "hub_rank": 4,
+    "hub": "n4187",
+    "template": "c4a66a03"
+   },
+   "args": {
+    "src": "n4187",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "aebb55b9",
+   "stratum": "p50",
+   "class": "as-of q50",
+   "factors": {
+    "reachable": 9571,
+    "T": "q50"
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "8c10e2eb",
+   "stratum": "from q70",
+   "class": "window s+0",
+   "factors": {
+    "rows": 20444,
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1792279775626845,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "6a8d47e6",
+   "stratum": "p90",
+   "class": "as-of q50",
+   "factors": {
+    "reachable": 9571,
+    "T": "q50"
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "9d365510",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "74258efa60c41489c0d2ff29",
+    "src": "n9458",
+    "dst": "n9486",
+    "rel_type": "R",
+    "disc": "#482500"
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "d383278d",
+   "stratum": "p90",
+   "class": "as-of q50",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73",
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "22e400ad",
+   "stratum": "hub",
+   "class": "as-of q30",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "3ed36cc3"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "3edc3fb3",
+   "stratum": "p99",
+   "class": "as-of q70",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286",
+    "T": "q70"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "774afd93",
+   "stratum": "p50",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "2a913352",
+   "stratum": "p90",
+   "class": "as-of q70",
+   "factors": {
+    "reachable": 9571,
+    "T": "q70"
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "7d1038c5",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "8d8aebaee5c42f6fe65ba651",
+    "src": "n5908",
+    "dst": "n5908",
+    "rel_type": "R",
+    "disc": "#192092"
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "e4116ece",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "74258efa60c41489c0d2ff29",
+    "src": "n9458",
+    "dst": "n9486",
+    "rel_type": "R",
+    "disc": "#482500"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "5c03ca82",
+   "stratum": "p10",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 2100,
+    "set": "block2823"
+   },
+   "args": {
+    "seeds": [
+     "n2823",
+     "n2824",
+     "n2825",
+     "n2826",
+     "n2827",
+     "n2828",
+     "n2829",
+     "n2830",
+     "n2831",
+     "n2832",
+     "n2833",
+     "n2834",
+     "n2835",
+     "n2836",
+     "n2837",
+     "n2838",
+     "n2839",
+     "n2840",
+     "n2841",
+     "n2842"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "ad88924c",
+   "stratum": "p50",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "6a38de65",
+   "stratum": "from q50",
+   "class": "window s+0",
+   "factors": {
+    "rows": 20454,
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1792279775499019,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "539dfc25",
+   "stratum": "p90",
+   "class": "as-of q90",
+   "factors": {
+    "reachable": 9571,
+    "T": "q90"
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "c03a1053",
+   "stratum": "p99",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 5476,
+    "set": "rand36"
+   },
+   "args": {
+    "seeds": [
+     "n684",
+     "n7095",
+     "n6577",
+     "n7075",
+     "n727",
+     "n8836",
+     "n2611",
+     "n7610",
+     "n7414",
+     "n4820",
+     "n7645",
+     "n4821",
+     "n9219",
+     "n2561",
+     "n427",
+     "n4407",
+     "n9692",
+     "n2204",
+     "n2987",
+     "n7716"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "21da35ad",
+   "stratum": "p99",
+   "class": "as-of q90",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286",
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "2a804585",
+   "stratum": "hub",
+   "class": "as-of q90",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "f0c85844"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "c2ce0823",
+   "stratum": "from q90",
+   "class": "window s+0",
+   "factors": {
+    "rows": 20444,
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1792279817317099,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "6613a39c",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "bd66e70eeaf250dd2a22b8fc",
+    "src": "n4240",
+    "dst": "n9717",
+    "rel_type": "R",
+    "disc": "#14395"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "086c1d34",
+   "stratum": "p50",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n1254",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "2bc1991a",
+   "stratum": "p50",
+   "class": "as-of q10",
+   "factors": {
+    "reachable": 9571,
+    "T": "q10"
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "4a0c4b20",
+   "stratum": "p50",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n3595",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "ec499116",
+   "stratum": "p10",
+   "class": "source",
+   "factors": {
+    "reachable": 0
+   },
+   "args": {
+    "src": "n5837",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "cb36ad48",
+   "stratum": "p50",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2950,
+    "set": "rand28"
+   },
+   "args": {
+    "seeds": [
+     "n6917",
+     "n4759",
+     "n5553",
+     "n7504",
+     "n789",
+     "n8978",
+     "n2345",
+     "n1073",
+     "n4959",
+     "n5071",
+     "n5613",
+     "n2638",
+     "n4240",
+     "n5574",
+     "n7256",
+     "n2665",
+     "n1264",
+     "n4279",
+     "n8571",
+     "n8268"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "0c9b732c",
+   "stratum": "p99",
+   "class": "as-of q10",
+   "factors": {
+    "two_hop_nodes": 5202,
+    "set": "block7286",
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "n7286",
+     "n7287",
+     "n7288",
+     "n7289",
+     "n7290",
+     "n7291",
+     "n7292",
+     "n7293",
+     "n7294",
+     "n7295",
+     "n7296",
+     "n7297",
+     "n7298",
+     "n7299",
+     "n7300",
+     "n7301",
+     "n7302",
+     "n7303",
+     "n7304",
+     "n7305"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "31dcf646",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "8b97814418592339fdfc9ef8",
+    "src": "n1954",
+    "dst": "n1997",
+    "rel_type": "S",
+    "disc": "#741867"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "89cadff0",
+   "stratum": "hub",
+   "class": "as-of q50",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "f7b11397"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "1f23b6e3",
+   "stratum": "p10",
+   "class": "as-of q50",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94",
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775499019
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "64982961",
+   "stratum": "p99",
+   "class": "as-of q10",
+   "factors": {
+    "reachable": 9572,
+    "T": "q10"
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "0ea55117",
+   "stratum": "from q30",
+   "class": "window s-2",
+   "factors": {
+    "rows": 20429,
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1792279775292610,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "7cab038f",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "a1d72580794e898b74d8a6ce",
+    "src": "n2338",
+    "dst": "n2342",
+    "rel_type": "R",
+    "disc": "#249757"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "179f88eb",
+   "stratum": "hub",
+   "class": "source",
+   "factors": {
+    "hub_rank": 3,
+    "hub": "n9458",
+    "template": "c4a66a03"
+   },
+   "args": {
+    "src": "n9458",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "1a4278d4",
+   "stratum": "hub",
+   "class": "as-of q70",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "90fb2506"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "9014528e",
+   "stratum": "p50",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n3343",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "772d65ab",
+   "stratum": "from q90",
+   "class": "window s-2",
+   "factors": {
+    "rows": 15478,
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1792279817317099,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "bcca728f",
+   "stratum": "from q50",
+   "class": "window s-1",
+   "factors": {
+    "rows": 20439,
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1792279775499019,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "b9ff91ae",
+   "stratum": "hub",
+   "class": "as-of q10",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "fb1c8f68"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "228fea04",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "d7d7d3631f138e780cb38fe0",
+    "src": "n3645",
+    "dst": "n3609",
+    "rel_type": "R",
+    "disc": "#31072"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "18c68fdf",
+   "stratum": "p10",
+   "class": "source",
+   "factors": {
+    "reachable": 0
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "9f8d2f6b",
+   "stratum": "p90",
+   "class": "as-of q70",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73",
+    "T": "q70"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "78312dbc",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "7e57e2350ba80d1427c53205",
+    "src": "n8756",
+    "dst": "n8777",
+    "rel_type": "S",
+    "disc": "#207066"
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "7b6e5b06",
+   "stratum": "shift +2",
+   "class": "window shift +2 L/2",
+   "factors": {
+    "window": {
+     "t_a": 775000,
+     "t_b": 825000
+    }
+   },
+   "args": {
+    "t1": 775000,
+    "t2": 825000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "730a58b7",
+   "stratum": "p99",
+   "class": "as-of q30",
+   "factors": {
+    "reachable": 9572,
+    "T": "q30"
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "62e8cafa",
+   "stratum": "p50",
+   "class": "as-of q70",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18",
+    "T": "q70"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "071598a8",
+   "stratum": "p50",
+   "class": "as-of q30",
+   "factors": {
+    "reachable": 9571,
+    "T": "q30"
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "f6faa29c",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "d7d7d3631f138e780cb38fe0",
+    "src": "n3645",
+    "dst": "n3609",
+    "rel_type": "R",
+    "disc": "#31072"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "047421bb",
+   "stratum": "p99",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 4590,
+    "set": "rand62"
+   },
+   "args": {
+    "seeds": [
+     "n4283",
+     "n3870",
+     "n7244",
+     "n6338",
+     "n2447",
+     "n688",
+     "n4508",
+     "n365",
+     "n8767",
+     "n6178",
+     "n3862",
+     "n1764",
+     "n2170",
+     "n1295",
+     "n6540",
+     "n8007",
+     "n1475",
+     "n1028",
+     "n1397",
+     "n6718"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "d434d388",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 4
+   },
+   "args": {
+    "eid": "cd139599240a9e7b3b214dda",
+    "src": "n9851",
+    "dst": "n7087",
+    "rel_type": "S",
+    "disc": "#900000"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "80c6cdc6",
+   "stratum": "p50",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2932,
+    "set": "rand20"
+   },
+   "args": {
+    "seeds": [
+     "n1051",
+     "n7513",
+     "n3017",
+     "n8607",
+     "n8126",
+     "n6281",
+     "n9979",
+     "n479",
+     "n6924",
+     "n7136",
+     "n7422",
+     "n818",
+     "n9488",
+     "n1245",
+     "n8884",
+     "n220",
+     "n4913",
+     "n6226",
+     "n5900",
+     "n8945"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "b8530b76",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "a1d72580794e898b74d8a6ce",
+    "src": "n2338",
+    "dst": "n2342",
+    "rel_type": "R",
+    "disc": "#249757"
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "34bc2364",
+   "stratum": "from q90",
+   "class": "window s+1",
+   "factors": {
+    "rows": 20238,
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1792279817317099,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "1e279fff",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "dae16bfad8d05071729eb933",
+    "src": "n2019",
+    "dst": "n2026",
+    "rel_type": "S",
+    "disc": "#420000"
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "ecfcf256",
+   "stratum": "hub",
+   "class": "as-of q30",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "8f5195a4"
+   },
+   "args": {
+    "seeds": [
+     "n0",
+     "n4729",
+     "n9458",
+     "n4187",
+     "n8916",
+     "n3645",
+     "n8374",
+     "n3103",
+     "n7832",
+     "n2561",
+     "n7290",
+     "n2019",
+     "n6748",
+     "n1477",
+     "n6206",
+     "n935",
+     "n5664",
+     "n393",
+     "n5122",
+     "n9851"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "2db898a6",
+   "stratum": "from q10",
+   "class": "window s-1",
+   "factors": {
+    "rows": 20477,
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1792279775083895,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "7a1b1b3c",
+   "stratum": "p50",
+   "class": "as-of q30",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18",
+    "T": "q30"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "4c86777d",
+   "stratum": "p10",
+   "class": "as-of q90",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94",
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "a874f198",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 4
+   },
+   "args": {
+    "eid": "cd139599240a9e7b3b214dda",
+    "src": "n9851",
+    "dst": "n7087",
+    "rel_type": "S",
+    "disc": "#900000"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "48760558",
+   "stratum": "p50",
+   "class": "as-of q70",
+   "factors": {
+    "reachable": 9571,
+    "T": "q70"
+   },
+   "args": {
+    "src": "n6580",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "9a49e8d4",
+   "stratum": "p50",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2959,
+    "set": "rand89"
+   },
+   "args": {
+    "seeds": [
+     "n2927",
+     "n4722",
+     "n3045",
+     "n9546",
+     "n2847",
+     "n120",
+     "n6129",
+     "n7051",
+     "n8498",
+     "n1222",
+     "n2721",
+     "n7088",
+     "n1803",
+     "n5730",
+     "n3306",
+     "n4912",
+     "n7848",
+     "n2337",
+     "n2115",
+     "n6973"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "cf5c9c0d",
+   "stratum": "p10",
+   "class": "as-of q10",
+   "factors": {
+    "reachable": 0,
+    "T": "q10"
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "d13a7385",
+   "stratum": "p90",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n8683",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "54433fc8",
+   "stratum": "p90",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "91cb42ac",
+   "stratum": "p10",
+   "class": "as-of q30",
+   "factors": {
+    "reachable": 0,
+    "T": "q30"
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "aaf2ca74",
+   "stratum": "p10",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 2093,
+    "set": "block5876"
+   },
+   "args": {
+    "seeds": [
+     "n5876",
+     "n5877",
+     "n5878",
+     "n5879",
+     "n5880",
+     "n5881",
+     "n5882",
+     "n5883",
+     "n5884",
+     "n5885",
+     "n5886",
+     "n5887",
+     "n5888",
+     "n5889",
+     "n5890",
+     "n5891",
+     "n5892",
+     "n5893",
+     "n5894",
+     "n5895"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "b211fb64",
+   "stratum": "p10",
+   "class": "as-of q90",
+   "factors": {
+    "reachable": 0,
+    "T": "q90"
+   },
+   "args": {
+    "src": "n9577",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "f7ef2bbf",
+   "stratum": "p10",
+   "class": "as-of q30",
+   "factors": {
+    "two_hop_nodes": 2096,
+    "set": "rand94",
+    "T": "q30"
+   },
+   "args": {
+    "seeds": [
+     "n6476",
+     "n398",
+     "n4123",
+     "n5247",
+     "n9098",
+     "n5304",
+     "n5753",
+     "n4149",
+     "n1318",
+     "n104",
+     "n8797",
+     "n1992",
+     "n6210",
+     "n942",
+     "n8259",
+     "n5777",
+     "n1577",
+     "n9614",
+     "n2622",
+     "n9203"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "66d926bb",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "ac57fb878a59378e90de866e",
+    "src": "n1546",
+    "dst": "n1505",
+    "rel_type": "R",
+    "disc": "#515000"
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "47cd7271",
+   "stratum": "p10",
+   "class": "contiguous",
+   "factors": {
+    "two_hop_nodes": 2107,
+    "set": "block7145"
+   },
+   "args": {
+    "seeds": [
+     "n7145",
+     "n7146",
+     "n7147",
+     "n7148",
+     "n7149",
+     "n7150",
+     "n7151",
+     "n7152",
+     "n7153",
+     "n7154",
+     "n7155",
+     "n7156",
+     "n7157",
+     "n7158",
+     "n7159",
+     "n7160",
+     "n7161",
+     "n7162",
+     "n7163",
+     "n7164"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "1dcd57db",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "81502d8828d6723200ee3f6c",
+    "src": "n4107",
+    "dst": "n4109",
+    "rel_type": "R",
+    "disc": "#512303"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "1d4f5601",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "b18158ee1e1151cf75f82cf0",
+    "src": "n9043",
+    "dst": "n9046",
+    "rel_type": "R",
+    "disc": "#968216"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "221682d6",
+   "stratum": "p99",
+   "class": "source",
+   "factors": {
+    "reachable": 9572
+   },
+   "args": {
+    "src": "n6850",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "65d75268",
+   "stratum": "p50",
+   "class": "as-of q90",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18",
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279817317099
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "52ce8f16",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "6660c9db3fe656217201888d",
+    "src": "n9231",
+    "dst": "n9797",
+    "rel_type": "R",
+    "disc": "#560000"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "dee3b09a",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "bd66e70eeaf250dd2a22b8fc",
+    "src": "n4240",
+    "dst": "n9717",
+    "rel_type": "R",
+    "disc": "#14395"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "4fa5b64f",
+   "stratum": "p99",
+   "class": "source",
+   "factors": {
+    "reachable": 9572
+   },
+   "args": {
+    "src": "n9100",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "3fb1e66a",
+   "stratum": "hub",
+   "class": "source",
+   "factors": {
+    "hub_rank": 2,
+    "hub": "n4729",
+    "template": "c4a66a03"
+   },
+   "args": {
+    "src": "n4729",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "20983889",
+   "stratum": "hub",
+   "class": "source",
+   "factors": {
+    "hub_rank": 1,
+    "hub": "n0",
+    "template": "c4a66a03"
+   },
+   "args": {
+    "src": "n0",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "02e24940",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "e0c9e8df1d396972ece55210",
+    "src": "n9458",
+    "dst": "n9470",
+    "rel_type": "R",
+    "disc": "#278494"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "3a4396ef",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "37cf559e2cb2cd69a2e7a255",
+    "src": "n8484",
+    "dst": "n9458",
+    "rel_type": "S",
+    "disc": "#934257"
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "aae5858d",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "63c1eac18d59a3c0ed9cceaf",
+    "src": "n8117",
+    "dst": "n6694",
+    "rel_type": "R",
+    "disc": "#592144"
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "2b76539a",
+   "stratum": "shift +3",
+   "class": "window shift +3 L/2",
+   "factors": {
+    "window": {
+     "t_a": 800000,
+     "t_b": 850000
+    }
+   },
+   "args": {
+    "t1": 800000,
+    "t2": 850000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "474f876f",
+   "stratum": "p50",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 2968,
+    "set": "rand54"
+   },
+   "args": {
+    "seeds": [
+     "n7841",
+     "n2783",
+     "n6756",
+     "n7829",
+     "n6421",
+     "n5471",
+     "n3267",
+     "n5069",
+     "n6816",
+     "n7036",
+     "n6399",
+     "n8355",
+     "n4314",
+     "n390",
+     "n1468",
+     "n6319",
+     "n7443",
+     "n6173",
+     "n5834",
+     "n2883"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "32600f6c",
+   "stratum": "shift -4",
+   "class": "window shift -4 L/2",
+   "factors": {
+    "window": {
+     "t_a": 625000,
+     "t_b": 675000
+    }
+   },
+   "args": {
+    "t1": 625000,
+    "t2": 675000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "ba410f8f",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "7e57e2350ba80d1427c53205",
+    "src": "n8756",
+    "dst": "n8777",
+    "rel_type": "S",
+    "disc": "#207066"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "45881c98",
+   "stratum": "p99",
+   "class": "as-of q70",
+   "factors": {
+    "reachable": 9572,
+    "T": "q70"
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775626845
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "15067899",
+   "stratum": "from q70",
+   "class": "window s-2",
+   "factors": {
+    "rows": 20380,
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1792279775626845,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 675000,
+     "t_b": 725000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "568a608b",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "a84a3e1b9bbc7e0b9d1cb60c",
+    "src": "n416",
+    "dst": "n421",
+    "rel_type": "S",
+    "disc": "#461010"
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "fafe647d",
+   "stratum": "p90",
+   "class": "as-of q30",
+   "factors": {
+    "two_hop_nodes": 4064,
+    "set": "rand73",
+    "T": "q30"
+   },
+   "args": {
+    "seeds": [
+     "n8461",
+     "n736",
+     "n6340",
+     "n3213",
+     "n3930",
+     "n6681",
+     "n2406",
+     "n8933",
+     "n7222",
+     "n6262",
+     "n7842",
+     "n9363",
+     "n7463",
+     "n4317",
+     "n6806",
+     "n5812",
+     "n5397",
+     "n4778",
+     "n8093",
+     "n8195"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775292610
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "4a191b23",
+   "stratum": "shift +1",
+   "class": "window shift +1 L/2",
+   "factors": {
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    }
+   },
+   "args": {
+    "t1": 750000,
+    "t2": 800000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "c44a81db",
+   "stratum": "p90",
+   "class": "random",
+   "factors": {
+    "two_hop_nodes": 4034,
+    "set": "rand71"
+   },
+   "args": {
+    "seeds": [
+     "n6612",
+     "n82",
+     "n3596",
+     "n901",
+     "n8972",
+     "n4269",
+     "n3413",
+     "n8377",
+     "n3394",
+     "n6171",
+     "n9784",
+     "n2991",
+     "n5041",
+     "n3582",
+     "n240",
+     "n8594",
+     "n2227",
+     "n270",
+     "n3433",
+     "n5901"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "6d42bd56",
+   "stratum": "p50",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n1661",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "ef29558f",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "9546bc6f94170abbe2269048",
+    "src": "n3381",
+    "dst": "n3378",
+    "rel_type": "S",
+    "disc": "#461415"
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "0b33a265",
+   "stratum": "p90",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n5129",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "8c0f26f7",
+   "stratum": "shift +0",
+   "class": "window shift +0 L/2",
+   "factors": {
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    }
+   },
+   "args": {
+    "t1": 725000,
+    "t2": 775000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "961965c2",
+   "stratum": "from q70",
+   "class": "window s+1",
+   "factors": {
+    "rows": 20238,
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1792279775626845,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 750000,
+     "t_b": 800000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "f0d795a8",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "9546bc6f94170abbe2269048",
+    "src": "n3381",
+    "dst": "n3378",
+    "rel_type": "S",
+    "disc": "#461415"
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "ec6b8d8b",
+   "stratum": "p50",
+   "class": "as-of q10",
+   "factors": {
+    "two_hop_nodes": 2947,
+    "set": "rand18",
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "n9739",
+     "n5085",
+     "n8819",
+     "n2649",
+     "n3051",
+     "n9204",
+     "n9422",
+     "n8757",
+     "n6114",
+     "n4311",
+     "n3365",
+     "n6092",
+     "n6633",
+     "n6704",
+     "n8240",
+     "n7671",
+     "n7242",
+     "n1877",
+     "n3777",
+     "n1177"
+    ],
+    "hops": 2,
+    "t_valid": 750000,
+    "limit": 10000,
+    "as_of_tt": 1792279775083895
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "85001801",
+   "stratum": "hub",
+   "class": "source",
+   "factors": {
+    "hub_rank": 5,
+    "hub": "n8916",
+    "template": "c4a66a03"
+   },
+   "args": {
+    "src": "n8916",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "f39b451d",
+   "stratum": "p90",
+   "class": "source",
+   "factors": {
+    "reachable": 9571
+   },
+   "args": {
+    "src": "n9379",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "2e0edd04",
+   "stratum": "from q10",
+   "class": "window s+0",
+   "factors": {
+    "rows": 20492,
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1792279775083895,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 725000,
+     "t_b": 775000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "635bedd5",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "b18158ee1e1151cf75f82cf0",
+    "src": "n9043",
+    "dst": "n9046",
+    "rel_type": "R",
+    "disc": "#968216"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "921d2515",
+   "stratum": "p99",
+   "class": "as-of q50",
+   "factors": {
+    "reachable": 9572,
+    "T": "q50"
+   },
+   "args": {
+    "src": "n5846",
+    "window": {
+     "t_a": 700000,
+     "t_b": 750000
+    },
+    "as_of_tt": 1792279775499019
+   }
+  }
+ ]
+}

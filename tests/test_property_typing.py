@@ -55,7 +55,7 @@ T_MAX = 60
 WINDOW = {"t_a": 0, "t_b": T_MAX}
 
 #: One row per JSON shape a real property bag contains. The ratings are the
-#: Bitcoin-OTC shape (small signed integers); the rest are the ways a value
+#: Bitcoin-OTC shape (small integers); the rest are the ways a value
 #: fails to be one.
 ROWS: list[tuple[str, str, int, dict[str, Any]]] = [
     ("u0", "u1", 1, {"rating": 2}),            # int: participates

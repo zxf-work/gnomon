@@ -83,7 +83,7 @@ pub(crate) fn parallel_min_rows() -> u64 {
 /// **Off by default, on measurement.** The model's two-level search is
 /// slower than a `partition_point` over the already-decoded column on every
 /// real segment in this corpus: 1.40x at 2.68M rows and 1.45x at 1.44M,
-/// against a pre-registered forecast of 0.50-0.74x. The forecast was not
+/// against a forecast of 0.50-0.74x. The forecast was not
 /// wrong about the *mechanism* — the ratio falls monotonically with segment
 /// size, 2.03 at 506k, 1.45 at 1.44M, 1.40 at 2.68M, **0.98 at 5.15M** — it
 /// was wrong about the size at which it pays. The crossover is around five
@@ -736,7 +736,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
     /// The believed, window-clipped row ranges of every planned segment:
     /// [`ScanSet::select_units`]' stage P, without stage R. A caller that
     /// can answer from range lengths — a count — never pays for the row loop
-    /// or the selection vectors. Stats are the planner's (no rows examined).
+    /// or the selection vectors. Stats are the match plan's (no rows examined).
     pub(crate) fn plan_believed(&self, req: &ScanRequest) -> Result<(Vec<SegPlan<'a>>, ScanStats)> {
         let threads = scan_threads();
         let candidate_rows: u64 = self.targets.iter().map(|t| t.segment.rows() as u64).sum();
@@ -773,7 +773,7 @@ impl<'a, S: SegmentSource> ScanSet<'a, S> {
         // Except a scan with adjacency postings attached (an incidence
         // filter over a few nodes). Its per-segment plan is the same
         // preparation plus a few slice lookups, so `candidate_rows` (every
-        // stored row) says nothing about its work, and spawning the planner's
+        // stored row) says nothing about its work, and spawning the match plan's
         // threads cost more than the plan: 0.6 ms of a 0.65 ms scan on the
         // 10M store, against 0.05 ms planned on this thread.
         let (mut plans, mut stats) = self.plan_all(req, threads, candidate_rows)?;
@@ -2205,7 +2205,7 @@ pub(crate) fn is_whole(lo: usize, hi: usize, rows: usize) -> bool {
 
 /// Above this many ranges a request's row domain is not "a small part of the
 /// segment" in any useful sense, and the planner computes belief for the
-/// whole segment and clips, as the whole-segment path does. Only the planner's open-ended
+/// whole segment and clips, as the whole-segment path does. Only the match plan's open-ended
 /// rows below the window cut can produce more than one range.
 const WINDOW_FIRST_MAX_RANGES: usize = 64;
 
@@ -2218,7 +2218,7 @@ const POSTINGS_FIRST_MAX_RANGES: usize = 256;
 const POSTINGS_FIRST_MAX_ROWS: usize = 4_096;
 
 /// The rows a scan request can use in one segment: the open-ended rows below
-/// the window cut (each clipped below `min(lo, hi)`, exactly as the planner's
+/// the window cut (each clipped below `min(lo, hi)`, exactly as the match plan's
 /// clip loop clips them) and then `[lo, hi)`. Ascending and disjoint; two
 /// entries can abut.
 /// The posting rows (ascending) that fall inside the planned ranges
@@ -3879,7 +3879,6 @@ mod tests {
         out
     }
 
-    /// E1–E7 and E12 in one differential property test: for random headers,
     /// random sidecars, random close runs and a random overlay, at every
     /// as_of in the observed tt set plus the clamped OPEN_END, the range set
     /// must expand to exactly the row set the old loop selected.
@@ -3930,7 +3929,7 @@ mod tests {
             let sidecar = crate::visibility::Sidecar::new(&folded);
 
             // close runs: over rows in range, one deliberately past the end
-            // (E5), some with tt_e == OPEN_END (E3)
+            //, some with tt_e == OPEN_END
             let mut recs = Vec::new();
             for r in 0..rows {
                 match rng() % 5 {
@@ -3958,7 +3957,6 @@ mod tests {
                 });
             }
             let committed = std::sync::Arc::new(CloseIndex::from_records(recs));
-            // E9: half the cases read through an uncommitted batch overlay
             let closes = if case % 2 == 0 {
                 let mut top = CloseIndex::layered_over(committed.clone());
                 for r in 0..rows {
@@ -3984,7 +3982,6 @@ mod tests {
                      view={:?}",
                     view.as_slice()
                 );
-                // E7: a range every row of which is closed contributes
                 // nothing at all, rather than an empty (x, x) range
                 for &(a, b) in &got {
                     assert!(a < b, "case {case}: empty range ({a}, {b})");
@@ -4331,7 +4328,6 @@ mod tests {
 
     #[test]
     fn believed_ranges_closed_is_identity_without_closes() {
-        // E10's "byte-identical timing" claim has to be structural, not
         // hoped for: with no closes the base vector itself comes back, same
         // allocation, so the all_current path does no work it did not do
         // before.
@@ -4356,7 +4352,6 @@ mod tests {
 
     #[test]
     fn believed_ranges_closed_emits_no_empty_ranges() {
-        // E7: every row of the single believed range is closed
         let h = crate::segment::header_with_runs(vec![(0, 10)], 4);
         let folded: Vec<(u32, i64)> = (0..4).map(|r| (r, 20i64)).collect();
         let empty = CloseIndex::default();
@@ -4386,8 +4381,6 @@ mod tests {
 
     #[test]
     fn closes_outside_the_believed_ranges_are_ignored() {
-        // E4: a close on a row whose tt_s is still in the future at as_of,
-        // so the row is outside every base range. E5: a close naming a row
         // id past the end of the segment. Neither may cut anything, panic,
         // or desynchronize the cursor for the ranges that follow.
         let h = crate::segment::header_with_runs(vec![(0, 10), (2, 99), (4, 10)], 6);
@@ -4411,7 +4404,6 @@ mod tests {
 
     #[test]
     fn as_of_at_the_clamped_open_end_behaves_exactly_as_before() {
-        // E6: `as_of = OPEN_END` is clamped to OPEN_END - 1, so a row whose
         // tt_e is OPEN_END is kept and one whose tt_e is OPEN_END - 1 is
         // cut. Pinned because it is the boundary every current-belief query
         // in the system runs at.

@@ -384,7 +384,6 @@ def test_a_corrupted_index_file_is_rebuilt_and_repersisted_by_a_fresh_process(tm
 
 def test_a_stale_index_is_rebuilt_after_compaction_reshapes_segments(tmp_path):
     """Compaction writes fresh segment ids with fresh `body_sha`s
-    (`ENGINE_IMPLEMENTATION_SPEC.md:196`; segment ids never reused,
     `manifest.rs:560-563`), so a persisted index keyed by the old id is
     simply orphaned, never served against the new segment — this checks
     the answer survives compaction, which is the everyday version of the

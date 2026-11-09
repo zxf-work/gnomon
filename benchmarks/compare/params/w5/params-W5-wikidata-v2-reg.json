@@ -1,0 +1,2981 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "p1-v1",
+ "log": {
+  "path": "W5-wikidata-v2.eventlog.jsonl",
+  "sha256": "81fce8712a4aa3c9a14f98ab8c0bb711fefa50dfa7ef5d8cd160ce8578eb106d"
+ },
+ "selection": {
+  "percentiles": [
+   10,
+   50,
+   90,
+   99
+  ],
+  "shuffle": "md5(version, 'order', query, instance)",
+  "instance_id": "md5(version, query, canonical args)[:8]",
+  "notes": [
+   "motif: 1547 nodes lie on a directed 3-cycle in the final graph",
+   "0 duplicate instances (identical arguments) dropped",
+   "curation w5-v2: selection reads the frozen log only (no system is queried); instants from each seed's own out-edge starts at anchors p25/p50/p75; strata correction-touched / correction-free; seeds: MD5 samples of the subjects of the top relation types ['P54', 'P166', 'P39', 'P793', 'P1411']"
+  ]
+ },
+ "counts": {
+  "hist.single": 16,
+  "coactive.narrow": 16,
+  "nbr.evolution": 16,
+  "resolve.substr": 12,
+  "hist.asof": 12,
+  "diff.global": 6,
+  "burst.zscore": 4,
+  "agg.rel_bucket": 4,
+  "paths.k": 8,
+  "snap.hop2": 24,
+  "reach.window": 16,
+  "agg.rel_bucket.w10": 3,
+  "motif.filtered": 4,
+  "series.count": 4,
+  "burst.zscore.w10": 3,
+  "series.count.w10": 3
+ },
+ "instances": [
+  {
+   "query": "hist.single",
+   "instance": "a9cbddbb",
+   "stratum": "correction-touched p10",
+   "class": "P39",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "6240076"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "9f870a2b",
+   "stratum": "correction-free p50",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 20
+   },
+   "args": {
+    "a_spec": {
+     "src": "1336378"
+    },
+    "b_spec": {
+     "src": "115561"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "7c7b1bd7",
+   "stratum": "correction-free p90",
+   "class": "P54 anchor p50 1y",
+   "factors": {
+    "degree": 8
+   },
+   "args": {
+    "uid": "17505484",
+    "t1": 63476816724000000,
+    "t2": 63508373676000000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "b8b7aaae",
+   "stratum": "p90",
+   "class": "len 2",
+   "factors": {
+    "matches": 16999
+   },
+   "args": {
+    "query": "80"
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "c4bb2453",
+   "stratum": "correction-touched p50",
+   "class": "as-of q50",
+   "factors": {
+    "degree": 7
+   },
+   "args": {
+    "uid": "295610",
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "1fd46863",
+   "stratum": "grid",
+   "class": "1962+5y",
+   "factors": {},
+   "args": {
+    "t1": 61914758400000000,
+    "t2": 62072543160000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "8581e94f",
+   "stratum": "correction-touched p50",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 72
+   },
+   "args": {
+    "a_spec": {
+     "src": "490"
+    },
+    "b_spec": {
+     "src": "18288155"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "7da288b0",
+   "stratum": "grid",
+   "class": "century stride 1y",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 31556952000000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "773d9df4",
+   "stratum": "grid",
+   "class": "2009+1y",
+   "factors": {},
+   "args": {
+    "t1": 63397987200000000,
+    "t2": 63429544152000000
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "37d52a94",
+   "stratum": "grid",
+   "class": "century stride 10y",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 315569520000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "e55e6b5c",
+   "stratum": "correction-free p99",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 2220
+   },
+   "args": {
+    "src": "56830033",
+    "dst": "1070654",
+    "window": {
+     "t_a": 61595251200000000,
+     "t_b": 61626808152000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "81d3b321",
+   "stratum": "correction-free p99",
+   "class": "P54",
+   "factors": {
+    "degree": 15
+   },
+   "args": {
+    "uid": "2474534"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "e3bbd151",
+   "stratum": "correction-free p90",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 110
+   },
+   "args": {
+    "a_spec": {
+     "src": "4284852"
+    },
+    "b_spec": {
+     "src": "20095800"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b47654a0",
+   "stratum": "correction-touched p99",
+   "class": "P39 anchor p25",
+   "factors": {
+    "hop2_proxy": 30
+   },
+   "args": {
+    "seeds": [
+     "5816"
+    ],
+    "hops": 2,
+    "t_valid": 60336835200000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "76c63c4e",
+   "stratum": "correction-free p99",
+   "class": "P54 anchor p50",
+   "factors": {
+    "hop2_proxy": 6
+   },
+   "args": {
+    "seeds": [
+     "313201"
+    ],
+    "hops": 2,
+    "t_valid": 63208598400000000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "3f74639d",
+   "stratum": "correction-free p50",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 15
+   },
+   "args": {
+    "src": "18644229",
+    "dst": "50715333",
+    "window": {
+     "t_a": 63555753600000000,
+     "t_b": 63618846552000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "1b24fc0d",
+   "stratum": "correction-free p50",
+   "class": "P54 anchor p50 century",
+   "factors": {
+    "reach_proxy": 2
+   },
+   "args": {
+    "src": "16537221",
+    "window": {
+     "t_a": 61252059600000000,
+     "t_b": 64407754800000000
+    }
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "23acad64",
+   "stratum": "correction-touched p99",
+   "class": "as-of q50",
+   "factors": {
+    "degree": 134
+   },
+   "args": {
+    "uid": "656",
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "812e0700",
+   "stratum": "p10",
+   "class": "len 5",
+   "factors": {
+    "matches": 7
+   },
+   "args": {
+    "query": "60329"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "6c188908",
+   "stratum": "correction-free p99",
+   "class": "P54 anchor p50 1y",
+   "factors": {
+    "degree": 15
+   },
+   "args": {
+    "uid": "2474534",
+    "t1": 63224355924000000,
+    "t2": 63255912876000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "ffb9f048",
+   "stratum": "correction-free p90",
+   "class": "P54 anchor p25",
+   "factors": {
+    "hop2_proxy": 2
+   },
+   "args": {
+    "seeds": [
+     "3302746"
+    ],
+    "hops": 2,
+    "t_valid": 63366364800000000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "f7c8498a",
+   "stratum": "p90",
+   "class": "len 2",
+   "factors": {
+    "matches": 16973
+   },
+   "args": {
+    "query": "36"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "90659a31",
+   "stratum": "correction-free p50",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 20
+   },
+   "args": {
+    "a_spec": {
+     "src": "4706671"
+    },
+    "b_spec": {
+     "src": "3308845"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "c43d1736",
+   "stratum": "correction-free p99",
+   "class": "P166",
+   "factors": {
+    "degree": 15
+   },
+   "args": {
+    "uid": "2579525"
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "168137f3",
+   "stratum": "grid",
+   "class": "1 Jan 1962",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 61914758399999998,
+     "t_b": 61914758400000008
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "89a2771a",
+   "stratum": "correction-touched p90",
+   "class": "P166",
+   "factors": {
+    "degree": 16
+   },
+   "args": {
+    "uid": "25409"
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "f8fb8f63",
+   "stratum": "correction-free p99",
+   "class": "as-of q50",
+   "factors": {
+    "degree": 16
+   },
+   "args": {
+    "uid": "192565",
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "ba01936d",
+   "stratum": "correction-touched p10",
+   "class": "P39 anchor p50 1y",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "30164376",
+    "t1": 63648320724000000,
+    "t2": 63679877676000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "c9086453",
+   "stratum": "correction-free p10",
+   "class": "P793",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "758738"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "eb864536",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p50 10y",
+   "factors": {
+    "degree": 6
+   },
+   "args": {
+    "uid": "6832552",
+    "t1": 62303972040000000,
+    "t2": 62619541560000000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "b315db92",
+   "stratum": "grid",
+   "class": "block 200 delta 10y (3-cycle seed)",
+   "factors": {},
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 315569520000000,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "node_filter": [
+     "103360",
+     "103917",
+     "1041689",
+     "105304",
+     "1061238",
+     "106592",
+     "106685",
+     "107258",
+     "1073297",
+     "10855212",
+     "110365",
+     "1113428",
+     "1114312",
+     "1130457",
+     "113428",
+     "114063",
+     "1142358",
+     "11605748",
+     "1163943",
+     "11648811",
+     "1170500",
+     "1170507",
+     "117071",
+     "1197936",
+     "1198726",
+     "1204812",
+     "1204825",
+     "1204831",
+     "1248110",
+     "126633",
+     "1276411",
+     "1291452",
+     "129286",
+     "1315008",
+     "1328249",
+     "133730",
+     "13452524",
+     "1346745",
+     "1353441",
+     "13595311",
+     "13595531",
+     "1367548",
+     "1377022",
+     "1377683",
+     "1377736",
+     "1377755",
+     "1377763",
+     "1377772",
+     "1377777",
+     "139184",
+     "1398170",
+     "1414573",
+     "142",
+     "1435633",
+     "1435635",
+     "14539884",
+     "1482269",
+     "1494211",
+     "150804",
+     "1535563",
+     "154590",
+     "156516",
+     "157879",
+     "1621402",
+     "163868",
+     "164200",
+     "1658241",
+     "167475",
+     "1700510",
+     "1716697",
+     "179808",
+     "1881623",
+     "1890346",
+     "1967157",
+     "1967162",
+     "1967202",
+     "19833431",
+     "202597",
+     "20747245",
+     "20747247",
+     "209459",
+     "2167384",
+     "217324",
+     "218022",
+     "223367",
+     "2295011",
+     "2295041",
+     "232113",
+     "2357620",
+     "23958341",
+     "240201",
+     "24137",
+     "2418096",
+     "2529538",
+     "2663714",
+     "2739722",
+     "274070",
+     "289214",
+     "2925687",
+     "30132541",
+     "3021834",
+     "3028569",
+     "307996",
+     "314743",
+     "322132",
+     "3353237",
+     "3368887",
+     "339163",
+     "3414212",
+     "3550705",
+     "3600406",
+     "362746",
+     "36824",
+     "3703245",
+     "3703463",
+     "3725564",
+     "3753203",
+     "3774974",
+     "3808611",
+     "382389",
+     "41375",
+     "4313305",
+     "44426",
+     "445807",
+     "447507",
+     "457493",
+     "460829",
+     "4649807",
+     "4824156",
+     "4834546",
+     "4835650",
+     "4835652",
+     "4835653",
+     "4907276",
+     "505395",
+     "510175",
+     "511553",
+     "514445",
+     "51552",
+     "516771",
+     "518295",
+     "521295",
+     "5280675",
+     "53001",
+     "53009",
+     "5305720",
+     "550717",
+     "55171",
+     "55282",
+     "55392",
+     "55402",
+     "55411",
+     "55433",
+     "555180",
+     "557546",
+     "569979",
+     "586356",
+     "5942570",
+     "64358",
+     "645595",
+     "6500790",
+     "655056",
+     "668",
+     "672392",
+     "674146",
+     "67903",
+     "6978541",
+     "698735",
+     "70294",
+     "706031",
+     "7096158",
+     "716700",
+     "727282",
+     "727328",
+     "734335",
+     "739694",
+     "7417921",
+     "7650000",
+     "765404",
+     "768476",
+     "775028",
+     "775091",
+     "777181",
+     "777921",
+     "787131",
+     "8038461",
+     "8215518",
+     "832120",
+     "84199",
+     "849124",
+     "881",
+     "8873",
+     "900360",
+     "900414",
+     "900441",
+     "932650",
+     "933084",
+     "940107",
+     "968840",
+     "983322"
+    ]
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "ea2fc5c2",
+   "stratum": "correction-touched p99",
+   "class": "as-of q10",
+   "factors": {
+    "degree": 211
+   },
+   "args": {
+    "uid": "1065",
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "24482f92",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p50 1y",
+   "factors": {
+    "degree": 6
+   },
+   "args": {
+    "uid": "6283788",
+    "t1": 58658720724000000,
+    "t2": 58690277676000000
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "eee57f33",
+   "stratum": "grid",
+   "class": "century stride 10y",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 315569520000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "52ab2142",
+   "stratum": "correction-touched p90",
+   "class": "P166 anchor p50 10y",
+   "factors": {
+    "degree": 16
+   },
+   "args": {
+    "uid": "317521",
+    "t1": 63019277640000000,
+    "t2": 63334847160000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "52132d9f",
+   "stratum": "correction-touched p10",
+   "class": "P39 anchor p50 century",
+   "factors": {
+    "reach_proxy": 1
+   },
+   "args": {
+    "src": "4712180",
+    "window": {
+     "t_a": 61218277200000000,
+     "t_b": 64373972400000000
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "3faf3056",
+   "stratum": "correction-touched p10",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 9
+   },
+   "args": {
+    "src": "7207",
+    "dst": "219538",
+    "window": {
+     "t_a": 49046083200000000,
+     "t_b": 59989787352000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "130c9fef",
+   "stratum": "grid",
+   "class": "1 Jan 1997",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 63019295999999998,
+     "t_b": 63019296000000008
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "e40490ea",
+   "stratum": "grid",
+   "class": "2009+5y",
+   "factors": {},
+   "args": {
+    "t1": 63397987200000000,
+    "t2": 63555771960000000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "1a1faf9f",
+   "stratum": "correction-touched p50",
+   "class": "as-of q90",
+   "factors": {
+    "degree": 6
+   },
+   "args": {
+    "uid": "1240168",
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "fd814109",
+   "stratum": "correction-free p10",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 6
+   },
+   "args": {
+    "src": "1395573",
+    "dst": "220836",
+    "window": {
+     "t_a": 62640604800000000,
+     "t_b": 63208619352000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "fd718692",
+   "stratum": "correction-free p50",
+   "class": "P166 anchor p75",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "112999"
+    ],
+    "hops": 2,
+    "t_valid": 62956137600000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "8ee20aee",
+   "stratum": "correction-free p99",
+   "class": "P166 anchor p75",
+   "factors": {
+    "hop2_proxy": 9
+   },
+   "args": {
+    "seeds": [
+     "2579525"
+    ],
+    "hops": 2,
+    "t_valid": 59256144000000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "7ad6b86f",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 3
+   },
+   "args": {
+    "src": "259707",
+    "window": {
+     "t_a": 63440477640000000,
+     "t_b": 63756047160000000
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "8da49391",
+   "stratum": "correction-touched p10",
+   "class": "P166 anchor p50",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "2043610"
+    ],
+    "hops": 2,
+    "t_valid": 63208598400000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "be285420",
+   "stratum": "correction-touched p50",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 72
+   },
+   "args": {
+    "a_spec": {
+     "src": "705438"
+    },
+    "b_spec": {
+     "src": "1055"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "99a50e4a",
+   "stratum": "correction-free p50",
+   "class": "P166 anchor p50",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "17994338"
+    ],
+    "hops": 2,
+    "t_valid": 62135683200000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "f5899d7d",
+   "stratum": "correction-free p50",
+   "class": "P166",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "7926640"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "1a95ce95",
+   "stratum": "correction-free p10",
+   "class": "P39 anchor p75",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "886817"
+    ],
+    "hops": 2,
+    "t_valid": 62199619200000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "1702e1e9",
+   "stratum": "correction-free p90",
+   "class": "P39 anchor p75",
+   "factors": {
+    "hop2_proxy": 3
+   },
+   "args": {
+    "seeds": [
+     "4758704"
+    ],
+    "hops": 2,
+    "t_valid": 62637926400000000
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "9d4ea080",
+   "stratum": "grid",
+   "class": "1 Jan 1962",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 61914758399999998,
+     "t_b": 61914758400000008
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "19f8023f",
+   "stratum": "correction-touched p50",
+   "class": "P39",
+   "factors": {
+    "degree": 6
+   },
+   "args": {
+    "uid": "5082431"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "24a0e426",
+   "stratum": "correction-free p99",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 528
+   },
+   "args": {
+    "a_spec": {
+     "src": "15996455"
+    },
+    "b_spec": {
+     "src": "67735"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "dcb3bae8",
+   "stratum": "p50",
+   "class": "len 4",
+   "factors": {
+    "matches": 144
+   },
+   "args": {
+    "query": "3286"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "2ddb979c",
+   "stratum": "correction-free p10",
+   "class": "P166 anchor p50 1y",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "112999",
+    "t1": 62940359124000000,
+    "t2": 62971916076000000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "ec457ff0",
+   "stratum": "correction-free p99",
+   "class": "as-of q10",
+   "factors": {
+    "degree": 19
+   },
+   "args": {
+    "uid": "42930",
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "3100e371",
+   "stratum": "correction-free p50",
+   "class": "as-of q50",
+   "factors": {
+    "degree": 3
+   },
+   "args": {
+    "uid": "85507",
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "7576590b",
+   "stratum": "correction-free p10",
+   "class": "P39 anchor p50 10y",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "3629233",
+    "t1": 61198570440000000,
+    "t2": 61514139960000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a562dd0e",
+   "stratum": "correction-touched p90",
+   "class": "P39 anchor p50",
+   "factors": {
+    "hop2_proxy": 5
+   },
+   "args": {
+    "seeds": [
+     "260489"
+    ],
+    "hops": 2,
+    "t_valid": 63572601600000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "fa60436d",
+   "stratum": "correction-touched p99",
+   "class": "P166 anchor p50 1y",
+   "factors": {
+    "degree": 126
+   },
+   "args": {
+    "uid": "458",
+    "t1": 62814128724000000,
+    "t2": 62845685676000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b55bbe7d",
+   "stratum": "correction-free p99",
+   "class": "P54 anchor p25",
+   "factors": {
+    "hop2_proxy": 5
+   },
+   "args": {
+    "seeds": [
+     "417161"
+    ],
+    "hops": 2,
+    "t_valid": 63334828800000000
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "108d22ae",
+   "stratum": "p10",
+   "class": "len 5",
+   "factors": {
+    "matches": 7
+   },
+   "args": {
+    "query": "54005"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "34452138",
+   "stratum": "correction-touched p90",
+   "class": "P54 anchor p75",
+   "factors": {
+    "hop2_proxy": 5
+   },
+   "args": {
+    "seeds": [
+     "49704"
+    ],
+    "hops": 2,
+    "t_valid": 63366364800000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "955da453",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p50",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "3402767"
+    ],
+    "hops": 2,
+    "t_valid": 59397840000000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "534a4e22",
+   "stratum": "correction-touched p10",
+   "class": "P39 anchor p75",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "7526194"
+    ],
+    "hops": 2,
+    "t_valid": 59140368000000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "3e2b0440",
+   "stratum": "correction-touched p90",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 897
+   },
+   "args": {
+    "a_spec": {
+     "src": "41304"
+    },
+    "b_spec": {
+     "src": "1792"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "aecb5d7b",
+   "stratum": "correction-touched p90",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 191
+   },
+   "args": {
+    "src": "5725740",
+    "dst": "408",
+    "window": {
+     "t_a": 0,
+     "t_b": 60021323352000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "8dcf8740",
+   "stratum": "correction-touched p90",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 858
+   },
+   "args": {
+    "a_spec": {
+     "src": "3750"
+    },
+    "b_spec": {
+     "src": "16957"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "449f4827",
+   "stratum": "p99",
+   "class": "len 2",
+   "factors": {
+    "matches": 23231
+   },
+   "args": {
+    "query": "15"
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "2426699f",
+   "stratum": "grid",
+   "class": "1 Jan 1997",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 63019295999999998,
+     "t_b": 63019296000000008
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "e665978c",
+   "stratum": "grid",
+   "class": "1997+1y",
+   "factors": {},
+   "args": {
+    "t1": 63019296000000000,
+    "t2": 63050852952000000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "6641dc0d",
+   "stratum": "correction-touched p50",
+   "class": "as-of q10",
+   "factors": {
+    "degree": 8
+   },
+   "args": {
+    "uid": "1096312",
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "097ca259",
+   "stratum": "correction-free p10",
+   "class": "P1411",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "24738212"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "b22675fe",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p50 century",
+   "factors": {
+    "reach_proxy": 7
+   },
+   "args": {
+    "src": "600636",
+    "window": {
+     "t_a": 57562520400000000,
+     "t_b": 60718215600000000
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "56f0cd8d",
+   "stratum": "p99",
+   "class": "len 2",
+   "factors": {
+    "matches": 23016
+   },
+   "args": {
+    "query": "17"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "d059a561",
+   "stratum": "correction-free p10",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 2
+   },
+   "args": {
+    "a_spec": {
+     "src": "29422170"
+    },
+    "b_spec": {
+     "src": "60259539"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "b2c68ed7",
+   "stratum": "p50",
+   "class": "len 4",
+   "factors": {
+    "matches": 142
+   },
+   "args": {
+    "query": "3869"
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "6dab514b",
+   "stratum": "correction-free p99",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 532
+   },
+   "args": {
+    "a_spec": {
+     "src": "6084088"
+    },
+    "b_spec": {
+     "src": "741266"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "39e28ea6",
+   "stratum": "correction-free p50",
+   "class": "P166 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 2
+   },
+   "args": {
+    "src": "469514",
+    "window": {
+     "t_a": 63240202440000000,
+     "t_b": 63555771960000000
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "4c4c5435",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p25",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "4757838"
+    ],
+    "hops": 2,
+    "t_valid": 62717587200000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "2b82920a",
+   "stratum": "correction-touched p50",
+   "class": "P39 anchor p75",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "8016262"
+    ],
+    "hops": 2,
+    "t_valid": 59520009600000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "fbb48a5c",
+   "stratum": "correction-free p90",
+   "class": "P166",
+   "factors": {
+    "degree": 8
+   },
+   "args": {
+    "uid": "3735652"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "5f776642",
+   "stratum": "correction-free p99",
+   "class": "P166 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 5256
+   },
+   "args": {
+    "src": "2161615",
+    "window": {
+     "t_a": 62924583240000000,
+     "t_b": 63240152760000000
+    }
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "6d9a523e",
+   "stratum": "grid",
+   "class": "1997+5y",
+   "factors": {},
+   "args": {
+    "t1": 63019296000000000,
+    "t2": 63177080760000000
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "d1ffd5aa",
+   "stratum": "grid",
+   "class": "modern stride 10y",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 315569520000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "4b841af3",
+   "stratum": "correction-touched p99",
+   "class": "P166 anchor p75",
+   "factors": {
+    "hop2_proxy": 64
+   },
+   "args": {
+    "seeds": [
+     "7085"
+    ],
+    "hops": 2,
+    "t_valid": 61315142400000000
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "91de6ef7",
+   "stratum": "correction-free p99",
+   "class": "as-of q90",
+   "factors": {
+    "degree": 15
+   },
+   "args": {
+    "uid": "417161",
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "21bbd3bf",
+   "stratum": "correction-free p90",
+   "class": "P54",
+   "factors": {
+    "degree": 8
+   },
+   "args": {
+    "uid": "17505484"
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "204d1eff",
+   "stratum": "p10",
+   "class": "len 5",
+   "factors": {
+    "matches": 7
+   },
+   "args": {
+    "query": "37262"
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "ecc832b6",
+   "stratum": "correction-touched p90",
+   "class": "P166",
+   "factors": {
+    "degree": 16
+   },
+   "args": {
+    "uid": "907311"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "13aa27d3",
+   "stratum": "correction-free p10",
+   "class": "P166 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 1
+   },
+   "args": {
+    "src": "11913897",
+    "window": {
+     "t_a": 63145508040000000,
+     "t_b": 63461077560000000
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "00c944a5",
+   "stratum": "correction-touched p10",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 7
+   },
+   "args": {
+    "a_spec": {
+     "src": "5085655"
+    },
+    "b_spec": {
+     "src": "313591"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "bf7400b6",
+   "stratum": "correction-free p50",
+   "class": "P166",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "9051664"
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "220c1256",
+   "stratum": "correction-free p50",
+   "class": "as-of q10",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "6384988",
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "70def1b6",
+   "stratum": "grid",
+   "class": "1 Jan 2009",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 63397987199999998,
+     "t_b": 63397987200000008
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "dfd2d26d",
+   "stratum": "correction-touched p50",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 30
+   },
+   "args": {
+    "src": "40572",
+    "dst": "83492",
+    "window": {
+     "t_a": 63271756800000000,
+     "t_b": 63713540952000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b8007a8a",
+   "stratum": "correction-free p50",
+   "class": "P166 anchor p25",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "901118"
+    ],
+    "hops": 2,
+    "t_valid": 59863622400000000
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "a4fc6b00",
+   "stratum": "grid",
+   "class": "century stride 10y",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 315569520000000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "0de75ad6",
+   "stratum": "correction-touched p90",
+   "class": "P793 anchor p50 1y",
+   "factors": {
+    "degree": 16
+   },
+   "args": {
+    "uid": "582868",
+    "t1": 63319050324000000,
+    "t2": 63350607276000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "ddea67c1",
+   "stratum": "correction-touched p99",
+   "class": "P166 anchor p50 10y",
+   "factors": {
+    "degree": 126
+   },
+   "args": {
+    "uid": "458",
+    "t1": 62672122440000000,
+    "t2": 62987691960000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "fcc5de55",
+   "stratum": "correction-free p90",
+   "class": "P54 anchor p50 century",
+   "factors": {
+    "reach_proxy": 6195
+   },
+   "args": {
+    "src": "4086849",
+    "window": {
+     "t_a": 61883211600000000,
+     "t_b": 65038906800000000
+    }
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "37544092",
+   "stratum": "grid",
+   "class": "block 50 delta 1y (3-cycle seed)",
+   "factors": {},
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 31556952000000,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "node_filter": [
+     "1000",
+     "1005",
+     "1006",
+     "1007",
+     "1008",
+     "1009",
+     "1011",
+     "1013",
+     "1014",
+     "1016",
+     "1019",
+     "1020",
+     "1025",
+     "1027",
+     "1028",
+     "1029",
+     "1030",
+     "1032",
+     "1033",
+     "1036",
+     "1037",
+     "1039",
+     "1041",
+     "1042",
+     "1044",
+     "1045",
+     "1049",
+     "1050",
+     "1065",
+     "114",
+     "115",
+     "117",
+     "1253",
+     "133356",
+     "142",
+     "145",
+     "148",
+     "15180",
+     "155",
+     "159",
+     "159840",
+     "183",
+     "18402168",
+     "191384",
+     "230",
+     "442765",
+     "529272",
+     "656801",
+     "7809",
+     "965"
+    ]
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "1f06c5e8",
+   "stratum": "p50",
+   "class": "len 4",
+   "factors": {
+    "matches": 145
+   },
+   "args": {
+    "query": "6238"
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "3639b5d2",
+   "stratum": "correction-free p90",
+   "class": "P54 anchor p50 10y",
+   "factors": {
+    "degree": 8
+   },
+   "args": {
+    "uid": "20644547",
+    "t1": 63397968840000000,
+    "t2": 63713538360000000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "da7af574",
+   "stratum": "correction-touched p50",
+   "class": "P39",
+   "factors": {
+    "degree": 6
+   },
+   "args": {
+    "uid": "6257177"
+   }
+  },
+  {
+   "query": "diff.global",
+   "instance": "ad7ebbb8",
+   "stratum": "grid",
+   "class": "1962+1y",
+   "factors": {},
+   "args": {
+    "t1": 61914758400000000,
+    "t2": 61946315352000000
+   }
+  },
+  {
+   "query": "agg.rel_bucket.w10",
+   "instance": "bc9b9e10",
+   "stratum": "grid",
+   "class": "1 Jan 1997",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 63019295999999998,
+     "t_b": 63019296000000008
+    },
+    "stride": 1,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "b95483de",
+   "stratum": "correction-touched p10",
+   "class": "P166",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "11724840"
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "079e13ef",
+   "stratum": "correction-free p10",
+   "class": "P166 anchor p50",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "26234996"
+    ],
+    "hops": 2,
+    "t_valid": 63082368000000000
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "bf7258e0",
+   "stratum": "grid",
+   "class": "modern stride 10y",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 315569520000000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "75891199",
+   "stratum": "grid",
+   "class": "modern stride 1y",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 31556952000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "b4d39ee5",
+   "stratum": "correction-free p90",
+   "class": "P39 anchor p50",
+   "factors": {
+    "hop2_proxy": 3
+   },
+   "args": {
+    "seeds": [
+     "5725110"
+    ],
+    "hops": 2,
+    "t_valid": 60242227200000000
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "9d33ccbf",
+   "stratum": "grid",
+   "class": "century stride 1y",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 31556952000000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "480a7799",
+   "stratum": "correction-touched p99",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 68850
+   },
+   "args": {
+    "a_spec": {
+     "src": "12652"
+    },
+    "b_spec": {
+     "src": "12626"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "cbf8ae01",
+   "stratum": "correction-free p90",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 125
+   },
+   "args": {
+    "src": "6112002",
+    "dst": "361149",
+    "window": {
+     "t_a": 62261913600000000,
+     "t_b": 62293470552000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "f462020f",
+   "stratum": "correction-free p99",
+   "class": "P54 anchor p50 10y",
+   "factors": {
+    "degree": 15
+   },
+   "args": {
+    "uid": "986056",
+    "t1": 62798352840000000,
+    "t2": 63113922360000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "30a181d5",
+   "stratum": "correction-free p99",
+   "class": "P39 anchor p50 century",
+   "factors": {
+    "reach_proxy": 7767
+   },
+   "args": {
+    "src": "1369015",
+    "window": {
+     "t_a": 61352715600000000,
+     "t_b": 64508410800000000
+    }
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "14d9e92e",
+   "stratum": "correction-free p50",
+   "class": "as-of q90",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "7660305",
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "df4e9836",
+   "stratum": "correction-touched p99",
+   "class": "P166 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 5272
+   },
+   "args": {
+    "src": "80966",
+    "window": {
+     "t_a": 63177044040000000,
+     "t_b": 63492613560000000
+    }
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "ef4943b9",
+   "stratum": "correction-touched p90",
+   "class": "P39 anchor p50 century",
+   "factors": {
+    "reach_proxy": 6893
+   },
+   "args": {
+    "src": "5079778",
+    "window": {
+     "t_a": 59962798800000000,
+     "t_b": 63118494000000000
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "5360deb8",
+   "stratum": "correction-touched p99",
+   "class": "P166",
+   "factors": {
+    "degree": 125
+   },
+   "args": {
+    "uid": "43380"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "87ff54d4",
+   "stratum": "correction-touched p10",
+   "class": "P39 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 1
+   },
+   "args": {
+    "src": "5144965",
+    "window": {
+     "t_a": 0,
+     "t_b": 157784760000000
+    }
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "fbe33d1a",
+   "stratum": "correction-touched p10",
+   "class": "P166 anchor p50 10y",
+   "factors": {
+    "degree": 1
+   },
+   "args": {
+    "uid": "151730",
+    "t1": 63145508040000000,
+    "t2": 63461077560000000
+   }
+  },
+  {
+   "query": "paths.k",
+   "instance": "d9178186",
+   "stratum": "correction-touched p99",
+   "class": "time-respecting 2-hop pair",
+   "factors": {
+    "deg_sum": 483
+   },
+   "args": {
+    "src": "1130849",
+    "dst": "41420",
+    "window": {
+     "t_a": 63366364800000000,
+     "t_b": 63643038552000000
+    },
+    "k": 3,
+    "max_hops": 3
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "afd08e43",
+   "stratum": "correction-free p10",
+   "class": "P166 anchor p50 century",
+   "factors": {
+    "reach_proxy": 1
+   },
+   "args": {
+    "src": "7739637",
+    "window": {
+     "t_a": 61756981200000000,
+     "t_b": 64912676400000000
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "e3cbaa38",
+   "stratum": "correction-touched p99",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 64125
+   },
+   "args": {
+    "a_spec": {
+     "src": "1270623"
+    },
+    "b_spec": {
+     "src": "12626"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "d1628495",
+   "stratum": "grid",
+   "class": "1 Jan 1962",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 61914758399999998,
+     "t_b": 61914758400000008
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "hist.asof",
+   "instance": "f93927ca",
+   "stratum": "correction-touched p99",
+   "class": "as-of q90",
+   "factors": {
+    "degree": 126
+   },
+   "args": {
+    "uid": "458",
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "7d0cc461",
+   "stratum": "correction-touched p90",
+   "class": "P39 anchor p25",
+   "factors": {
+    "hop2_proxy": 4
+   },
+   "args": {
+    "seeds": [
+     "127318"
+    ],
+    "hops": 2,
+    "t_valid": 55566000000000000
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "a288edb7",
+   "stratum": "correction-touched p10",
+   "class": "P793 anchor p25",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "1054126"
+    ],
+    "hops": 2,
+    "t_valid": 63397555200000000
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "1ef63760",
+   "stratum": "correction-free p50",
+   "class": "P54 anchor p50 10y",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "4830982",
+    "t1": 63208580040000000,
+    "t2": 63524149560000000
+   }
+  },
+  {
+   "query": "burst.zscore",
+   "instance": "8877992c",
+   "stratum": "grid",
+   "class": "modern stride 1y",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 31556952000000,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "hist.single",
+   "instance": "c2ef1a8c",
+   "stratum": "correction-touched p99",
+   "class": "P166",
+   "factors": {
+    "degree": 126
+   },
+   "args": {
+    "uid": "458"
+   }
+  },
+  {
+   "query": "series.count",
+   "instance": "26c50661",
+   "stratum": "grid",
+   "class": "modern stride 1y",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 31556952000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "7fc71a1f",
+   "stratum": "correction-touched p90",
+   "class": "P166 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 580
+   },
+   "args": {
+    "src": "57063",
+    "window": {
+     "t_a": 59958212040000000,
+     "t_b": 60273781560000000
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "29bb420c",
+   "stratum": "correction-free p90",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 110
+   },
+   "args": {
+    "a_spec": {
+     "src": "527691"
+    },
+    "b_spec": {
+     "src": "5592933"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "7bb070a9",
+   "stratum": "correction-touched p99",
+   "class": "P793 anchor p50",
+   "factors": {
+    "hop2_proxy": 43
+   },
+   "args": {
+    "seeds": [
+     "851"
+    ],
+    "hops": 2,
+    "t_valid": 61436361600000000
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "35151ae3",
+   "stratum": "grid",
+   "class": "modern stride 10y",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "stride": 315569520000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "8dd65eca",
+   "stratum": "correction-free p10",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 2
+   },
+   "args": {
+    "a_spec": {
+     "src": "5017477"
+    },
+    "b_spec": {
+     "src": "519871"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "series.count.w10",
+   "instance": "1d850bf7",
+   "stratum": "grid",
+   "class": "1 Jan 2009",
+   "factors": {},
+   "args": {
+    "metric": "edge_event_count",
+    "window": {
+     "t_a": 63397987199999998,
+     "t_b": 63397987200000008
+    },
+    "stride": 1
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "b4edf8f3",
+   "stratum": "p90",
+   "class": "len 2",
+   "factors": {
+    "matches": 16993
+   },
+   "args": {
+    "query": "58"
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "4aa13e6d",
+   "stratum": "correction-touched p99",
+   "class": "P166 anchor p50 century",
+   "factors": {
+    "reach_proxy": 8788
+   },
+   "args": {
+    "src": "6197086",
+    "window": {
+     "t_a": 61662286800000000,
+     "t_b": 64817982000000000
+    }
+   }
+  },
+  {
+   "query": "snap.hop2",
+   "instance": "1a886cef",
+   "stratum": "correction-free p10",
+   "class": "P54 anchor p25",
+   "factors": {
+    "hop2_proxy": 1
+   },
+   "args": {
+    "seeds": [
+     "5524901"
+    ],
+    "hops": 2,
+    "t_valid": 62293449600000000
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "696ac68a",
+   "stratum": "grid",
+   "class": "block 200 delta 1y (3-cycle seed)",
+   "factors": {},
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 31556952000000,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "node_filter": [
+     "1044097",
+     "1055894",
+     "1056120",
+     "10710292",
+     "10857763",
+     "11023716",
+     "11276876",
+     "11879",
+     "11929214",
+     "1245979",
+     "12515",
+     "12559",
+     "12569",
+     "12694",
+     "12736",
+     "12745",
+     "12753",
+     "12788",
+     "12816",
+     "1291",
+     "129103",
+     "12956",
+     "12957",
+     "1330178",
+     "1343814",
+     "13590051",
+     "13596",
+     "13598",
+     "13600",
+     "1361294",
+     "1364086",
+     "1364250",
+     "1364520",
+     "1364743",
+     "1379752",
+     "1385472",
+     "1388895",
+     "1388948",
+     "1391013",
+     "1444999",
+     "1445127",
+     "1469416",
+     "1469657",
+     "1473696",
+     "1481925",
+     "14828018",
+     "1500714",
+     "15055530",
+     "15064743",
+     "1521083",
+     "15235896",
+     "15464524",
+     "15741812",
+     "15843146",
+     "15843149",
+     "1587677",
+     "15956702",
+     "15976",
+     "15987639",
+     "16025732",
+     "1615325",
+     "1615759",
+     "1617042",
+     "1617059",
+     "1617103",
+     "1617114",
+     "1617133",
+     "1617219",
+     "1617494",
+     "1617501",
+     "1617692",
+     "1617699",
+     "1617721",
+     "1637072",
+     "1647506",
+     "1649312",
+     "1649316",
+     "1649327",
+     "1649338",
+     "1650039",
+     "1650041",
+     "1650056",
+     "1651173",
+     "165154",
+     "1654041",
+     "16665897",
+     "16693556",
+     "16886136",
+     "17306537",
+     "17315201",
+     "17365974",
+     "17485615",
+     "17497052",
+     "17629949",
+     "1780230",
+     "1794",
+     "18326110",
+     "18326111",
+     "18914778",
+     "191475",
+     "1976",
+     "1991288",
+     "1991697",
+     "20202948",
+     "20203006",
+     "2046773",
+     "2079",
+     "209821",
+     "212420",
+     "21454737",
+     "21645638",
+     "2169977",
+     "2169998",
+     "2170298",
+     "2170398",
+     "2170549",
+     "219748",
+     "2236821",
+     "23660837",
+     "2390484",
+     "2392200",
+     "23978000",
+     "243579",
+     "244717",
+     "25287",
+     "2679306",
+     "273748",
+     "2874",
+     "2989454",
+     "3044918",
+     "30461",
+     "3083",
+     "3113",
+     "3140456",
+     "3148",
+     "3164",
+     "3168380",
+     "3168915",
+     "3190446",
+     "3209735",
+     "3308802",
+     "331083",
+     "331579",
+     "3342",
+     "3368",
+     "3432071",
+     "3445133",
+     "3445146",
+     "3445346",
+     "3445366",
+     "3463259",
+     "3524926",
+     "3554456",
+     "37652865",
+     "382617",
+     "386122",
+     "387460",
+     "4054",
+     "4069515",
+     "41343046",
+     "42807",
+     "45282435",
+     "456",
+     "46130",
+     "46135",
+     "490",
+     "49410802",
+     "504919",
+     "521782",
+     "522234",
+     "535140",
+     "55803540",
+     "57818",
+     "580",
+     "582",
+     "582184",
+     "593",
+     "59526199",
+     "605677",
+     "637853",
+     "657145",
+     "674185",
+     "684659",
+     "762500",
+     "772460",
+     "788989",
+     "817685",
+     "828676",
+     "8358",
+     "8365",
+     "840195",
+     "840204",
+     "840223",
+     "854364",
+     "90",
+     "910038",
+     "910089",
+     "910099",
+     "945660",
+     "977460"
+    ]
+   }
+  },
+  {
+   "query": "nbr.evolution",
+   "instance": "01265064",
+   "stratum": "correction-free p50",
+   "class": "P793 anchor p50 1y",
+   "factors": {
+    "degree": 2
+   },
+   "args": {
+    "uid": "27544546",
+    "t1": 61930515924000000,
+    "t2": 61962072876000000
+   }
+  },
+  {
+   "query": "reach.window",
+   "instance": "74d084ce",
+   "stratum": "correction-free p90",
+   "class": "P54 anchor p50 decade",
+   "factors": {
+    "reach_proxy": 13
+   },
+   "args": {
+    "src": "192565",
+    "window": {
+     "t_a": 63177044040000000,
+     "t_b": 63492613560000000
+    }
+   }
+  },
+  {
+   "query": "agg.rel_bucket",
+   "instance": "541fcb4a",
+   "stratum": "grid",
+   "class": "century stride 1y",
+   "factors": {},
+   "args": {
+    "group_by": [
+     {
+      "dim": "rel_type"
+     },
+     {
+      "dim": "time_bucket"
+     }
+    ],
+    "aggregates": [
+     {
+      "agg": "count"
+     },
+     {
+      "agg": "count_distinct",
+      "of": "dst"
+     }
+    ],
+    "window": {
+     "t_a": 61441372800000000,
+     "t_b": 64597132800000000
+    },
+    "stride": 31556952000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "burst.zscore.w10",
+   "instance": "39b50e7b",
+   "stratum": "grid",
+   "class": "1 Jan 2009",
+   "factors": {},
+   "args": {
+    "target": {
+     "kind": "edge_event_rate"
+    },
+    "window": {
+     "t_a": 63397987199999998,
+     "t_b": 63397987200000008
+    },
+    "stride": 1,
+    "method": "zscore",
+    "params": {
+     "z": 3.0
+    }
+   }
+  },
+  {
+   "query": "coactive.narrow",
+   "instance": "c095a672",
+   "stratum": "correction-touched p10",
+   "class": "co-subjects, overlapping",
+   "factors": {
+    "deg_product": 6
+   },
+   "args": {
+    "a_spec": {
+     "src": "728003"
+    },
+    "b_spec": {
+     "src": "131378"
+    },
+    "allen_relation": {
+     "relation": "overlaps"
+    }
+   }
+  },
+  {
+   "query": "motif.filtered",
+   "instance": "204bd03c",
+   "stratum": "grid",
+   "class": "block 50 delta 10y (3-cycle seed)",
+   "factors": {},
+   "args": {
+    "motif": "M_triangle_cyclic",
+    "delta": 315569520000000,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "node_filter": [
+     "103572",
+     "104043",
+     "1065",
+     "1066638",
+     "1071031",
+     "1091676",
+     "1092722",
+     "1132615",
+     "11686395",
+     "117254",
+     "11735673",
+     "11860",
+     "11919354",
+     "11973454",
+     "11987663",
+     "12052838",
+     "12056662",
+     "1208086",
+     "1210",
+     "1220",
+     "122382",
+     "1224",
+     "1228",
+     "1230",
+     "123209",
+     "1233",
+     "123481",
+     "1235",
+     "1238",
+     "1240",
+     "1241",
+     "1242",
+     "1245",
+     "1263",
+     "126743",
+     "128827",
+     "1308",
+     "13178443",
+     "13362",
+     "13364",
+     "13375",
+     "13378",
+     "1349676",
+     "1353771",
+     "135837",
+     "1361500",
+     "13735849",
+     "1375268",
+     "139515",
+     "38"
+    ]
+   }
+  },
+  {
+   "query": "resolve.substr",
+   "instance": "404a488a",
+   "stratum": "p99",
+   "class": "len 2",
+   "factors": {
+    "matches": 23242
+   },
+   "args": {
+    "query": "27"
+   }
+  }
+ ]
+}

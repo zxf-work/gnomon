@@ -39,7 +39,7 @@ path for ordering and output, without deciding optimality (IC14 v1).
 
 WINDOW. With `valid_window` instead of `t_valid` (engine-only), the graph is
 the believed edge versions overlapping the window, and a path is valid when
-all of its edges and nodes are valid at one instant of it (the shared-instant rule):
+all of its edges and nodes are valid at one instant of it:
 `distance` is the least cost
 over the instants, `one_path` and `all_optimal` take the paths optimal at
 some instant where the minimum is reached, and `all_paths` / `k_paths`
@@ -71,6 +71,7 @@ reached vertex but the source is one.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from bisect import bisect_left, bisect_right
@@ -710,6 +711,12 @@ def _graph(adapter: StorageAdapter, args: dict[str, Any], sources: list[int] | N
         if warrays is not None:
             # the loop reads the table (the engine evaluates the pattern again)
             wtab = _pair_table(adapter, wspec, args, both)
+    if tr is not None and allowed is None and not need_props and not args.get("edge_where") \
+            and args["metric"] != "weight" and not sspec and \
+            args["result"] in ("all_paths", "k_paths") and \
+            os.environ.get("GNOMON_PATHS_TR_COLUMNS", "1") != "0":
+        # the enumerations read the graph per vertex only (`get`, `[]`)
+        return _LazyTrGraph(args["dir"], e["src_id"][idx], e["dst_id"][idx], e["vt_s"][idx])  # type: ignore[return-value]
     g = _Graph()
     for i in idx:
         a, b = int(e["src_id"][i]), int(e["dst_id"][i])
@@ -744,6 +751,88 @@ def _graph(adapter: StorageAdapter, args: dict[str, Any], sources: list[int] | N
         for v in g.times[u]:
             g.times[u][v].sort()
     return g
+
+
+class _LazyTimes:
+    """`times[u][v]`, built per `u` by `_LazyTrGraph`."""
+
+    def __init__(self, g: "_LazyTrGraph") -> None:
+        self._g = g
+
+    def __getitem__(self, u: int) -> dict[int, list[int]]:
+        return self._g._row(u)[1]
+
+    def get(self, u: int, default: Any = None) -> Any:
+        r = self._g._row(u)
+        return r[1] if r[1] else default
+
+
+class _LazyAdj(_LazyTimes):
+    """`adj[u]`, built per `u` by `_LazyTrGraph`."""
+
+    def __getitem__(self, u: int) -> dict[int, Any]:
+        return self._g._row(u)[0]
+
+    def get(self, u: int, default: Any = None) -> Any:
+        r = self._g._row(u)
+        return r[0] if r[0] else default
+
+    def __contains__(self, u: int) -> bool:
+        return bool(self._g._row(u)[0])
+
+
+class _LazyTrGraph:
+    """The time-respecting hop graph of the per-edge loop, each source
+    vertex's lists built when the search first reads them. The traversals
+    are held sorted by their source vertex (a stable sort, so each vertex's
+    in edge order); a vertex's `adj` (every far end at `(1, 0)`, in first
+    traversal order) and `times` (sorted start times) are what the loop
+    FinBench SF10 TCR5 on a hub read the whole TRANSFER relation (3-hop
+    frontier past half of it) and spent 78 s there; the enumeration reads
+    the vertices it reaches only."""
+
+    scale = None
+
+    def __init__(self, direction: str, src: np.ndarray, dst: np.ndarray, vt: np.ndarray) -> None:
+        a, b, t = src.astype(np.int64), dst.astype(np.int64), vt.astype(np.int64)
+        n = a.size
+        if direction == "out":
+            u, v, tt = a, b, t
+        elif direction == "in":
+            u, v, tt = b, a, t
+        else:
+            # the loop's two steps of edge i: (a, b) then (b, a)
+            u = np.empty(2 * n, dtype=np.int64); v = np.empty(2 * n, dtype=np.int64)
+            u[0::2], u[1::2], v[0::2], v[1::2] = a, b, b, a
+            tt = np.repeat(t, 2)
+        keep = u != v
+        u, v, tt = u[keep], v[keep], tt[keep]
+        o = np.argsort(u, kind="stable")
+        self._u, self._v, self._t = u[o], v[o], tt[o]
+        self._keys, self._starts = np.unique(self._u, return_index=True)
+        self._ends = np.append(self._starts[1:], self._u.size)
+        self._rows: dict[int, tuple[dict[int, Any], dict[int, list[int]]]] = {}
+        self.adj = _LazyAdj(self)
+        self.times = _LazyTimes(self)
+
+    def _row(self, u: int) -> tuple[dict[int, Any], dict[int, list[int]]]:
+        got = self._rows.get(u)
+        if got is not None:
+            return got
+        adj: dict[int, Any] = {}
+        times: dict[int, list[int]] = {}
+        k = int(np.searchsorted(self._keys, u))
+        if k < self._keys.size and int(self._keys[k]) == u:
+            lo, hi = int(self._starts[k]), int(self._ends[k])
+            for v, t in zip(self._v[lo:hi].tolist(), self._t[lo:hi].tolist()):
+                if v not in adj:
+                    adj[v] = (1, 0)
+                    times[v] = []
+                times[v].append(t)
+            for lst in times.values():
+                lst.sort()
+        self._rows[u] = (adj, times)
+        return self._rows[u]
 
 
 #: Kept edges from which the instant graph is built by array operations
@@ -2143,6 +2232,12 @@ PATHS_COST_MS_PER_M = {
     # edge versions over a valid_window: the per-edge loop of `_win_graph`
     # (two traversals per edge for dir both) and the node intervals
     "window_row": 8_000.0,
+    # A weighted valid_window graph from an inline pattern's weights is
+    # built from the traversal arrays, not by the loop:
+    # versions) 150 ms for the edges and 86 ms for `node_intervals`, i.e.
+    # 0.64 us an edge version and 0.023 us a node version; priced ~1.55x over
+    "window_weight_row": 1_000.0,
+    "window_node": 35.0,
     # edges relaxed by the per-source searches over the loaded graph
     "search": 700.0,
     # enumeration expansions (`_enum_simple`, `_window_enum_rows`)
@@ -2161,6 +2256,35 @@ PATTERN_CALL_MS = 30.0
 #: An unbounded hop step inside an inline pattern (`hops: {max: null}`) is
 #: charged as this many reads of its relation.
 PATTERN_UNBOUNDED_HOPS = 4
+
+
+def _window_weight_priced(args: dict[str, Any]) -> bool:
+    """Whether a `valid_window` call is priced at the array-built
+    weighted graph's rates: `metric: weight` from an inline pattern, with no
+    property weight, `edge_where`, truncation or score (`_win_graph`'s loop
+    time at SF1 (2,260 against 262 ms) and refused at SF10 (22 s estimated,
+    every other system under 10 s). `GNOMON_PATHS_WINDOW_COST=v1` restores the
+    `window_row` price for every valid_window call."""
+    if os.environ.get("GNOMON_PATHS_WINDOW_COST", "").strip() == "v1":
+        return False
+    w = args.get("weight")
+    return (args.get("metric") == "weight" and isinstance(w, dict) and "match" in w
+            and "prop" not in w and not args.get("edge_where") and args.get("truncate") is None
+            and args.get("score") is None)
+
+
+def _window_hops_priced(args: dict[str, Any]) -> bool:
+    """Whether a `valid_window` hop-metric search (`distance`,
+    `one_path`, `all_optimal`; not an enumeration) is priced at the
+    array-built graph's rates: `_window_rows` builds a hop graph with no
+    `edge_where`, truncation, score or time order from the traversal arrays
+    versions) was estimated 21.4 s and refused; warm it runs 6.5 s (graph
+    3.3 s, search 1.9 s). `GNOMON_PATHS_WINDOW_HOPS_COST=0` (read per call)
+    keeps `window_row` for it."""
+    if os.environ.get("GNOMON_PATHS_WINDOW_HOPS_COST", "").strip() == "0":
+        return False
+    return (args.get("metric") == "hops" and not args.get("edge_where") and args.get("truncate") is None
+            and args.get("score") is None and args.get("time_respecting") is None)
 
 
 def _rel_rows(stats: dict[str, Any], rels: Any) -> int:
@@ -2351,7 +2475,11 @@ def _paths_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
     depth = int(hops) if hops else None
     if vw is not None:
         loaded = whole
-        read_ms = whole * rate["window_row"] / 1e6
+        if _window_weight_priced(args) or (not enum and _window_hops_priced(args)):
+            read_ms = (whole * rate["window_weight_row"]
+                       + int(stats.get("n_node_versions") or n) * rate["window_node"]) / 1e6
+        else:
+            read_ms = whole * rate["window_row"] / 1e6
     elif n_src and (enum or args["metric"] == "hops"):
         bidir = (not enum and tr is None and trunc is None and n_src == 1 and n_dst == 1)
         if bidir:
@@ -2446,6 +2574,34 @@ def _arrival(adapter: StorageAdapter, args: dict[str, Any], sources: list[int],
     return rows
 
 
+#: The rows of recent multi-page `paths` calls, by (store handle, store
+#: generation, the arguments but the page): a later page is read from them
+#: 19,560 all_paths rows: ~75 s a 10,000-row page, every page re-running the
+#: search). The rows are those the call computes, in its order, so each page
+#: is the one the operator would return. `GNOMON_PATHS_PAGE_MEMO=0` re-runs.
+_PAGE_MEMO: dict[Any, list[dict[str, Any]]] = {}
+PAGE_MEMO_ENTRIES = 4
+PAGE_MEMO_MAX_ROWS = 1_000_000
+
+
+def _page_key(adapter: StorageAdapter, args: dict[str, Any]) -> Any:
+    if os.environ.get("GNOMON_PATHS_PAGE_MEMO", "1").strip() == "0":
+        return None
+    gen = getattr(adapter, "generation", None)
+    try:
+        gen = gen() if callable(gen) else gen
+    except Exception:  # noqa: BLE001 - no generation, no memo
+        return None
+    if gen is None:
+        return None
+    try:
+        rest = json.dumps({k: v for k, v in args.items() if k not in ("limit", "cursor")},
+                          sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+    return (id(adapter), gen, rest)
+
+
 @operator(
     "paths",
     {
@@ -2486,11 +2642,24 @@ def _arrival(adapter: StorageAdapter, args: dict[str, Any], sources: list[int],
     output_fields=("rows", "rows_total", "truncated", "cursor"),
 )
 def paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
+    key = _page_key(adapter, args)
+    rows = _PAGE_MEMO.get(key) if key is not None and args.get("cursor") else None
+    if rows is None:
+        rows = _paths_rows(adapter, args)
+        if key is not None and args["limit"] < len(rows) <= PAGE_MEMO_MAX_ROWS:
+            if len(_PAGE_MEMO) >= PAGE_MEMO_ENTRIES:
+                _PAGE_MEMO.pop(next(iter(_PAGE_MEMO)))
+            _PAGE_MEMO[key] = rows
+    return paginate(rows, args["limit"], args["cursor"])
+
+
+def _paths_rows(adapter: StorageAdapter, args: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every row of a `paths` call, in its order (`paths` pages them)."""
     sources = _endpoints(adapter, args["sources"], args, strict=True)
     targets = _endpoints(adapter, args.get("targets"), args, strict=False)
     if args["metric"] == "arrival":
         rows = _arrival(adapter, args, sources, targets)
-        return paginate(rows, args["limit"], args["cursor"])
+        return rows
     if args.get("valid_window") is not None:
         names = dict(zip(sources + (targets or []),
                          adapter.uids_for(sources + (targets or []))))
@@ -2504,7 +2673,7 @@ def paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
             rows = _window_enum_rows(adapter, args, sources, targets, wname)
         else:
             rows = _window_rows(adapter, args, sources, targets, wname)
-        return paginate(rows, args["limit"], args["cursor"])
+        return rows
     g = _graph(adapter, args, sources, targets)
     tset = None if targets is None else set(targets)
     res = args["result"]
@@ -2542,7 +2711,7 @@ def paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
                     row["score"] = _out_num(row["_sx"])
                 rows.append(row)
         rows = _ordered(rows, args, res == "k_paths")
-        return paginate(rows, args["limit"], args["cursor"])
+        return rows
 
     # optimal results
     per_pair: list[tuple[int, int, Any, dict[int, Any]]] = []
@@ -2594,7 +2763,7 @@ def paths(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
                 rows.append(row)
     if res == "all_optimal":
         rows = _ordered(rows, args, False)
-    return paginate(rows, args["limit"], args["cursor"])
+    return rows
 
 
 def _all_optimal(pred: dict[int, list[int]], s: int, t: int, name) -> list[list[int]]:

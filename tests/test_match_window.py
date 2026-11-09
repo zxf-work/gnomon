@@ -1,11 +1,9 @@
-"""`match` under the shared-instant rule, one shared valid instant: walks, `dir: both` and
-`optional`/`not` sub-patterns under a valid-time window (with
+"""`optional`/`not` sub-patterns under a valid-time window (with
 `co_valid: [valid]`) or under a non-current belief mode.
 
 * a hand-built store whose answers are stated by hand (instant sets that
   split, a node that stops existing mid-walk, a remainder with nulls);
 * a window of width one answers what the instant does;
-* random bi-temporal stores and random shared-instant arguments, the compiled plan on the
   reference route against the oracle (which evaluates the instant semantics
   at every elementary instant and takes the union), and the engine's
   executor against the reference route;
@@ -32,7 +30,7 @@ from . import test_match_oracle as T
 from .conftest import fresh_adapter
 
 EXAMPLES = int(os.environ.get("GNOMON_HYP_EXAMPLES", "25"))
-NATIVE = os.environ.get("GNOMON_TEST_BACKEND") == "native"
+NATIVE = os.environ.get("GNOMON_TEST_BACKEND", "native") == "native"
 
 
 def reference(adapter, args):
@@ -186,7 +184,6 @@ def test_a_width_one_window_answers_as_the_instant(social):
 
 
 # ---------------------------------------------------------------------------
-# random stores, random shared-instant arguments
 # ---------------------------------------------------------------------------
 
 HOPS = [{"exact": 1}, {"exact": 1}, {"exact": 1}, {"exact": 2}, {"min": 0, "max": 2},
@@ -404,7 +401,6 @@ def test_dir_both_on_one_hop_is_accepted_under_any_window(timeline):
 
 
 # --------------------------------------------------------------------------- #
-# the index join and a shared-instant walk's node existence on both sides of their        #
 # crossovers: the engine against the reference route                          #
 # --------------------------------------------------------------------------- #
 
@@ -449,7 +445,6 @@ WIDE = [
                            {"from": "z", "to": "y", "rel_type": "LIKES", "var": "l"}]},
      "return": {"rows": [{"as": "x", "expr": {"col": "x.uid"}}, {"as": "y", "expr": {"col": "y.uid"}},
                          {"as": "z", "expr": {"col": "z.uid"}}, {"as": "ks", "expr": {"col": "k.vt_s"}}]}},
-    # a shared-instant walk from every person: its frontier's node existence past 256 ids
     {"pattern": {"nodes": [{"var": "x", "labels": ["P"]}, {"var": "y", "labels": ["P"]}],
                  "steps": [{"from": "x", "to": "y", "rel_type": "KNOWS", "dir": "both",
                             "hops": {"min": 1, "max": 3}}]},
@@ -475,7 +470,6 @@ WIDE = [
 def test_index_join_and_wide_walks_equal_the_reference(wide, i, scope):
     """A join on a whole scan seeks its left keys while they are
     few (one per 64 identities, 256 at least) and reads the scan otherwise;
-    a shared-instant walk reads its frontier's node existence by point reads, an id
     bitset pass or the node lane; every one gives the reference's rows, in
     its order."""
     args = {**WIDE[i], "scope": scope, "limit": 10000}

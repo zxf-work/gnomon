@@ -1,0 +1,6503 @@
+{
+ "format": "w4-params",
+ "version": "w4-v1",
+ "meta": "w4-sf10-r0.eventlog.meta.json",
+ "T_historic": 1671115968000000,
+ "now": 1672531200001000,
+ "windows": {
+  "all": [
+   1577836800000000,
+   1672531200000000
+  ],
+  "30d": [
+   1667098368000000,
+   1669690368000000
+  ]
+ },
+ "counts": {
+  "TSR1": 20,
+  "TSR2": 20,
+  "TSR3": 20,
+  "TSR4": 20,
+  "TSR5": 20,
+  "TSR6": 20,
+  "TCR1": 20,
+  "TCR7": 20,
+  "TCR9": 20,
+  "TCR6": 20,
+  "TCR2": 20,
+  "TCR5": 20,
+  "TCR12": 20,
+  "TCR8": 20,
+  "TCR11": 20,
+  "TCR10": 16,
+  "TCR3": 20,
+  "TCR4": 20
+ },
+ "instances": [
+  {
+   "query": "TSR1",
+   "instance": "29f8f531",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "b8ad2ea6",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "12738549",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "c2ba1345",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "afd05eb6",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "eb4702e5",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "8a8ce0b4",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "c27cab14",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "5d7aed19",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "bb6e6575",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "8860169b",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "a809f367",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "e6723a02",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "1aee60cd",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "41064ff1",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "c88e03e8",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "a0997080",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "99cc2b6c",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "727213fc",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "c421a4d2",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "888c318d",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "c1f4e05b",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "6345532a",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "1599e577",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "aa91beee",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "b93c87cb",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "14214c3e",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "1692b13a",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "7176f44c",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "bff14aed",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "2ae8b963",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "2959177f",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "67198718",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "32005977",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "70b42033",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "d6f5f8b6",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "b41be328",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "22563cf1",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "537e60cf",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "1feb3723",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "1d0a258d",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "aa53bc4b",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "4df23647",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "7a6f9b1a",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "0c6fb684",
+   "window": "all",
+   "belief": "current",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "ec87ec55",
+   "window": "all",
+   "belief": "current",
+   "stratum": "withdraw-in rank 0 (81)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4825616896332166881"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "1d5ff34f",
+   "window": "all",
+   "belief": "current",
+   "stratum": "withdraw-in rank 1 (93)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4834061145633481499"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "cd2e8004",
+   "window": "all",
+   "belief": "current",
+   "stratum": "withdraw-in rank 2 (106)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:288230925907527277"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "5b706f59",
+   "window": "all",
+   "belief": "current",
+   "stratum": "withdraw-in rank 3 (116)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915691362780713372"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "c24601fe",
+   "window": "all",
+   "belief": "current",
+   "stratum": "withdraw-in rank 4 (138)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:273317425066285324"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "58d138bc",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "31dd7ee4",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "5796d93a",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "85048083",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "a98b2454",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "36800f01",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "232c9ba2",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "63abcc3c",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "b792f349",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "e0b8cd89",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "267ad559",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "e8f2396f",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "b1d60227",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "fbc6cab7",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "9d0d468a",
+   "window": "all",
+   "belief": "current",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "25cbf4a2",
+   "window": "all",
+   "belief": "current",
+   "stratum": "deposit rank 0 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4891481216248721907"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "09fc0901",
+   "window": "all",
+   "belief": "current",
+   "stratum": "deposit rank 1 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4838000420917872292"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "5efca5b4",
+   "window": "all",
+   "belief": "current",
+   "stratum": "deposit rank 2 (5)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4874020696721737115"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "dffd3ad9",
+   "window": "all",
+   "belief": "current",
+   "stratum": "deposit rank 3 (7)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4787329702429725781"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "4b7c1efb",
+   "window": "all",
+   "belief": "current",
+   "stratum": "deposit rank 4 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4898516991154860963"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "d5647d82",
+   "window": "all",
+   "belief": "current",
+   "stratum": "guarantor rank 0 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163264191"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "bbebc281",
+   "window": "all",
+   "belief": "current",
+   "stratum": "guarantor rank 1 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093616005"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "92cda7de",
+   "window": "all",
+   "belief": "current",
+   "stratum": "guarantor rank 2 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046790843"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "a9ebfa24",
+   "window": "all",
+   "belief": "current",
+   "stratum": "guarantor rank 3 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093465483"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "380694d4",
+   "window": "all",
+   "belief": "current",
+   "stratum": "guarantor rank 4 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:9991"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "eac92d92",
+   "window": "all",
+   "belief": "current",
+   "stratum": "investor ranks 0,1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:13194139799554",
+    "pid2": "Person:24189256012194"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "3bd4b6a0",
+   "window": "all",
+   "belief": "current",
+   "stratum": "investor ranks 1,2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:24189256012194",
+    "pid2": "Person:8796093063915"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "08242270",
+   "window": "all",
+   "belief": "current",
+   "stratum": "investor ranks 2,3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:8796093063915",
+    "pid2": "Person:309483"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "03cab182",
+   "window": "all",
+   "belief": "current",
+   "stratum": "investor ranks 3,4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:309483",
+    "pid2": "Person:8796093295449"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "509278b0",
+   "window": "all",
+   "belief": "current",
+   "stratum": "transfer pair 0",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4753276452927982853",
+    "id2": "Account:4857140719334215581"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "cfd468cf",
+   "window": "all",
+   "belief": "current",
+   "stratum": "transfer pair 1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4844205789667163123",
+    "id2": "Account:4778622120093580430"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "fcac135e",
+   "window": "all",
+   "belief": "current",
+   "stratum": "transfer pair 2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4792961675865124386",
+    "id2": "Account:4882193366651007489"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "ed0b1022",
+   "window": "all",
+   "belief": "current",
+   "stratum": "transfer pair 3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:173677757211875595",
+    "id2": "Account:199009680482120483"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "ed0b1022",
+   "window": "all",
+   "belief": "current",
+   "stratum": "transfer pair 4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:173677757211875595",
+    "id2": "Account:199009680482120483"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "1b3972c2",
+   "window": "all",
+   "belief": "current",
+   "stratum": "cycle pair 0",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:196754582133556997",
+    "id2": "Account:255864327242794765"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "9d32ea84",
+   "window": "all",
+   "belief": "current",
+   "stratum": "cycle pair 1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4916523418205031318",
+    "id2": "Account:4911456868624240000"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "c8134356",
+   "window": "all",
+   "belief": "current",
+   "stratum": "cycle pair 2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4902743238974133875",
+    "id2": "Account:4884447365487942145"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "89be33a2",
+   "window": "all",
+   "belief": "current",
+   "stratum": "cycle pair 3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4863895019263624695",
+    "id2": "Account:4904990365863380466"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "0efec734",
+   "window": "all",
+   "belief": "current",
+   "stratum": "cycle pair 4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4881625194017350092",
+    "id2": "Account:4912305966478811666"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "abd02ae9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "a8e3b4a2",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "2c6bdc69",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "1591976d",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "712290ce",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "456e9219",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "362dc9c6",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "e2d7c0c5",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "adf175a9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 0 (5 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4903297667712423155"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "3f31d96c",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "304acac2",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "bf982170",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "ed4eaf7c",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "9be55f87",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "3fd4a05c",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "902258b7",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "14673e94",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "bca47baa",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 1 (9 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4916532489175969999"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "3f900d22",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "2aacccf8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "0f45cb19",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "de6f9fab",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "61e93a0d",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "5b249c19",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "39ddd3f2",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "4b66845f",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "fde29eff",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 2 (20 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:306814596562295658"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "aca9092d",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "ab7fd263",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "5c7afeb5",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "ec956f9e",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "f9e3b1a8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "ca515972",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "bf329fa2",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "5c46602a",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "24ffd164",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 3 (75 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4889520787016414804"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "6f32c361",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "cd4e0ce9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "06d162c1",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "9bbe30e9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "3157cf0c",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "34372617",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "2abe5d87",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "669a6a14",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "74576ca8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "activity rank 4 (9431 transfers)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915411811949351393"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "360a249e",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 0 (81)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4825616896332166881"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "0f1d093f",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 1 (93)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4834061145633481499"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "9aa720d8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 2 (106)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:288230925907527277"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "4101ca9a",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 3 (116)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4915691362780713372"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "331c862f",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 4 (138)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:273317425066285324"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "5111dc73",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "f760f176",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "82001d50",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 0 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069856707"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "caec5b52",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "3b3aa06b",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "5cbd6ccb",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 1 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163054230"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "cf3d24a8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "7b4a3d51",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "3ba75303",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 2 (22)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:6597069872633"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "5080fc3b",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "0daac5d9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "c583fed9",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 3 (78)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194139876661"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "99c046c6",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "83c78e93",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "db80bb1f",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "owner rank 4 (9443)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279149729"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "1fae8462",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "deposit rank 0 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4891481216248721907"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "c637ffa6",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "deposit rank 1 (3)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4838000420917872292"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "eaf613ca",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "deposit rank 2 (5)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4874020696721737115"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "235f2dfc",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "deposit rank 3 (7)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4787329702429725781"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "977a6182",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "deposit rank 4 (10)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4898516991154860963"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "eed02a1b",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "guarantor rank 0 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:15393163264191"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "1bf14e83",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "guarantor rank 1 (1)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093616005"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "2efcba3e",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "guarantor rank 2 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046790843"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "da77c305",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "guarantor rank 3 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093465483"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "c11642aa",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "guarantor rank 4 (2)",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:9991"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "81d75dd5",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "investor ranks 0,1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:13194139799554",
+    "pid2": "Person:24189256012194"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "34bdf002",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "investor ranks 1,2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:24189256012194",
+    "pid2": "Person:8796093063915"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "1c8cb3f8",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "investor ranks 2,3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:8796093063915",
+    "pid2": "Person:309483"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "3c6383e1",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "investor ranks 3,4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:309483",
+    "pid2": "Person:8796093295449"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "4ce8d9cf",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "transfer pair 0",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4753276452927982853",
+    "id2": "Account:4857140719334215581"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "f246b526",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "transfer pair 1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4844205789667163123",
+    "id2": "Account:4778622120093580430"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "e06e4045",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "transfer pair 2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4792961675865124386",
+    "id2": "Account:4882193366651007489"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "58a69c24",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "transfer pair 3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:173677757211875595",
+    "id2": "Account:199009680482120483"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "58a69c24",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "transfer pair 4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:173677757211875595",
+    "id2": "Account:199009680482120483"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "50f5df5b",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "cycle pair 0",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:196754582133556997",
+    "id2": "Account:255864327242794765"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "db3cc927",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "cycle pair 1",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4916523418205031318",
+    "id2": "Account:4911456868624240000"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "fe9f4186",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "cycle pair 2",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4902743238974133875",
+    "id2": "Account:4884447365487942145"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "52d703b0",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "cycle pair 3",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4863895019263624695",
+    "id2": "Account:4904990365863380466"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "27b4164c",
+   "window": "all",
+   "belief": "historic",
+   "stratum": "cycle pair 4",
+   "params": {
+    "start": 1577836800000000,
+    "end": 1672531200000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4881625194017350092",
+    "id2": "Account:4912305966478811666"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "67e63251",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "3eb2d84b",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "4b3b27bc",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "44b74d6f",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "1a34e248",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "89490f1d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "7e23b69a",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "86640979",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "c01fae2c",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "b4a46029",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "4334821c",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "7a463714",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "d5367fbe",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "68225bdc",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "34e751ec",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "a15d732e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "69f86962",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "782e5040",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "4ef1ee34",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "6084d897",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "433c83f1",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "65d621b4",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "fc35aa9d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "a93a7224",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "b3597ed1",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "773c676d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "6c5decf1",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "a7bd33e5",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "325fc683",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "d0d569ba",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "cfa9480c",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "62e7754d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "20050ebe",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "35c11cfc",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "3622c1f0",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "16481417",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "ba0966a4",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "8d7d7c82",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "0a6bc800",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "02497cf5",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "968ace3e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "03f335fa",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "7e31edd4",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "6bb5dd67",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "3582b3ca",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "4e15d96e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "withdraw-in rank 0 (10)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:119633462171809261"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "fd029ae6",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "withdraw-in rank 1 (16)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:249109477557538811"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "6551bf71",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "withdraw-in rank 2 (29)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:284014298815018745"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "687e19c5",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "withdraw-in rank 3 (40)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4905847160299352257"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "cddf2e0e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "withdraw-in rank 4 (57)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4901888918439359938"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "ef68d17e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "c2d24493",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "623bbf7e",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "d853628d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "a72ff784",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "0b011192",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "b0c78159",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "840e3bc4",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "9cac5b19",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "e70f8288",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "b2705bf0",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "159e3903",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "41a6447d",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "45916706",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "9a6979a0",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "cd03511b",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "deposit rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:244321104418573737"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "04d38e76",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "deposit rank 1 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4871492369733665685"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "abe90a64",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "deposit rank 2 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4899922441893057659"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "476b46e9",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "deposit rank 3 (4)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:293019024168590535"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "8469bbf6",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "deposit rank 4 (8)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4890075490632597853"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "b08aa8c1",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "guarantor rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194140075108"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "90c78c10",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "guarantor rank 1 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279087905"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "35964702",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "guarantor rank 2 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093123012"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "45b58d47",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "guarantor rank 3 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:28587302787692"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "0c2debd9",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "guarantor rank 4 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:89907"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "db1c56aa",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "investor ranks 0,1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:17592186629604",
+    "pid2": "Person:4398047103089"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "c697419a",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "investor ranks 1,2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:4398047103089",
+    "pid2": "Person:19791209432265"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "d2dbcda9",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "investor ranks 2,3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:19791209432265",
+    "pid2": "Person:26388279196329"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "65de3043",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "investor ranks 3,4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:26388279196329",
+    "pid2": "Person:28587302707757"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "b4197908",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "transfer pair 0",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4640682064197190772",
+    "id2": "Account:282044523733851864"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "13668657",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "transfer pair 1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4834902821784550872",
+    "id2": "Account:4905834515915636350"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "6d7a3aae",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "transfer pair 2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4839967722097869351",
+    "id2": "Account:4796057350853103424"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "1f836ef1",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "transfer pair 3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4853760270834628368",
+    "id2": "Account:4687127084621919943"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "5e33d945",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "transfer pair 4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:251083650685219997",
+    "id2": "Account:274443599851047653"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "d4bbe59b",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "cycle pair 0",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4899363340230351873",
+    "id2": "Account:4828713121075977410"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "af3bc435",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "cycle pair 1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4896835837875986688",
+    "id2": "Account:4899369112666382802"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "a9a97c56",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "cycle pair 2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4907803191485142611",
+    "id2": "Account:4859108020514203253"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "077aef72",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "cycle pair 3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4879650471133863047",
+    "id2": "Account:4839681024440951645"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "aa2b3e30",
+   "window": "30d",
+   "belief": "current",
+   "stratum": "cycle pair 4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 4611686018427387903,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4840534795219895553",
+    "id2": "Account:4905836989816767717"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "3bc40f9e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "0949893e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "a2d116af",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "e535b188",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "259d3c1d",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "9319be51",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "8f1c267e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "b83d559e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "8cd123a1",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 0 (1 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:295274397395078816"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "3020c6cd",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "71936ed9",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "0d0036f2",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "aa897f64",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "e1a169fd",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "f9439d24",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "b1be5eee",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "4636f01c",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "bc80851b",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 1 (2 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4843352843521889579"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "e36b9c0b",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "12d58430",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "3ec51dcf",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "367e5839",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "76449ba1",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "8c9d8bcd",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "d09af57d",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "83ff222e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "78c151f5",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 2 (5 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4900488140625559726"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "cfc70b6d",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "d4ef0e32",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "3b4d4a3b",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "c20989ff",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "19b678c2",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "85992d3a",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "f8f995e1",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "a08f695e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "68e820e8",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 3 (18 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4839968546731611292"
+   }
+  },
+  {
+   "query": "TSR1",
+   "instance": "c98dd44a",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR2",
+   "instance": "2ec7afd7",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR3",
+   "instance": "4fc8a28e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR4",
+   "instance": "65a5a8f4",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR5",
+   "instance": "0fbcccfb",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TSR6",
+   "instance": "97d1c762",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR1",
+   "instance": "1f11c49f",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR7",
+   "instance": "ec3e58e5",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR9",
+   "instance": "54a60cf7",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "activity rank 4 (2300 transfers)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4892885842353197388"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "97a768ff",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 0 (10)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:119633462171809261"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "67fd1569",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 1 (16)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:249109477557538811"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "aba03920",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 2 (29)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:284014298815018745"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "0262d25f",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 3 (40)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4905847160299352257"
+   }
+  },
+  {
+   "query": "TCR6",
+   "instance": "6ace7ca2",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "withdraw-in rank 4 (57)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Account:4901888918439359938"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "c597d18b",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "39590682",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "02cb52de",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:17592186516330"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "d1b2b8d9",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "668bbf16",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "e379828f",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 1 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279274893"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "cf3be547",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "f59be624",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "1cc5e1d0",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 2 (5)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093312424"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "38e65a4e",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "8d2ecba3",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "014ab39c",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 3 (18)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:21990232828807"
+   }
+  },
+  {
+   "query": "TCR2",
+   "instance": "6cb0155a",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR5",
+   "instance": "c9d7f717",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR12",
+   "instance": "9e843b37",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "owner rank 4 (1723)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:4398046545872"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "b0471562",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "deposit rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:244321104418573737"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "22aea371",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "deposit rank 1 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4871492369733665685"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "26c438d5",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "deposit rank 2 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4899922441893057659"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "cba4d604",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "deposit rank 3 (4)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:293019024168590535"
+   }
+  },
+  {
+   "query": "TCR8",
+   "instance": "ccf840ca",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "deposit rank 4 (8)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.5,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Loan:4890075490632597853"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "3da1296d",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "guarantor rank 0 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:13194140075108"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "98ffcf9d",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "guarantor rank 1 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:26388279087905"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "b4d8ae12",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "guarantor rank 2 (1)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:8796093123012"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "7c36e797",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "guarantor rank 3 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:28587302787692"
+   }
+  },
+  {
+   "query": "TCR11",
+   "instance": "6fc64949",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "guarantor rank 4 (2)",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id": "Person:89907"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "d946d6b9",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "investor ranks 0,1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:17592186629604",
+    "pid2": "Person:4398047103089"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "f99f1e24",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "investor ranks 1,2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:4398047103089",
+    "pid2": "Person:19791209432265"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "33f90c45",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "investor ranks 2,3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:19791209432265",
+    "pid2": "Person:26388279196329"
+   }
+  },
+  {
+   "query": "TCR10",
+   "instance": "38845d46",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "investor ranks 3,4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "pid1": "Person:26388279196329",
+    "pid2": "Person:28587302707757"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "526ebd8f",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "transfer pair 0",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4640682064197190772",
+    "id2": "Account:282044523733851864"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "ee78039b",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "transfer pair 1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4834902821784550872",
+    "id2": "Account:4905834515915636350"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "a817b2a5",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "transfer pair 2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4839967722097869351",
+    "id2": "Account:4796057350853103424"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "f067bd22",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "transfer pair 3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4853760270834628368",
+    "id2": "Account:4687127084621919943"
+   }
+  },
+  {
+   "query": "TCR3",
+   "instance": "fbbcaac2",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "transfer pair 4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:251083650685219997",
+    "id2": "Account:274443599851047653"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "988054af",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "cycle pair 0",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4899363340230351873",
+    "id2": "Account:4828713121075977410"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "bc45b630",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "cycle pair 1",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4896835837875986688",
+    "id2": "Account:4899369112666382802"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "ea6fa3d3",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "cycle pair 2",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4907803191485142611",
+    "id2": "Account:4859108020514203253"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "4da779b2",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "cycle pair 3",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4879650471133863047",
+    "id2": "Account:4839681024440951645"
+   }
+  },
+  {
+   "query": "TCR4",
+   "instance": "bdb17181",
+   "window": "30d",
+   "belief": "historic",
+   "stratum": "cycle pair 4",
+   "params": {
+    "start": 1667098368000000,
+    "end": 1669690368000000,
+    "now": 1672531200001000,
+    "T": 1671115968000000,
+    "lim": 500,
+    "threshold": 0.0,
+    "threshold1": 0.0,
+    "threshold2": 0.0,
+    "id1": "Account:4840534795219895553",
+    "id2": "Account:4905836989816767717"
+   }
+  }
+ ]
+}

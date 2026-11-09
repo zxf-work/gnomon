@@ -3,12 +3,12 @@
 **This is not LDBC data**, not produced by the LDBC data generator, and not an
 LDBC benchmark workload. It is a small deterministic generator with the
 *shape* of the LDBC Social Network Benchmark schema: its labels, relationship
-types and directions, and the uid encoding of an LDBC loader
-(`uid = id * 8 + hierarchy tag`, `snb_uid` below). The distributions are simple stand-ins
+types and directions, and the uid encoding of `gnomon.data.snb_loader`
+(`uid = id * 8 + hierarchy tag`). The distributions are simple stand-ins
 (Pareto-weighted friendship degree, Zipf tag popularity, exponential delays);
 nothing about LDBC's correlations is reproduced.
 
-Two deliberate differences from a loader of real LDBC data:
+Two deliberate differences from `snb_loader`:
 
 * `KNOWS` is stored **once** per friendship, with `src` id < `dst` id.
 * Valid time closes: deletes are written as `retract` ops at a deletion date,
@@ -45,24 +45,7 @@ from itertools import accumulate
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-#: The uid encoding: an LDBC id times eight plus the tag of the id space it
-#: draws from, so ids of different hierarchies never collide.
-HIERARCHY_TAG: dict[str, int] = {
-    "Forum": 0,
-    "Message": 1,
-    "Organisation": 2,
-    "Person": 3,
-    "Place": 4,
-    "Tag": 5,
-    "TagClass": 6,
-}
-HIERARCHY_STRIDE = 8
-
-
-def snb_uid(hierarchy: str, ldbc_id: str | int) -> str:
-    return str(int(ldbc_id) * HIERARCHY_STRIDE + HIERARCHY_TAG[hierarchy])
-
-
+from gnomon.data.snb_loader import snb_uid
 
 Op = dict[str, Any]
 EdgeKey = tuple[str, str, str, str]
@@ -399,7 +382,7 @@ FIRST_NAMES = ("Anna", "Ben", "Chen", "Dara", "Eli", "Fatima", "Goran", "Hana",
 LAST_NAMES = ("Abara", "Becker", "Costa", "Dube", "Eriksen", "Fischer",
               "Garcia", "Hoang", "Ito", "Jensen", "Kowalski", "Lopez",
               "Mbeki", "Nguyen", "Okafor", "Petrov", "Rossi", "Silva",
-              "Tanaka", "Urban", "Vargas", "Wong", "Yilmaz", "Zubiri")
+              "Tanaka", "Urban", "Vargas", "Wong", "Yilmaz", "Zhang")
 COMPANY_SUFFIX = ("Air", "Bank", "Labs", "Motors", "Media", "Foods", "Steel")
 BROWSERS = ("Firefox", "Chrome", "Internet Explorer", "Safari", "Opera")
 LANGUAGES = ("en", "de", "es", "fr", "zh", "pt", "ru", "ar")
@@ -516,14 +499,14 @@ def _generate(scale: int, seed: int,
     def pick_tags(k: int) -> list[int]:
         return _distinct(rng.choices(range(n_tags), cum_weights=tag_cw, k=k))
 
-    study_orgs: list[str] = []
+    universities: list[str] = []
     for k in range(max(3, scale // 50)):
         c = rng.randrange(len(cities))
         i, u = new_uid("Organisation")
         node(u, "University",
              {"name": f"University_{k + 1}_of_{city_names[c]}", "id": i}, 0)
         edge(u, cities[c], "IS_LOCATED_IN", 0)
-        study_orgs.append(u)
+        universities.append(u)
     companies: list[str] = []
     for k in range(max(5, scale // 25)):
         c = rng.randrange(len(countries))
@@ -579,7 +562,7 @@ def _generate(scale: int, seed: int,
         for t in interests:
             edge(u, tags[t], "HAS_INTEREST", ct)
         if rng.random() < 0.7:
-            edge(u, study_orgs[rng.randrange(len(study_orgs))], "STUDY_AT",
+            edge(u, universities[rng.randrange(len(universities))], "STUDY_AT",
                  ct, {"classYear": rng.randint(2000, 2012)})
         for c in _distinct(rng.choices(range(len(companies)),
                                        k=rng.choice((0, 1, 1, 2)))):

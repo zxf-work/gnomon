@@ -111,6 +111,29 @@ call, the operator's cost function prices that kernel's own work instead
 (`gnomon.temporal.guardrails.cost_routes`), so admission refuses what would
 be slow on the route the call actually takes.
 
+For `snapshot_subgraph`, `diff_snapshots`, `resolve_entities`,
+`neighborhood_evolution` and `co_active` on the native engine, the estimate
+is the lower of the whole-store price and one from what the call can touch:
+
+* the rows left after zone-map pruning: the manifest records each segment's
+  least `vt_s`, so a read at instant `t` can touch only the rows of the
+  segments that start at or before `t`, plus the rows no segment holds yet
+  (`guardrails.cost_zones`, `zone_rows`);
+* for a seeded snapshot, the seeds, the hops and the store's largest
+  out-degree: each level reads at most twice the largest out-degree per
+  frontier vertex, and all levels together read each version at most twice
+  (`guardrails.expansion_rows`);
+* for `resolve_entities`, the node versions and the identity dictionary
+  only; for the point-anchored reads of `neighborhood_evolution` and
+  `co_active`, the incident versions of the largest out-degree, bounded by
+  the zone rows.
+
+Each row count is converted to time at a fixed per-operator rate, scaled by
+`GNOMON_TIME_COEFF_SCALE`. Without the zone summary (another backend, or a
+call with no adapter) or without the engine route, the whole-store price is
+used unchanged, so this estimate never refuses a call the whole-store price
+admits.
+
 ## Diagnostics and testing
 
 | variable | meaning |
@@ -133,3 +156,25 @@ be slow on the route the call actually takes.
 | `GNOMON_METRICS_PATH` | write group-commit metrics as JSON lines to this file |
 | `GNOMON_COMMIT`, `GNOMON_COMMIT_DIRTY` | the commit the benchmark receipts record, for machines without `git` |
 | `GNOMON_MEASUREMENT_HOST` | the host name the benchmark receipts compare against |
+
+## Switches of the evaluated engine
+
+The engine this repository ships reads the following switches as well. Each
+one is on by default; setting it to `0` (or to the value named) runs the
+general path the default stands in for, with the same answers. They exist
+for the same reason as the design switches above: to measure what each fast
+path is worth and to fall back if one misbehaves.
+
+| switch | what the default does |
+|---|---|
+| `GNOMON_STORE_WARM_OPEN` | a read-only handle builds at open, in parallel and from one decode per segment, the per-segment structures the first queries would otherwise build one at a time (segment cache, statistics, label counts, adjacency); `GNOMON_STORE_WARM_THREADS` sets its width, `GNOMON_STORE_WARM_POSTINGS` (`cached`, `uncached`) also builds the identity postings |
+| `GNOMON_PLAN_PATH` | every operator call runs as a single-leaf plan of the plan IR (`gnomon/plan`): the leaf calls the same kernel with the same arguments, and the envelope carries the plan's metadata; `off` calls the kernel directly, with the same payload and digest |
+| `GNOMON_CALL_FAST`, `GNOMON_CALL_MEMO`, `GNOMON_ADMIT_MEMO` | the fixed per-call work of `call_operator` (argument validation, admission, envelope metadata) is memoized per store generation |
+| `GNOMON_ARGS_KEY_RUST`, `GNOMON_CANON_RUST`, `GNOMON_CANON_ONEPASS`, `GNOMON_DIGEST_RUST`, `GNOMON_JSON_COPY_RUST` | the envelope's argument key, float canonicalisation, canonical JSON, result digest and deep copies run in the engine instead of in Python |
+| `GNOMON_IDENTITY_LOG_COLS`, `GNOMON_NODES_VALID_BATCH` | an identity's belief log and node validity are read from the engine's columns in one call, without building a version object per row |
+| `GNOMON_NBR_EVOLUTION_KERNEL`, `GNOMON_NBR_EVOLUTION_ONE_READ` | neighbourhood evolution runs in the engine, over one read of the window |
+| `GNOMON_SNAPSHOT_PAGE`, `GNOMON_SNAPSHOT_ONECALL` | a snapshot's frontier is built as a page in the engine, its seed expansion and page in one call |
+| `GNOMON_PATHS_PAGE_MEMO`, `GNOMON_PATHS_TR_COLUMNS` | later pages of a paths answer are served from the first page's work; time-respecting paths read columns directly |
+| `GNOMON_NEIGHBORS_SPLIT`, `GNOMON_NEIGHBORS_SEEK` | a frontier of hubs is split across the worker pool; `GNOMON_NEIGHBORS_SEEK=bisect` selects the earlier way of locating each vertex's slot in a sparse adjacency (a search over the whole range) |
+| `GNOMON_TT_E_COLUMN_EVICT` | the effective-`tt_e` column cache keeps the columns a scan is about to reuse; `lru` restores least-recently-used eviction |
+| `GNOMON_MATCH_*` (about forty) | the pattern executor's plan and kernel choices (anchoring, pre-probes, semijoins, top-k into a hop, interval fusion, version evaluation, distinct and join forms, threads); each one's comment in `gnomon/temporal/ops_match.py` or `crates/gnomon-core/src/matcher.rs` names the general path it replaces |

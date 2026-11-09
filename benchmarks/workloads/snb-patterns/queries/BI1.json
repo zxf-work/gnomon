@@ -1,0 +1,243 @@
+{
+ "row": "BI1",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "m",
+      "labels": [
+       "Post",
+       "Comment"
+      ]
+     }
+    ],
+    "steps": [],
+    "where": [
+     {
+      "cmp": "<",
+      "l": {
+       "col": "m.vt_s"
+      },
+      "r": {
+       "lit": "$datetime",
+       "tau": "ts"
+      }
+     }
+    ]
+   },
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "year",
+       "expr": {
+        "calendar": "year",
+        "arg": {
+         "col": "m.vt_s"
+        }
+       }
+      },
+      {
+       "as": "isComment",
+       "expr": {
+        "cmp": "=",
+        "l": {
+         "col": "m.label"
+        },
+        "r": {
+         "lit": "Comment"
+        }
+       }
+      },
+      {
+       "as": "lengthCategory",
+       "expr": {
+        "if": [
+         {
+          "cmp": "<",
+          "l": {
+           "tprop": [
+            "m",
+            "length"
+           ],
+           "tau": "int"
+          },
+          "r": {
+           "lit": 40
+          }
+         },
+         {
+          "lit": 0
+         },
+         {
+          "if": [
+           {
+            "cmp": "<",
+            "l": {
+             "tprop": [
+              "m",
+              "length"
+             ],
+             "tau": "int"
+            },
+            "r": {
+             "lit": 80
+            }
+           },
+           {
+            "lit": 1
+           },
+           {
+            "if": [
+             {
+              "cmp": "<",
+              "l": {
+               "tprop": [
+                "m",
+                "length"
+               ],
+               "tau": "int"
+              },
+              "r": {
+               "lit": 160
+              }
+             },
+             {
+              "lit": 2
+             },
+             {
+              "lit": 3
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "allMessages",
+       "fn": "count"
+      },
+      {
+       "as": "messageCount",
+       "fn": "count",
+       "where": {
+        "not": {
+         "is_null": {
+          "tprop": [
+           "m",
+           "content"
+          ],
+          "tau": "str"
+         }
+        }
+       }
+      },
+      {
+       "as": "averageMessageLength",
+       "fn": "mean",
+       "of": {
+        "tprop": [
+         "m",
+         "length"
+        ],
+        "tau": "int"
+       },
+       "where": {
+        "not": {
+         "is_null": {
+          "tprop": [
+           "m",
+           "content"
+          ],
+          "tau": "str"
+         }
+        }
+       }
+      },
+      {
+       "as": "sumMessageLength",
+       "fn": "sum",
+       "of": {
+        "tprop": [
+         "m",
+         "length"
+        ],
+        "tau": "int"
+       },
+       "where": {
+        "not": {
+         "is_null": {
+          "tprop": [
+           "m",
+           "content"
+          ],
+          "tau": "str"
+         }
+        }
+       }
+      }
+     ],
+     "project": [
+      {
+       "as": "percentageOfMessages",
+       "expr": {
+        "arith": "/",
+        "l": {
+         "col": "messageCount"
+        },
+        "r": {
+         "total": "allMessages"
+        }
+       }
+      }
+     ],
+     "having": {
+      "cmp": ">",
+      "l": {
+       "col": "messageCount"
+      },
+      "r": {
+       "lit": 0
+      }
+     }
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "year"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "col": "isComment"
+      },
+      "dir": "asc"
+     },
+     {
+      "expr": {
+       "col": "lengthCategory"
+      },
+      "dir": "asc"
+     }
+    ]
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "datetime": {
+     "date": "2012-01-01"
+    }
+   }
+  }
+ ]
+}

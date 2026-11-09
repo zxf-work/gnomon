@@ -49,9 +49,17 @@ unfinished, stated plainly:
   `neighborhood_evolution`, `diff_belief` and `state_series` price the work
   that kernel does instead (the adapter reports its routes,
   `guardrails.cost_routes`), and `paths` prices its own search rather than a
-  whole-store scan; the portable routes and the other operators keep the
-  linear estimate. Callers can pass `skip_cost_check=True` (the
-  benchmark harness exposes `--skip-cost-check`).
+  whole-store scan; `snapshot_subgraph`, `diff_snapshots` and
+  `resolve_entities` price the rows left after zone-map pruning and, for a
+  seeded snapshot, the seeds, hops and largest out-degree
+  ([configuration](configuration.md#query-admission)); the portable routes
+  and the other operators keep the linear estimate. Callers can pass
+  `skip_cost_check=True` (the benchmark harness exposes `--skip-cost-check`).
+* **Multi-hop snapshots are priced for the largest out-degree.** The seeded
+  snapshot estimate assumes every frontier vertex has the store's largest
+  out-degree, so on a skewed graph a multi-hop snapshot from seeds that are
+  not hubs can be refused although its real cost is small. Pass
+  `skip_cost_check=True` for such a call, or raise the ceiling.
 * **Some windowed reads still visit more than their window.** The cut below
   a window’s start is a prefix bound: it stops at the first block holding a
   closed version still valid at the window’s start, so one long-lived

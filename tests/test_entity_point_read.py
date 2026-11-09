@@ -181,4 +181,4 @@ def test_t_valid_and_window_are_exclusive_and_engine_level():
         assert k not in spec.args_schema["properties"]
         assert "default" not in spec.engine_schema["properties"][k]
     with pytest.raises(SchemaError):
-        validate_args("entity_history", {"uid": "u", "t_valid": 1}, base_schema=True)
+        validate_args("entity_history", {"uid": "u", "t_valid": 1}, agent=True)

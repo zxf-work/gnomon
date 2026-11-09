@@ -3,7 +3,8 @@
 Both routes run one compiled plan, so any difference is an execution
 difference. Held on the random bi-temporal stores and arguments of
 `test_match_oracle.py` (every scope and belief mode, sub-patterns, closures,
-`distinct_on`, two stages, paging) and on the fixed corpus there.
+`distinct_on`, two stages, paging), on the fixed corpus there, and on the
+shaped SNB, FinBench and TPC-BiH stores with the stage-one benchmark corpus.
 Every call must be answered by the engine (none may fall back), except the
 two the executor hands back by design: an open write batch and a row the
 evaluator refuses.
@@ -11,6 +12,8 @@ evaluator refuses.
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
 import random
 import sys
@@ -26,7 +29,7 @@ from gnomon.temporal.ops_match import compile_match, run, validate
 
 from . import test_match_oracle as T
 
-pytestmark = pytest.mark.skipif(os.environ.get("GNOMON_TEST_BACKEND") != "native",
+pytestmark = pytest.mark.skipif(os.environ.get("GNOMON_TEST_BACKEND", "native") != "native",
                                 reason="the engine executor is the native backend's")
 
 REPO = Path(__file__).resolve().parents[1]
@@ -97,6 +100,42 @@ def test_inside_an_open_batch_the_reference_answers(social):
         assert {r["f"] for r in got["rows"]} == {"p1", "p2", "p4"}
     finally:
         a.rollback()
+
+
+def _corpus():
+    spec = importlib.util.spec_from_file_location("match_corpus", REPO / "scripts" / "match_corpus.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def shaped(tmp_path_factory):
+    import gnomon
+
+    C = _corpus()
+    out = {}
+    base = tmp_path_factory.mktemp("shaped")
+    for fam, gen in C.GENERATORS.items():
+        mod = importlib.import_module(f"gnomon.data.{gen}")
+        mod.build(base / fam, 20, seed=1, corrections_pct=10)
+        st = gnomon.open(base / fam, backend="native", read_only=True)
+        out[fam] = (st, C.Ctx(fam, st.adapter, 20))
+    yield C, out
+    for st, _ in out.values():
+        st.close()
+
+
+def test_benchmark_corpus_native_equals_reference(shaped):
+    C, stores = shaped
+    for row, (fam, calls) in C.CORPUS.items():
+        _, ctx = stores[fam]
+        for q in calls:
+            args = C.bind(q, ctx)
+            got, ref, native = native_and_reference(ctx.adapter, args)
+            assert native, (row, OM.LAST_DECLINE[0])
+            assert canonical_json(got) == canonical_json(ref), row
 
 
 def test_the_parallel_fold_equals_the_serial_one(tmp_path):

@@ -55,6 +55,16 @@ def test_dir_bytes_missing_dir_is_none_not_a_crash(tmp_path):
     assert H._dir_bytes(tmp_path / "does-not-exist") is None
 
 
+def test_external_runtime_defaults_to_docker(monkeypatch):
+    monkeypatch.delenv("GNOMON_EXTERNAL_RUNTIME", raising=False)
+    assert H._external_runtime() == "docker"
+
+
+def test_external_runtime_honours_env(monkeypatch):
+    monkeypatch.setenv("GNOMON_EXTERNAL_RUNTIME", "apptainer")
+    assert H._external_runtime() == "apptainer"
+
+
 @pytest.fixture(scope="module")
 def tiny_native_store(tmp_path_factory):
     import gnomon

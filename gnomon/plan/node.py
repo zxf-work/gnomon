@@ -1357,14 +1357,13 @@ class Succ(Node):
         return "the input's"
 
 
-#: The time type of a shared-instant fragment's bounds (a node's `vt_s`).
 _T_TS = NODE_COLUMNS[3].tau
 
 
 @dataclass(frozen=True, slots=True)
 class CoValidExpand(Node):
     """`CoValidExpand(input, from, into, hops, rel_type, dir, belief)`: a
-    variable-length step under one shared valid instant (the shared-instant rule).
+    variable-length step under one shared valid instant.
 
     Per input row, a breadth-first search over (node, instant set) states
     from the bound end, starting from the instants of `from_iv` (the bound
@@ -1489,7 +1488,6 @@ class CoValidJoin(Node):
 class Collapse(Node):
     """`Collapse(input, by, mins)`: one row per distinct value of the `by`
     columns (null equal to null), the first in input order, with each `mins`
-    column replaced by its least non-null value in the group. Under the shared-instant rule it
     turns the fragments of one version tuple's valid set into one binding.
     Additive: no existing plan contains it."""
 

@@ -1,0 +1,48 @@
+# AeonG (temporal graph database on Memgraph v2.3 + RocksDB history), built
+# inside its authors' own image, pinned by digest, from pinned source with the
+# three dependency patches its repository lacks (kit/aeong/, SHA256SUMS) and
+# its CMakeLists forced to a Release build (upstream line 2 forces Debug).
+# The Apptainer twin of kit/build_aeong.sh.
+#
+#   built by slurm/build_aeong.sbatch (a batch job; never on a login node)
+#
+# Needs outbound HTTPS while it builds (GitHub, and the dependency downloads
+# of AeonG's ./init); the evaluation host compute nodes have it. The server binary ends up at
+# /opt/aeong/memgraph-_Release; lib/servers_apptainer.sh starts it from there.
+Bootstrap: docker
+From: hououou/aeong@sha256:b349a77c417f18dccd59e8718e0720a1b541655a62e526c39f930b363cc7f0b8
+
+%files
+    aeong/antlr4.patch /opt/aeong-src/antlr4.patch
+    aeong/librdtsc.patch /opt/aeong-src/librdtsc.patch
+    aeong/rocksdb.patch /opt/aeong-src/rocksdb.patch
+    aeong/SHA256SUMS /opt/aeong-src/SHA256SUMS
+
+%post
+    set -ex
+    cd /opt/aeong-src
+    sha256sum -c SHA256SUMS          # the image's coreutils has no --ignore-missing
+    export HOME=/root      # the image keeps PyYAML and quicklisp under root's home (as in Docker)
+    python3 -c "import yaml" || pip3 install PyYAML
+    . /opt/toolchain-v4/activate
+    git clone https://github.com/hououou/AeonG.git
+    cd AeonG
+    git checkout -q b780a0c33ae1c156bf4f1a2b2137dd8d16041d75
+    git log -1 --format=%H > /opt/aeong-commit.txt
+    cp /opt/aeong-src/antlr4.patch /opt/aeong-src/librdtsc.patch /opt/aeong-src/rocksdb.patch libs/
+    sed -i '2s/SET(CMAKE_BUILD_TYPE "Debug")/SET(CMAKE_BUILD_TYPE "Release")/' CMakeLists.txt
+    sed -n 2p CMakeLists.txt
+    ./init
+    mkdir -p build-release && cd build-release
+    cmake -DCMAKE_BUILD_TYPE=Release ..
+    make -j16 memgraph          # the build job's 16 cores
+    mkdir -p /opt/aeong
+    cp memgraph-_Release /opt/aeong/
+    cd / && rm -rf /opt/aeong-src/AeonG/build-release
+
+%runscript
+    exec /opt/aeong/memgraph-_Release "$@"
+
+%labels
+    org.gnomon.extcmp.aeong-commit b780a0c33ae1c156bf4f1a2b2137dd8d16041d75
+    org.gnomon.extcmp.base hououou/aeong@sha256:b349a77c417f18dccd59e8718e0720a1b541655a62e526c39f930b363cc7f0b8

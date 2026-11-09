@@ -1,0 +1,309 @@
+{
+ "row": "BI6",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "t",
+      "labels": [
+       "Tag"
+      ]
+     },
+     {
+      "var": "m1",
+      "labels": [
+       "Post",
+       "Comment"
+      ]
+     },
+     {
+      "var": "p1",
+      "labels": [
+       "Person"
+      ]
+     }
+    ],
+    "steps": [
+     {
+      "from": "m1",
+      "to": "t",
+      "rel_type": "HAS_TAG",
+      "dir": "out"
+     },
+     {
+      "from": "m1",
+      "to": "p1",
+      "rel_type": "HAS_CREATOR",
+      "dir": "out"
+     }
+    ],
+    "where": [
+     {
+      "cmp": "=",
+      "l": {
+       "tprop": [
+        "t",
+        "name"
+       ],
+       "tau": "str"
+      },
+      "r": {
+       "lit": "$tag"
+      }
+     }
+    ],
+    "lookups": [
+     {
+      "as": "auth",
+      "on": {
+       "col": "p1.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "t",
+          "labels": [
+           "Tag"
+          ]
+         },
+         {
+          "var": "m1",
+          "labels": [
+           "Post",
+           "Comment"
+          ]
+         },
+         {
+          "var": "pp",
+          "labels": [
+           "Person"
+          ]
+         },
+         {
+          "var": "p2",
+          "labels": [
+           "Person"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "m1",
+          "to": "t",
+          "rel_type": "HAS_TAG",
+          "dir": "out"
+         },
+         {
+          "from": "m1",
+          "to": "pp",
+          "rel_type": "HAS_CREATOR",
+          "dir": "out"
+         },
+         {
+          "from": "p2",
+          "to": "m1",
+          "rel_type": "LIKES",
+          "dir": "out"
+         }
+        ],
+        "where": [
+         {
+          "cmp": "=",
+          "l": {
+           "tprop": [
+            "t",
+            "name"
+           ],
+           "tau": "str"
+          },
+          "r": {
+           "lit": "$tag"
+          }
+         }
+        ],
+        "lookups": [
+         {
+          "as": "pop",
+          "on": {
+           "col": "p2.uid"
+          },
+          "key": "p",
+          "match": {
+           "pattern": {
+            "nodes": [
+             {
+              "var": "q",
+              "labels": [
+               "Person"
+              ]
+             },
+             {
+              "var": "m2",
+              "labels": [
+               "Post",
+               "Comment"
+              ]
+             },
+             {
+              "var": "p3",
+              "labels": [
+               "Person"
+              ]
+             }
+            ],
+            "steps": [
+             {
+              "from": "m2",
+              "to": "q",
+              "rel_type": "HAS_CREATOR",
+              "dir": "out"
+             },
+             {
+              "from": "p3",
+              "to": "m2",
+              "rel_type": "LIKES",
+              "dir": "out"
+             }
+            ]
+           },
+           "group": {
+            "by": [
+             {
+              "as": "p",
+              "expr": {
+               "col": "q.uid"
+              }
+             }
+            ],
+            "aggs": [
+             {
+              "as": "n",
+              "fn": "count"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "pp.uid"
+          }
+         },
+         {
+          "as": "q",
+          "expr": {
+           "col": "p2.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "max",
+          "of": {
+           "coalesce": [
+            {
+             "col": "pop.n"
+            },
+            {
+             "lit": 0
+            }
+           ]
+          }
+         }
+        ],
+        "then": {
+         "by": [
+          {
+           "as": "p",
+           "expr": {
+            "col": "p"
+           }
+          }
+         ],
+         "aggs": [
+          {
+           "as": "s",
+           "fn": "sum",
+           "of": {
+            "col": "n"
+           }
+          }
+         ]
+        }
+       }
+      }
+     }
+    ]
+   },
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "personId",
+       "expr": {
+        "col": "p1.uid"
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "authorityScore",
+       "fn": "max",
+       "of": {
+        "coalesce": [
+         {
+          "col": "auth.s"
+         },
+         {
+          "lit": 0
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "authorityScore"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "personId"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     }
+    ],
+    "limit": 100
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "tag": {
+     "pick": [
+      "tags",
+      0
+     ]
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="290 50 952 952" width="32" height="32" role="img" aria-labelledby="gns-t" color="#111111">
+  <title id="gns-t">Gnomon</title>
+  <!-- Small-size version of the icon, for 16 to 32 px: same silhouette, a thicker rim,
+       four nodes instead of eight, solid nodes, thicker edges, a wider blade face. currentColor throughout. -->
+  <defs>
+    <mask id="gns-m-blade" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+      <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+      <path d="M1040,110 L660,600 L730,650 L780,640 L905,600 Z" fill="#000" stroke="#000" stroke-width="56" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <g mask="url(#gns-m-blade)" fill="currentColor">
+    <path fill-rule="evenodd"
+      d="M303,620 A462,267 0 0 1 1227,620 L1227,665 A462,267 0 0 1 303,665 Z
+         M365,610 a400,200 0 1 0 800,0 a400,200 0 1 0 -800,0 Z"/>
+    <g stroke="currentColor" stroke-width="44" stroke-linecap="round" fill="none">
+      <line x1="714" y1="640" x2="440" y2="565"/>
+      <line x1="714" y1="640" x2="1100" y2="600"/>
+      <line x1="714" y1="640" x2="733" y2="785"/>
+      <line x1="440" y1="565" x2="733" y2="785"/>
+      <line x1="733" y1="785" x2="1100" y2="600"/>
+    </g>
+    <ellipse cx="440" cy="565" rx="54" ry="38"/>
+    <ellipse cx="1100" cy="600" rx="54" ry="38"/>
+    <ellipse cx="733" cy="785" rx="54" ry="38"/>
+    <ellipse cx="714" cy="640" rx="54" ry="38"/>
+  </g>
+  <path fill="currentColor" fill-rule="evenodd"
+    d="M1040,110 L660,600 L730,650 L780,640 L905,600 Z
+       M965,225 L688,598 L740,628 Z"/>
+</svg>

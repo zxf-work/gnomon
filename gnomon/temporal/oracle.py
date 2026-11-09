@@ -2092,10 +2092,8 @@ class _MatchOracle:
             return any(_MatchOracle._is_json(x) for x in e["if"][1:])
         return False
 
-    # -- the shared-instant rule: one shared valid instant -------
     def _shared_instant(self, pat: dict[str, Any], axes: list[str]) -> bool:
-        """shared-instant with a walk, a multi-hop step or a sub-pattern: evaluated here
-        by instants. Fixed single hops keep the version-join route above."""
+        """        by instants. Fixed single hops keep the version-join route above."""
         scope = self.args["scope"]
         vt = scope["vt"]
         if "transaction" in axes:

@@ -1,0 +1,622 @@
+{
+ "row": "IC7",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "p",
+      "labels": [
+       "Person"
+      ],
+      "uids": [
+       "$person"
+      ]
+     },
+     {
+      "var": "m",
+      "labels": [
+       "Post",
+       "Comment"
+      ]
+     },
+     {
+      "var": "liker",
+      "labels": [
+       "Person"
+      ],
+      "uids": "$likers"
+     }
+    ],
+    "steps": [
+     {
+      "from": "m",
+      "to": "p",
+      "rel_type": "HAS_CREATOR",
+      "dir": "out"
+     },
+     {
+      "from": "liker",
+      "to": "m",
+      "rel_type": "LIKES",
+      "dir": "out",
+      "var": "l"
+     }
+    ],
+    "where": [
+     {
+      "cmp": "=",
+      "l": {
+       "col": "l.vt_s"
+      },
+      "r": {
+       "col": "lt.t"
+      }
+     },
+     {
+      "cmp": "=",
+      "l": {
+       "cast": {
+        "col": "m.uid"
+       },
+       "to": "int"
+      },
+      "r": {
+       "col": "lm.mid"
+      }
+     }
+    ],
+    "optional": [
+     {
+      "steps": [
+       {
+        "from": "liker",
+        "to": "p",
+        "rel_type": "KNOWS",
+        "dir": "both",
+        "var": "kk"
+       }
+      ]
+     }
+    ],
+    "lookups": [
+     {
+      "as": "lt",
+      "on": {
+       "col": "liker.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "q2",
+          "labels": [
+           "Person"
+          ],
+          "uids": [
+           "$person"
+          ]
+         },
+         {
+          "var": "m2",
+          "labels": [
+           "Post",
+           "Comment"
+          ]
+         },
+         {
+          "var": "k2",
+          "labels": [
+           "Person"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "m2",
+          "to": "q2",
+          "rel_type": "HAS_CREATOR",
+          "dir": "out"
+         },
+         {
+          "from": "k2",
+          "to": "m2",
+          "rel_type": "LIKES",
+          "dir": "out",
+          "var": "l2"
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "k2.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "t",
+          "fn": "max",
+          "of": {
+           "col": "l2.vt_s"
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "as": "lm",
+      "on": {
+       "col": "liker.uid"
+      },
+      "key": "p",
+      "match": {
+       "pattern": {
+        "nodes": [
+         {
+          "var": "q3",
+          "labels": [
+           "Person"
+          ],
+          "uids": [
+           "$person"
+          ]
+         },
+         {
+          "var": "m3",
+          "labels": [
+           "Post",
+           "Comment"
+          ]
+         },
+         {
+          "var": "k3",
+          "labels": [
+           "Person"
+          ]
+         }
+        ],
+        "steps": [
+         {
+          "from": "m3",
+          "to": "q3",
+          "rel_type": "HAS_CREATOR",
+          "dir": "out"
+         },
+         {
+          "from": "k3",
+          "to": "m3",
+          "rel_type": "LIKES",
+          "dir": "out",
+          "var": "l3"
+         }
+        ],
+        "where": [
+         {
+          "cmp": "=",
+          "l": {
+           "col": "l3.vt_s"
+          },
+          "r": {
+           "col": "lt3.t"
+          }
+         }
+        ],
+        "lookups": [
+         {
+          "as": "lt3",
+          "on": {
+           "col": "k3.uid"
+          },
+          "key": "p",
+          "match": {
+           "pattern": {
+            "nodes": [
+             {
+              "var": "q2",
+              "labels": [
+               "Person"
+              ],
+              "uids": [
+               "$person"
+              ]
+             },
+             {
+              "var": "m2",
+              "labels": [
+               "Post",
+               "Comment"
+              ]
+             },
+             {
+              "var": "k2",
+              "labels": [
+               "Person"
+              ]
+             }
+            ],
+            "steps": [
+             {
+              "from": "m2",
+              "to": "q2",
+              "rel_type": "HAS_CREATOR",
+              "dir": "out"
+             },
+             {
+              "from": "k2",
+              "to": "m2",
+              "rel_type": "LIKES",
+              "dir": "out",
+              "var": "l2"
+             }
+            ]
+           },
+           "group": {
+            "by": [
+             {
+              "as": "p",
+              "expr": {
+               "col": "k2.uid"
+              }
+             }
+            ],
+            "aggs": [
+             {
+              "as": "t",
+              "fn": "max",
+              "of": {
+               "col": "l2.vt_s"
+              }
+             }
+            ]
+           }
+          }
+         }
+        ]
+       },
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "k3.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "mid",
+          "fn": "min",
+          "of": {
+           "cast": {
+            "col": "m3.uid"
+           },
+           "to": "int"
+          }
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "return": {
+    "rows": [
+     {
+      "as": "personId",
+      "expr": {
+       "col": "liker.uid"
+      }
+     },
+     {
+      "as": "firstName",
+      "expr": {
+       "tprop": [
+        "liker",
+        "firstName"
+       ],
+       "tau": "str"
+      }
+     },
+     {
+      "as": "lastName",
+      "expr": {
+       "tprop": [
+        "liker",
+        "lastName"
+       ],
+       "tau": "str"
+      }
+     },
+     {
+      "as": "likeCreationDate",
+      "expr": {
+       "col": "l.vt_s"
+      }
+     },
+     {
+      "as": "messageId",
+      "expr": {
+       "col": "m.uid"
+      }
+     },
+     {
+      "as": "minutesLatency",
+      "expr": {
+       "arith": "floor_div",
+       "l": {
+        "arith": "-",
+        "l": {
+         "col": "l.vt_s"
+        },
+        "r": {
+         "col": "m.vt_s"
+        }
+       },
+       "r": {
+        "lit": 60000000
+       }
+      }
+     },
+     {
+      "as": "isNew",
+      "expr": {
+       "is_null": {
+        "col": "kk.eid"
+       }
+      }
+     }
+    ],
+    "order_by": [
+     {
+      "expr": {
+       "col": "likeCreationDate"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "cast": {
+        "col": "personId"
+       },
+       "to": "int"
+      },
+      "dir": "asc"
+     }
+    ]
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "person": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "p",
+         "labels": [
+          "Person"
+         ]
+        },
+        {
+         "var": "f",
+         "labels": [
+          "Person"
+         ]
+        }
+       ],
+       "steps": [
+        {
+         "from": "p",
+         "to": "f",
+         "rel_type": "KNOWS",
+         "dir": "both"
+        }
+       ]
+      },
+      "return": {
+       "group": {
+        "by": [
+         {
+          "as": "p",
+          "expr": {
+           "col": "p.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "n",
+          "fn": "count"
+         }
+        ]
+       },
+       "order_by": [
+        {
+         "expr": {
+          "col": "n"
+         },
+         "dir": "desc"
+        }
+       ],
+       "limit": 1
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {}
+     },
+     "col": "p",
+     "i": 0
+    },
+    "likers": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "q",
+         "labels": [
+          "Person"
+         ],
+         "uids": [
+          "$person"
+         ]
+        },
+        {
+         "var": "m",
+         "labels": [
+          "Post",
+          "Comment"
+         ]
+        },
+        {
+         "var": "k",
+         "labels": [
+          "Person"
+         ]
+        }
+       ],
+       "steps": [
+        {
+         "from": "m",
+         "to": "q",
+         "rel_type": "HAS_CREATOR",
+         "dir": "out"
+        },
+        {
+         "from": "k",
+         "to": "m",
+         "rel_type": "LIKES",
+         "dir": "out",
+         "var": "l"
+        }
+       ]
+      },
+      "return": {
+       "group": {
+        "by": [
+         {
+          "as": "liker",
+          "expr": {
+           "col": "k.uid"
+          }
+         }
+        ],
+        "aggs": [
+         {
+          "as": "t",
+          "fn": "max",
+          "of": {
+           "col": "l.vt_s"
+          }
+         }
+        ]
+       },
+       "order_by": [
+        {
+         "expr": {
+          "col": "t"
+         },
+         "dir": "desc"
+        },
+        {
+         "expr": {
+          "cast": {
+           "col": "liker"
+          },
+          "to": "int"
+         },
+         "dir": "asc"
+        }
+       ],
+       "limit": 20
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {
+       "person": {
+        "probe": {
+         "pattern": {
+          "nodes": [
+           {
+            "var": "p",
+            "labels": [
+             "Person"
+            ]
+           },
+           {
+            "var": "f",
+            "labels": [
+             "Person"
+            ]
+           }
+          ],
+          "steps": [
+           {
+            "from": "p",
+            "to": "f",
+            "rel_type": "KNOWS",
+            "dir": "both"
+           }
+          ]
+         },
+         "return": {
+          "group": {
+           "by": [
+            {
+             "as": "p",
+             "expr": {
+              "col": "p.uid"
+             }
+            }
+           ],
+           "aggs": [
+            {
+             "as": "n",
+             "fn": "count"
+            }
+           ]
+          },
+          "order_by": [
+           {
+            "expr": {
+             "col": "n"
+            },
+            "dir": "desc"
+           }
+          ],
+          "limit": 1
+         },
+         "scope": {
+          "vt": {
+           "instant": "$now"
+          }
+         },
+         "params": {}
+        },
+        "col": "p",
+        "i": 0
+       }
+      }
+     },
+     "col": "liker",
+     "all": true
+    }
+   }
+  }
+ ]
+}

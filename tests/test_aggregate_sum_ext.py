@@ -3,7 +3,8 @@
 Two additions, one contract.
 
 * **`sum`** over `vt_s`, `duration` or a numeric property, registered for
-  engine-level callers only: the base schema is unchanged. It is exact: an integer total over integers, and
+  engine-level callers only: the base-schema schema, and so every tool
+  surface, is unchanged. It is exact: an integer total over integers, and
   `math.fsum`'s correctly rounded total once a float takes part (`match`'s
   `sum_exact` rule, `props.sum_exact`).
 * **`valid_at`**, also engine-level: keep only the events whose version is
@@ -212,6 +213,29 @@ def calls(draw) -> dict[str, Any]:
 
 # ---- answer identity ------------------------------------------------------- #
 
+def _tie_rep(got: Any, want: Any) -> Any:
+    """`got` with each min/max cell that ties `want`'s across int and float
+    (int 1 against float 1.0, the EXOTIC rivals) replaced by `want`'s value.
+
+    A min or max over a window holding both 1 and 1.0 has two equal minima;
+    which one the fold returns is the order it meets them in. The engine fold,
+    oracle check accepts both. Only min_/max_ columns, only an int/float pair
+    of equal value (bools excluded); every other cell is compared exactly."""
+    if isinstance(got, dict) and isinstance(want, dict):
+        out = {}
+        for k, v in got.items():
+            w = want.get(k)
+            if (isinstance(k, str) and k.startswith(("min_", "max_"))
+                    and type(v) in (int, float) and type(w) in (int, float)
+                    and type(v) is not type(w) and v == w):
+                out[k] = w
+            else:
+                out[k] = _tie_rep(v, w)
+        return out
+    if isinstance(got, list) and isinstance(want, list) and len(got) == len(want):
+        return [_tie_rep(g, w) for g, w in zip(got, want)]
+    return got
+
 @SETTINGS
 @given(args=calls(), seed=st.integers(0, 3), exotic=st.booleans())
 def test_engine_fold_equals_portable_duckdb_and_oracle(args, seed, exotic):
@@ -233,7 +257,7 @@ def test_engine_fold_equals_portable_duckdb_and_oracle(args, seed, exotic):
             # rows agree, the counts are each side's own definition
             got.pop("prop_coercion", None)
             want.pop("prop_coercion", None)
-        assert canonical_json(got) == canonical_json(want), \
+        assert canonical_json(_tie_rep(got, want)) == canonical_json(want), \
             f"engine != oracle for {args}"
 
 
@@ -299,28 +323,28 @@ SUM_CALL = {"group_by": [], "window": {"t_a": 0, "t_b": 10},
             "aggregates": [{"agg": "sum", "of": "vt_s"}]}
 
 
-def test_sum_is_not_in_the_base_schema():
+def test_sum_is_not_in_the_agent_facing_schema():
     spec = REGISTRY["aggregate_events"]
-    base_enum = spec.args_schema["properties"]["aggregates"]["items"][
+    agent_enum = spec.args_schema["properties"]["aggregates"]["items"][
         "properties"]["agg"]["enum"]
     engine_enum = spec.engine_schema["properties"]["aggregates"]["items"][
         "properties"]["agg"]["enum"]
-    assert "sum" not in base_enum
-    assert engine_enum == [*base_enum[:5], "sum", *base_enum[5:]]
+    assert "sum" not in agent_enum
+    assert engine_enum == [*agent_enum[:5], "sum", *agent_enum[5:]]
 
 
-def test_valid_at_is_not_in_the_base_schema():
+def test_valid_at_is_not_in_the_agent_facing_schema():
     spec = REGISTRY["aggregate_events"]
     assert "valid_at" not in spec.args_schema["properties"]
     assert "default" not in spec.engine_schema["properties"]["valid_at"]
     with pytest.raises(SchemaError):
         validate_args("aggregate_events", {**SUM_CALL, "aggregates": [
-            {"agg": "count"}], "valid_at": 3}, base_schema=True)
+            {"agg": "count"}], "valid_at": 3}, agent=True)
 
 
-def test_base_schema_callers_are_refused_sum_and_engine_callers_are_not():
+def test_agent_callers_are_refused_sum_and_engine_callers_are_not():
     with pytest.raises(SchemaError):
-        validate_args("aggregate_events", dict(SUM_CALL), base_schema=True)
+        validate_args("aggregate_events", dict(SUM_CALL), agent=True)
     assert validate_args("aggregate_events", dict(SUM_CALL))["aggregates"][0][
         "agg"] == "sum"
 

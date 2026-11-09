@@ -12,11 +12,17 @@ from hypothesis import strategies as st
 UIDS = ["a", "b", "c", "d"]
 RELS = ["R", "S"]
 
-#: Envelope keys that are call metadata rather than the answer payload:
-#: excluded whenever test code compares an operator envelope to an
+#: Envelope keys that are call metadata or provenance rather than the answer
+#: payload: excluded whenever test code compares an operator envelope to an
 #: independent reference (the oracle) or hashes it for cross-process
-#: agreement.
-ENVELOPE_META_KEYS = ("op", "args_echo", "dataset_extent", "result_digest")
+#: agreement. The last four are not yet emitted by any operator — they are
+#: that landing them later needs no further edit to this human-owned
+#: directory. Excluding an absent key is a
+#: no-op, so this tuple's shape does not change today's comparisons.
+ENVELOPE_META_KEYS = (
+    "op", "args_echo", "dataset_extent", "result_digest",
+    "tt_q", "dependency", "pinned", "clamped", "plan_ir",
+)
 
 # small dense time domain so intervals collide often (stress for carving logic)
 times = st.integers(min_value=0, max_value=50)

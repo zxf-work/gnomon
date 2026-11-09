@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use Gnomon, please cite it as below."
+title: "Gnomon"
+type: software
+authors:
+  - family-names: Zhang
+    given-names: Xiaofei
+    affiliation: "University of Memphis"
+repository-code: "https://github.com/zxf-work/gnomon"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-11-09

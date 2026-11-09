@@ -116,6 +116,42 @@ impl DirIndex {
         &self.row_perm[a..b]
     }
 
+    /// [`DirIndex::slice`] for a caller that looks up ascending vertices one
+    /// after another: a sparse direction searches forward from `hint`,
+    /// the position the previous lookup left, by doubling steps, instead of
+    /// over the whole active list. A vertex below the hint's entry falls back
+    /// to the whole-list search. Either way the slot, and so the slice, is
+    /// the one [`DirIndex::slice`] finds: `active` is sorted and distinct.
+    #[inline]
+    pub fn slice_from(&self, u: u32, hint: &mut usize) -> &[u32] {
+        if self.dense {
+            return self.slice(u);
+        }
+        let a = &self.active;
+        let n = a.len();
+        let mut lo = (*hint).min(n);
+        if lo > 0 && a[lo - 1] >= u {
+            lo = 0;
+        }
+        // a[lo - 1] < u (or lo == 0); find the first index i >= lo with
+        // a[i] >= u by doubling, then bisecting the last step
+        let mut step = 1usize;
+        let mut hi = lo;
+        while hi < n && a[hi] < u {
+            lo = hi + 1;
+            hi = lo + step;
+            step <<= 1;
+        }
+        let hi = hi.min(n);
+        let i = lo + a[lo..hi].partition_point(|&x| x < u);
+        *hint = i;
+        if i >= n || a[i] != u {
+            return &[];
+        }
+        let (s, e) = (self.offsets[i] as usize, self.offsets[i + 1] as usize);
+        &self.row_perm[s..e]
+    }
+
     /// Active vertices: `m` sparse, the id-space width dense.
     pub fn m(&self) -> u32 {
         if self.dense {
@@ -606,6 +642,46 @@ mod tests {
         assert_eq!(t.dir(Direction::In).slice(1), &[0, 3, 4]);
         assert_eq!(t.dir(Direction::In).slice(3), &[1, 2, 6]);
         assert_eq!(t.dir(Direction::In).slice(9), &[5]);
+    }
+
+    /// The forward search from a carried hint finds the slice the
+    /// whole-list search finds, for ascending, descending, repeated and
+    /// scattered lookups, on a sparse and a dense direction.
+    #[test]
+    fn a_lookup_from_a_hint_is_the_whole_list_lookup() {
+        // sparse: 300 active ids spread over a 3M-id space, uneven degrees
+        let mut src = Vec::new();
+        let mut dst = Vec::new();
+        for i in 0..300u32 {
+            for k in 0..(i % 5 + 1) {
+                src.push(i * 9_973 + 11);
+                dst.push((i * 7 + k) % 40);
+            }
+        }
+        let t = SegmentTcsr::build(3, &src, &dst, "s46").expect("builds");
+        assert!(!t.dir(Direction::Out).is_dense());
+        let mut x = 12_345u64;
+        let mut scattered = Vec::new();
+        for _ in 0..2_000 {
+            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let pick = (x >> 33) as u32;
+            // half of them hit an active id, half fall between or outside
+            scattered.push(if pick.is_multiple_of(2) { (pick % 300) * 9_973 + 11 } else { pick % 3_100_000 });
+        }
+        let mut ascending = scattered.clone();
+        ascending.sort_unstable();
+        let mut descending = ascending.clone();
+        descending.reverse();
+        let edges = vec![0, 10, 11, 12, 2_990_000, 3_000_000, u32::MAX, 11, 0, u32::MAX];
+        for d in [Direction::Out, Direction::In] {
+            let ix = t.dir(d);
+            for seq in [&scattered, &ascending, &descending, &edges] {
+                let mut hint = 0usize;
+                for &u in seq.iter() {
+                    assert_eq!(ix.slice_from(u, &mut hint), ix.slice(u), "u {u} dir {d:?}");
+                }
+            }
+        }
     }
 
     #[test]

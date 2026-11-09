@@ -48,7 +48,6 @@ import pytest
 # --- the threshold, and the control that set it --------------------------- #
 #
 # Not a guess: measured on this machine against both the pre-fix engine
-# (`scratchpad/_engine.prefix.so`, built from the commit before the staged-row
 # index landed) and the post-fix engine, using this file's own statistic and
 # op shapes (`node_ops`/`edge_ops` below), K_SMALL=500 / K_BIG=8000. Five
 # fresh-process reps each (`_batch_scaling_ratio` invoked directly, and

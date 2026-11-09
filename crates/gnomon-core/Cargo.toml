@@ -4,6 +4,7 @@ description = "Gnomon native bi-temporal storage engine core (no Python dependen
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 crc32c = "0.6.8"

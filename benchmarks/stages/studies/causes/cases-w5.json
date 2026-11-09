@@ -1,0 +1,6 @@
+[{"query":"agg.rel_bucket","instance":"541fcb4a"},{"query":"agg.rel_bucket","instance":"75891199"},
+ {"query":"paths.k","instance":"cbf8ae01"},{"query":"paths.k","instance":"d9178186"},
+ {"query":"reach.window","instance":"39e28ea6"},{"query":"reach.window","instance":"74d084ce"},
+ {"query":"b.hist","instance":"29c10880"},{"query":"b.hist","instance":"5476a3fb"},
+ {"query":"b.reach@T","instance":"eac8de06"},{"query":"b.reach@T","instance":"5969f8ed"},
+ {"query":"b.reach@now","instance":"c53d0982"},{"query":"b.reach@now","instance":"6ccadd4d"}]

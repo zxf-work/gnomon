@@ -353,7 +353,7 @@ impl NativeStore {
     /// which touch each segment exactly once, so leaving the decoded columns
     /// in the session cache would make the walk's working set the store
     /// rather than one segment — the pathology `stats_accum` already fixed
-    /// for statistics (`read.rs`, "Streaming, addendum 2").
+    /// for statistics.
     fn edge_rows_of(&self, file: &str, id: u64, closes: &CloseIndex) -> Result<Vec<EdgeVersionOut>> {
         self.edge_rows_sel(file, id, closes, None, OpenMode::Uncached)
     }
@@ -617,7 +617,18 @@ impl NativeStore {
 
     fn fold_segment_inner(&self, kind: RowKind, file: &str) -> Result<crate::store::SegmentPostings> {
         let seg = self.open_segment_uncached(file)?;
-        let keys = self.identity_keys(kind, &seg)?;
+        self.fold_segment_from(kind, file, &seg)
+    }
+
+    /// `fold_segment_inner` over a segment the caller already opened (the
+    /// warm open hands it the cached one, so the fold decodes nothing).
+    fn fold_segment_from(
+        &self,
+        kind: RowKind,
+        file: &str,
+        seg: &crate::segment::Segment<crate::segment::MmapSource>,
+    ) -> Result<crate::store::SegmentPostings> {
+        let keys = self.identity_keys(kind, seg)?;
         // A fold walks every row of this segment anyway, so the filter that
         // would have let it be skipped costs only the construction. That is
         // the third of the filter build paths: a legacy store
@@ -664,7 +675,6 @@ impl NativeStore {
     /// from millions of entities a segment repeats each one only a few times,
     /// and the memo's hashing and allocations cost more than the lookups it
     /// saved. The keys are bit-identical (`derive.rs` and
-    /// `tests/segment_byte_identity.rs` pin it).
     pub(crate) fn identity_keys(
         &self,
         kind: RowKind,
@@ -753,6 +763,36 @@ impl NativeStore {
             p.note_fold(seg_id, rows, false);
             drop(p);
             Ok(f(&mut sp))
+        }
+    }
+
+    /// The warm open's share of [`Self::with_segment_postings`]: fold one
+    /// segment's postings from the already opened `seg` and keep them on the
+    /// same terms (the postings budget decides; a resident entry is left
+    /// alone). Returns whether the entry is resident afterwards.
+    pub(crate) fn warm_segment_postings(
+        &self,
+        kind: RowKind,
+        seg_id: u64,
+        file: &str,
+        seg: &crate::segment::Segment<crate::segment::MmapSource>,
+    ) -> Result<bool> {
+        if self.postings_for(kind).lock().expect("postings mutex poisoned").get_mut(seg_id).is_some() {
+            return Ok(true);
+        }
+        let fold_t = crate::ingest_phase::Timer::start();
+        let sp = self.fold_segment_from(kind, file, seg)?;
+        fold_t.stop_ctx(crate::ingest_phase::S::Fold);
+        crate::ingest_phase::add_ctx(crate::ingest_phase::S::FoldRows, sp.row_count() as u64);
+        let rows = sp.row_count();
+        let mut p = self.postings_for(kind).lock().expect("postings mutex poisoned");
+        if p.can_hold(rows) {
+            p.note_fold(seg_id, rows, true);
+            p.insert(seg_id, sp);
+            Ok(true)
+        } else {
+            p.note_fold(seg_id, rows, false);
+            Ok(false)
         }
     }
 
@@ -3793,7 +3833,6 @@ mod tests {
     /// Every combination of belief mode, `as_of` and window the fixture can
     /// tell apart, against the listing-based oracle. This is the test that
     /// stands between the bounded path and the frozen digest
-    /// `84e8853c…be78fbfd`: if the two disagree on one row or one position,
     /// the digest moves.
     #[test]
     fn version_page_agrees_with_the_materialized_listing() {

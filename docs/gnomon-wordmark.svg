@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 268 72" width="536" height="144" role="img" aria-labelledby="gnw-t" color="#111111">
+  <title id="gnw-t">Gnomon</title>
+  <!-- The icon at 72 px beside the name, all in currentColor. The name is set as text:
+       convert it to outlines before using the wordmark where Newsreader is not installed. -->
+  <svg x="0" y="0" width="72" height="72" viewBox="290 50 952 952">
+    <defs>
+      <mask id="gnw-m-blade" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+        <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+        <path d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z" fill="#000" stroke="#000" stroke-width="30" stroke-linejoin="round"/>
+      </mask>
+      <mask id="gnw-m-edges" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+        <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+        <g fill="#000">
+          <ellipse cx="623" cy="431" rx="34" ry="21"/><ellipse cx="415" cy="551" rx="34" ry="21"/>
+          <ellipse cx="1018" cy="470" rx="34" ry="21"/><ellipse cx="1132" cy="600" rx="34" ry="21"/>
+          <ellipse cx="714" cy="640" rx="34" ry="21"/><ellipse cx="459" cy="712" rx="34" ry="21"/>
+          <ellipse cx="1013" cy="735" rx="34" ry="21"/><ellipse cx="733" cy="805" rx="34" ry="21"/>
+        </g>
+        <path d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z" fill="#000" stroke="#000" stroke-width="30" stroke-linejoin="round"/>
+      </mask>
+    </defs>
+    <path mask="url(#gnw-m-blade)" fill="currentColor" fill-rule="evenodd"
+      d="M303,620 A462,267 0 0 1 1227,620 L1227,660 A462,267 0 0 1 303,660 Z
+         M332,615 a433,240 0 1 0 866,0 a433,240 0 1 0 -866,0 Z"/>
+    <g mask="url(#gnw-m-edges)" stroke="currentColor" stroke-width="16" stroke-linecap="round" fill="none">
+      <line x1="623" y1="431" x2="415" y2="551"/><line x1="623" y1="431" x2="1018" y2="470"/>
+      <line x1="623" y1="431" x2="714" y2="640"/><line x1="415" y1="551" x2="714" y2="640"/>
+      <line x1="415" y1="551" x2="459" y2="712"/><line x1="459" y1="712" x2="714" y2="640"/>
+      <line x1="459" y1="712" x2="733" y2="805"/><line x1="714" y1="640" x2="733" y2="805"/>
+      <line x1="714" y1="640" x2="1013" y2="735"/><line x1="733" y1="805" x2="1013" y2="735"/>
+      <line x1="1013" y1="735" x2="1132" y2="600"/><line x1="1018" y1="470" x2="1132" y2="600"/>
+      <line x1="1018" y1="470" x2="714" y2="640"/><line x1="1132" y1="600" x2="714" y2="640"/>
+    </g>
+    <g mask="url(#gnw-m-blade)" stroke="currentColor" stroke-width="17" fill="none">
+      <ellipse cx="623" cy="431" rx="34" ry="21"/><ellipse cx="415" cy="551" rx="34" ry="21"/>
+      <ellipse cx="1018" cy="470" rx="34" ry="21"/><ellipse cx="1132" cy="600" rx="34" ry="21"/>
+      <ellipse cx="714" cy="640" rx="34" ry="21"/><ellipse cx="459" cy="712" rx="34" ry="21"/>
+      <ellipse cx="1013" cy="735" rx="34" ry="21"/><ellipse cx="733" cy="805" rx="34" ry="21"/>
+    </g>
+    <path fill="currentColor" fill-rule="evenodd" d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z M984,192 L700,597 L738,622 Z"/>
+  </svg>
+  <text x="84" y="50" font-family="Newsreader, 'Iowan Old Style', 'Palatino Linotype', Georgia, serif" font-size="42" font-weight="600" letter-spacing="0.4" fill="currentColor">Gnomon</text>
+</svg>

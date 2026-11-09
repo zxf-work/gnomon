@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gnomon</title>
+<meta name="description" content="Gnomon is a storage engine for bi-temporal graphs that are corrected after the fact. Every fact keeps valid time and belief time, corrections are appended rather than rewritten, and the same store answers what is true now and what was believed then.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='290 50 952 952'%3E%3Cstyle%3Esvg{color:%23111}@media (prefers-color-scheme:dark){svg{color:%23eee}}%3C/style%3E%3Cmask id='m' maskUnits='userSpaceOnUse' x='290' y='50' width='952' height='952'%3E%3Crect x='290' y='50' width='952' height='952' fill='%23fff'/%3E%3Cpath d='M1040,110 L660,600 L730,650 L780,640 L905,600 Z' stroke='%23000' stroke-width='56' stroke-linejoin='round'/%3E%3C/mask%3E%3Cg mask='url(%23m)' fill='currentColor'%3E%3Cpath fill-rule='evenodd' d='M303,620 A462,267 0 0 1 1227,620 L1227,665 A462,267 0 0 1 303,665 Z M365,610 a400,200 0 1 0 800,0 a400,200 0 1 0 -800,0 Z'/%3E%3Cpath d='M440,565 L714,640 L1100,600 L733,785 L440,565 M714,640 L733,785' fill='none' stroke='currentColor' stroke-width='44' stroke-linejoin='round' stroke-linecap='round'/%3E%3Cellipse cx='440' cy='565' rx='54' ry='38'/%3E%3Cellipse cx='1100' cy='600' rx='54' ry='38'/%3E%3Cellipse cx='733' cy='785' rx='54' ry='38'/%3E%3Cellipse cx='714' cy='640' rx='54' ry='38'/%3E%3C/g%3E%3Cpath fill='currentColor' fill-rule='evenodd' d='M1040,110 L660,600 L730,650 L780,640 L905,600 Z M965,225 L688,598 L740,628 Z'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&amp;family=Public+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
+<style>
+/* Layout: a landing page on limestone. A wide hero (name, pitch, the dial), then full-width bands
+   that alternate ground and plate; each band holds one idea. Ink is the only strong colour; blue marks
+   valid time and bronze marks belief time wherever the two times appear. */
+:root {
+  --paper: #F2F4F1;      /* limestone ground */
+  --plate: #E5E9E4;      /* dial plate, alternate bands */
+  --ink: #141B23;        /* the icon's ink */
+  --muted: #535E69;
+  --rule: #C9D1CB;
+  --valid: #2B5E85;      /* valid time */
+  --belief: #8A5410;     /* belief time */
+  --code-bg: #E9EDE8;
+  --on-ink: #F2F4F1;
+
+  --f-display: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --f-body: "Public Sans", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --s-1: 0.8125rem; --s0: 1rem; --s1: 1.1875rem; --s2: 1.5rem; --s3: 2.25rem; --s4: 3.5rem;
+
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0F1418; --plate: #172027; --ink: #E4E9E5; --muted: #9AA6B0; --rule: #2B3640;
+    --valid: #86B7DC; --belief: #DFA65F; --code-bg: #141C22; --on-ink: #0F1418;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0F1418; --plate: #172027; --ink: #E4E9E5; --muted: #9AA6B0; --rule: #2B3640;
+  --valid: #86B7DC; --belief: #DFA65F; --code-bg: #141C22; --on-ink: #0F1418;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: var(--s0);
+  line-height: 1.6;
+}
+.wrap {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+@media (min-width: 720px) {
+  .wrap { padding-left: max(40px, env(safe-area-inset-left, 0px)); padding-right: max(40px, env(safe-area-inset-right, 0px)); }
+}
+a { color: var(--valid); text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--valid); outline-offset: 3px; border-radius: 2px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; line-height: 1.1; text-wrap: balance; margin: 0; }
+p { margin: 0; }
+.eyebrow { font-family: var(--f-mono); font-size: var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.v { color: var(--valid); }
+.b { color: var(--belief); }
+.mono { font-family: var(--f-mono); }
+.icon { color: var(--ink); display: block; }
+
+/* top bar */
+.top .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1.5rem; padding-block: 0.9rem; }
+.brand { display: flex; align-items: center; gap: 0.5rem; font-family: var(--f-display); font-weight: 600; font-size: var(--s1); color: var(--ink); text-decoration: none; }
+.brand svg { width: 1.9rem; height: 1.9rem; }
+.top nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1.2rem; font-size: 0.9rem; }
+.top nav a { color: var(--muted); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+
+/* hero */
+.hero .wrap { display: grid; gap: 1rem 3rem; padding-block: clamp(1.5rem, 5vw, 3.5rem) clamp(2.5rem, 7vw, 5rem);
+  grid-template-areas: "text" "mark"; }
+@media (min-width: 900px) {
+  .hero .wrap { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "text mark"; align-items: center; min-height: min(40rem, 82vh); }
+}
+.hero-text { grid-area: text; min-width: 0; }
+.hero h1 { font-size: clamp(3.75rem, 14vw, 7.5rem); letter-spacing: -0.02em; line-height: 0.95; }
+.pitch { font-family: var(--f-display); font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1.2; margin-top: 1rem; max-width: 30ch; }
+.pitch em { font-style: italic; }
+.hero .sub { color: var(--muted); max-width: 36rem; margin-top: 1.1rem; font-size: 1.0625rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.6rem; }
+.btn {
+  display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.6rem 1.05rem; border-radius: 4px;
+  border: 1px solid var(--ink); color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.9375rem;
+}
+.btn.primary { background: var(--ink); color: var(--on-ink); }
+.btn:hover { background: var(--plate); }
+.btn.primary:hover { background: var(--ink); opacity: 0.88; }
+.hero-mark { grid-area: mark; justify-self: center; width: min(32rem, 92vw); margin-block: -1.5rem -2rem; }
+@media (min-width: 900px) { .hero-mark { width: min(36rem, 100%); margin-block: -2rem; justify-self: end; } }
+.hero-mark svg { width: 100%; height: auto; }
+
+/* bands */
+.band { border-top: 1px solid var(--rule); }
+.band.alt { background: var(--plate); }
+.band > .wrap { padding-block: clamp(2.75rem, 7vw, 4.5rem); display: grid; gap: 2rem; grid-template-columns: minmax(0, 1fr); }
+.band-head { display: grid; gap: 0.6rem; max-width: 44rem; }
+.band-head h2 { font-size: clamp(2rem, 5vw, var(--s4)); }
+.band-head p { color: var(--muted); font-size: 1.0625rem; }
+
+/* the idea */
+.idea { display: grid; gap: 2rem; }
+@media (min-width: 900px) { .idea { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); align-items: start; } }
+.points { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; }
+.points li { display: grid; gap: 0.25rem; padding-left: 1rem; border-left: 2px solid var(--ink); }
+.points li.pv { border-left-color: var(--valid); }
+.points li.pb { border-left-color: var(--belief); }
+.points strong { font-family: var(--f-display); font-size: var(--s1); font-weight: 600; }
+.points span { color: var(--muted); }
+.example-card { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 1.1rem; display: grid; gap: 1rem; min-width: 0; }
+.example-card .lead { font-size: 0.9375rem; }
+.example-card svg { display: block; width: 100%; max-width: 30rem; height: auto; margin-inline: auto; }
+.answers { display: grid; gap: 0.6rem; }
+@media (min-width: 560px) { .answers { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.answer { border-top: 1px solid var(--rule); padding-top: 0.6rem; display: grid; gap: 0.2rem; }
+.answer .q { font-family: var(--f-mono); font-size: 0.8125rem; color: var(--muted); }
+.answer .a { font-family: var(--f-display); font-size: var(--s1); line-height: 1.3; }
+.mk { display: inline-block; width: 0.65rem; height: 0.65rem; border-radius: 50%; border: 1.5px solid var(--ink); margin-right: 0.35rem; vertical-align: 0; }
+.mk.on { background: var(--ink); }
+.d-axis { stroke: var(--ink); stroke-width: 1.2; fill: none; }
+.d-tick { stroke: var(--ink); stroke-width: 1; }
+.d-txt { fill: var(--muted); font-family: var(--f-mono); font-size: 10.5px; }
+.d-lab { fill: var(--ink); font-family: var(--f-body); font-size: 11.5px; }
+.d-v1 { fill: var(--valid); fill-opacity: 0.16; stroke: var(--valid); stroke-width: 1.4; }
+.d-v1t { fill: var(--valid); font-family: var(--f-body); font-size: 12px; font-weight: 600; }
+.d-v2 { fill: var(--belief); fill-opacity: 0.16; stroke: none; }
+.d-v2e { stroke: var(--belief); stroke-width: 1.4; fill: none; }
+.d-v2d { stroke: var(--belief); stroke-width: 1.4; stroke-dasharray: 3 3; fill: none; }
+.d-v2t { fill: var(--belief); font-family: var(--f-body); font-size: 12px; font-weight: 600; }
+.d-corr { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 1.5 2.5; }
+.d-q1 { fill: var(--ink); }
+.d-q2 { fill: var(--paper); stroke: var(--ink); stroke-width: 1.5; }
+
+/* uses */
+.uses { display: grid; gap: 1.25rem; }
+@media (min-width: 820px) { .uses { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.use { display: grid; gap: 0.7rem; align-content: start; padding-top: 1rem; border-top: 2px solid var(--ink); }
+.use h3 { font-size: var(--s2); }
+.use p { color: var(--muted); }
+.use .ask-line { font-family: var(--f-display); font-style: italic; font-size: 1.0625rem; color: var(--ink); }
+
+/* performance */
+.highlights { display: grid; gap: 1.25rem; }
+@media (min-width: 680px) { .highlights { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1040px) { .highlights { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.hl { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 1.1rem 1.1rem 1.2rem; display: grid; gap: 0.45rem; align-content: start; min-width: 0; }
+.band.alt .hl { background: var(--paper); }
+.hl .n { font-family: var(--f-display); font-size: clamp(1.9rem, 2.9vw, 2.75rem); white-space: nowrap; line-height: 1; font-weight: 600; font-variant-numeric: lining-nums tabular-nums; }
+.hl .n small { font-size: 0.5em; font-weight: 400; color: var(--muted); margin-left: 0.1em; }
+.hl h3 { font-family: var(--f-body); font-size: 1rem; font-weight: 600; line-height: 1.35; }
+.hl p { font-size: 0.875rem; color: var(--muted); }
+
+/* example */
+.ex-grid { display: grid; gap: 1.5rem; }
+@media (min-width: 980px) { .ex-grid { grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr); align-items: start; } }
+.ex-grid > div { min-width: 0; display: grid; gap: 0.5rem; }
+pre {
+  margin: 0; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 0.9rem 1rem; overflow-x: auto; font-family: var(--f-mono); font-size: 0.8125rem; line-height: 1.6;
+}
+code { font-family: var(--f-mono); font-size: 0.9em; }
+pre code { font-size: inherit; }
+.c { color: var(--muted); }
+.cv { color: var(--valid); }
+.cb { color: var(--belief); }
+.codehead { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.codehead span { font-size: var(--s-1); color: var(--muted); }
+.copy { font: inherit; font-size: var(--s-1); background: none; color: var(--ink); border: 1px solid var(--rule); border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; }
+.copy:hover { border-color: var(--ink); }
+.note { font-size: var(--s-1); color: var(--muted); }
+
+/* how it works */
+.how { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+@media (min-width: 760px) { .how { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 2.5rem; } }
+.how li { border-top: 1px solid var(--rule); padding-block: 1rem; display: grid; gap: 0.25rem; }
+.how strong { font-family: var(--f-display); font-size: var(--s1); font-weight: 600; }
+.how span { color: var(--muted); }
+
+/* scope */
+.scope { display: grid; gap: 1.25rem; border: 1px solid var(--ink); border-radius: 8px; padding: clamp(1.1rem, 3vw, 1.75rem); }
+@media (min-width: 860px) { .scope { grid-template-columns: 15rem minmax(0, 1fr); column-gap: 2rem; } }
+.scope h2 { font-size: var(--s3); }
+.scope ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.6rem; }
+.scope li { padding-left: 0.2rem; }
+.scope .more { margin-top: 0.4rem; }
+
+/* footer band */
+.end { background: var(--ink); color: var(--on-ink); }
+.end a { color: var(--on-ink); }
+.end .wrap { padding-block: clamp(2.5rem, 6vw, 4rem); display: grid; gap: 2rem; }
+@media (min-width: 900px) { .end .wrap { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 3rem; align-items: end; } }
+.end h2 { font-size: clamp(2rem, 5vw, 3rem); }
+.end .eyebrow { color: inherit; opacity: 0.7; }
+.end .col { display: grid; gap: 1rem; align-content: start; min-width: 0; }
+.end .btn { border-color: var(--on-ink); color: var(--on-ink); }
+.end .btn.primary { background: var(--on-ink); color: var(--ink); }
+.end .btn:hover { background: transparent; opacity: 0.85; }
+.end pre { background: transparent; border-color: currentColor; color: inherit; opacity: 0.95; }
+.end .copy { color: inherit; border-color: currentColor; }
+.fine { font-size: var(--s-1); opacity: 0.75; }
+
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+</head>
+<body>
+
+<!-- Icon. Defined once; every copy follows the text colour. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <mask id="gn-mb" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+      <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+      <path d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z" fill="#000" stroke="#000" stroke-width="22" stroke-linejoin="round"/>
+    </mask>
+    <mask id="gn-me" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+      <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+      <g fill="#000">
+        <ellipse cx="623" cy="431" rx="34" ry="21"/><ellipse cx="415" cy="551" rx="34" ry="21"/>
+        <ellipse cx="1018" cy="470" rx="34" ry="21"/><ellipse cx="1132" cy="600" rx="34" ry="21"/>
+        <ellipse cx="714" cy="640" rx="34" ry="21"/><ellipse cx="459" cy="712" rx="34" ry="21"/>
+        <ellipse cx="1013" cy="735" rx="34" ry="21"/><ellipse cx="733" cy="805" rx="34" ry="21"/>
+      </g>
+      <path d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z" fill="#000" stroke="#000" stroke-width="22" stroke-linejoin="round"/>
+    </mask>
+    <mask id="gn-ms" maskUnits="userSpaceOnUse" x="290" y="50" width="952" height="952">
+      <rect x="290" y="50" width="952" height="952" fill="#fff"/>
+      <path d="M1040,110 L660,600 L730,650 L780,640 L905,600 Z" fill="#000" stroke="#000" stroke-width="56" stroke-linejoin="round"/>
+    </mask>
+    <symbol id="gn-icon" viewBox="290 50 952 952">
+      <path mask="url(#gn-mb)" fill="currentColor" fill-rule="evenodd" d="M303,620 A462,267 0 0 1 1227,620 L1227,655 A462,267 0 0 1 303,655 Z M329,615 a436,244 0 1 0 872,0 a436,244 0 1 0 -872,0 Z"/>
+      <g mask="url(#gn-me)" stroke="currentColor" stroke-width="11" stroke-linecap="round" fill="none">
+        <line x1="623" y1="431" x2="415" y2="551"/><line x1="623" y1="431" x2="1018" y2="470"/>
+        <line x1="623" y1="431" x2="714" y2="640"/><line x1="415" y1="551" x2="714" y2="640"/>
+        <line x1="415" y1="551" x2="459" y2="712"/><line x1="459" y1="712" x2="714" y2="640"/>
+        <line x1="459" y1="712" x2="733" y2="805"/><line x1="714" y1="640" x2="733" y2="805"/>
+        <line x1="714" y1="640" x2="1013" y2="735"/><line x1="733" y1="805" x2="1013" y2="735"/>
+        <line x1="1013" y1="735" x2="1132" y2="600"/><line x1="1018" y1="470" x2="1132" y2="600"/>
+        <line x1="1018" y1="470" x2="714" y2="640"/><line x1="1132" y1="600" x2="714" y2="640"/>
+      </g>
+      <g mask="url(#gn-mb)" stroke="currentColor" stroke-width="13" fill="none">
+        <ellipse cx="623" cy="431" rx="34" ry="21"/><ellipse cx="415" cy="551" rx="34" ry="21"/>
+        <ellipse cx="1018" cy="470" rx="34" ry="21"/><ellipse cx="1132" cy="600" rx="34" ry="21"/>
+        <ellipse cx="714" cy="640" rx="34" ry="21"/><ellipse cx="459" cy="712" rx="34" ry="21"/>
+        <ellipse cx="1013" cy="735" rx="34" ry="21"/><ellipse cx="733" cy="805" rx="34" ry="21"/>
+      </g>
+      <path fill="currentColor" fill-rule="evenodd" d="M1029,130 L958,205 L679,603 L736,638 L764,631 L893,598 Z M984,192 L700,597 L738,622 Z"/>
+    </symbol>
+    <symbol id="gn-icon-small" viewBox="290 50 952 952">
+      <g mask="url(#gn-ms)" fill="currentColor">
+        <path fill-rule="evenodd" d="M303,620 A462,267 0 0 1 1227,620 L1227,665 A462,267 0 0 1 303,665 Z M365,610 a400,200 0 1 0 800,0 a400,200 0 1 0 -800,0 Z"/>
+        <path d="M440,565 L714,640 L1100,600 L733,785 L440,565 M714,640 L733,785" fill="none" stroke="currentColor" stroke-width="44" stroke-linejoin="round" stroke-linecap="round"/>
+        <ellipse cx="440" cy="565" rx="54" ry="38"/><ellipse cx="1100" cy="600" rx="54" ry="38"/>
+        <ellipse cx="733" cy="785" rx="54" ry="38"/><ellipse cx="714" cy="640" rx="54" ry="38"/>
+      </g>
+      <path fill="currentColor" fill-rule="evenodd" d="M1040,110 L660,600 L730,650 L780,640 L905,600 Z M965,225 L688,598 L740,628 Z"/>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Gnomon, top of page">
+      <svg class="icon" viewBox="0 0 952 952" aria-hidden="true"><use href="#gn-icon-small"/></svg>
+      Gnomon
+    </a>
+    <nav aria-label="Sections">
+      <a href="#idea">The idea</a>
+      <a href="#uses">Uses</a>
+      <a href="#performance">Performance</a>
+      <a href="#example">Example</a>
+      <a href="#scope">Scope</a>
+      <a href="#get">Code</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
+    <div class="hero-text">
+      <p class="eyebrow">A storage engine for bi-temporal graphs</p>
+      <h1 id="hero-title">Gnomon</h1>
+      <p class="pitch">Ask your graph what is true <em>now</em>, and what you believed <em>then</em>.</p>
+      <p class="sub">Records get corrected. Gnomon keeps two times on every node and edge, appends each correction instead of rewriting, and answers a past belief as an ordinary question, at about the cost of the present.</p>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/zxf-work/gnomon">Get the code</a>
+        <a class="btn" href="#example">See an example</a>
+      </div>
+    </div>
+    <div class="hero-mark" role="img" aria-label="The Gnomon icon: a sundial blade rising from a dial whose face carries a graph of nodes and edges">
+      <svg class="icon" viewBox="0 0 952 952" aria-hidden="true"><use href="#gn-icon"/></svg>
+    </div>
+  </div>
+</section>
+
+<section class="band alt" id="idea" aria-labelledby="idea-title">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">The idea</p>
+      <h2 id="idea-title">One store, two times, nothing overwritten</h2>
+    </div>
+    <div class="idea">
+      <ul class="points">
+        <li class="pv"><strong>Two times on every fact</strong><span><span class="v">Valid time</span> is when a fact held in the world. <span class="b">Belief time</span>, also called transaction time, is when the store believed it.</span></li>
+        <li class="pb"><strong>A correction is appended</strong><span>It closes the old version with a small note and writes the new one. Not a byte of the old version changes.</span></li>
+        <li><strong>Two questions, one store</strong><span>Every query names a point or window in valid time and, if you like, a belief time. Without one, it answers as of now.</span></li>
+      </ul>
+
+      <div class="example-card">
+        <p class="lead">On 5 March a bank records a transfer as active from 1 to 31 March. On 20 March it finds the transfer ended on the 15th.</p>
+        <svg viewBox="0 0 380 270" role="img" aria-labelledby="ex-title ex-desc">
+          <title id="ex-title">One transfer and one correction</title>
+          <desc id="ex-desc">Valid time runs left to right through March; belief time runs bottom to top. Version v1, recorded on 5 March, is valid 1 to 31 March and believed until 20 March. Version v2, written by the correction on 20 March, is valid 1 to 15 March and believed from 20 March on. Question q1 asks about 25 March as believed on 10 March and falls inside v1. Question q2 asks about 25 March as believed on 27 March and falls outside both versions.</desc>
+          <rect class="d-v1" x="55" y="110" width="270" height="84"/>
+          <text class="d-v1t" x="190" y="150" text-anchor="middle">v1</text>
+          <text class="d-txt" x="190" y="166" text-anchor="middle">valid 1&#8211;31 Mar</text>
+          <rect class="d-v2" x="55" y="36" width="126" height="74"/>
+          <path class="d-v2e" d="M55 52 V110 H181 V52"/>
+          <path class="d-v2d" d="M55 36 V52 M181 36 V52"/>
+          <text class="d-v2t" x="118" y="74" text-anchor="middle">v2</text>
+          <text class="d-txt" x="118" y="90" text-anchor="middle">valid 1&#8211;15 Mar</text>
+          <line class="d-corr" x1="46" y1="110" x2="360" y2="110"/>
+          <text class="d-lab" x="196" y="104">correction on 20 Mar</text>
+          <circle class="d-q1" cx="271" cy="166" r="5"/>
+          <text class="d-lab" x="281" y="170">q1</text>
+          <circle class="d-q2" cx="271" cy="71" r="5"/>
+          <text class="d-lab" x="281" y="75">q2</text>
+          <path class="d-axis" d="M46 222 H366 M46 222 V24"/>
+          <path class="d-axis" d="M360 218 L366 222 L360 226 M42 30 L46 24 L50 30"/>
+          <line class="d-tick" x1="55" y1="222" x2="55" y2="227"/>
+          <line class="d-tick" x1="181" y1="222" x2="181" y2="227"/>
+          <line class="d-tick" x1="271" y1="222" x2="271" y2="227"/>
+          <line class="d-tick" x1="325" y1="222" x2="325" y2="227"/>
+          <text class="d-txt" x="55" y="239" text-anchor="middle">1 Mar</text>
+          <text class="d-txt" x="181" y="239" text-anchor="middle">15</text>
+          <text class="d-txt" x="271" y="239" text-anchor="middle">25</text>
+          <text class="d-txt" x="325" y="239" text-anchor="middle">31</text>
+          <text class="d-lab" x="206" y="262" text-anchor="middle">valid time: when the transfer held</text>
+          <line class="d-tick" x1="41" y1="194" x2="46" y2="194"/>
+          <line class="d-tick" x1="41" y1="166" x2="46" y2="166"/>
+          <line class="d-tick" x1="41" y1="110" x2="46" y2="110"/>
+          <line class="d-tick" x1="41" y1="71" x2="46" y2="71"/>
+          <text class="d-txt" x="38" y="197" text-anchor="end">5</text>
+          <text class="d-txt" x="38" y="169" text-anchor="end">10</text>
+          <text class="d-txt" x="38" y="113" text-anchor="end">20</text>
+          <text class="d-txt" x="38" y="74" text-anchor="end">27</text>
+          <text class="d-lab" x="14" y="123" text-anchor="middle" transform="rotate(-90 14 123)">belief time (March)</text>
+        </svg>
+        <div class="answers">
+          <div class="answer"><span class="q"><span class="mk on" aria-hidden="true"></span>On 25 March, as believed on 10 March?</span><span class="a">Active.</span></div>
+          <div class="answer"><span class="q"><span class="mk" aria-hidden="true"></span>On 25 March, as believed on 27 March?</span><span class="a">Not active: it ended on the 15th.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="uses" aria-labelledby="uses-title">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Where it is useful</p>
+      <h2 id="uses-title">Built for graphs that people audit, cite and investigate</h2>
+      <p>Gnomon's design targets questions like these, where the old answer still matters after the record is fixed.</p>
+    </div>
+    <div class="uses">
+      <article class="use">
+        <h3>Audits of transaction graphs</h3>
+        <p>A payment is booked to the wrong account and fixed later. An auditor must reproduce what the bank knew on the day it cleared an alert.</p>
+        <p class="ask-line">Walk the transaction graph as it was believed that day, before any later fix.</p>
+      </article>
+      <article class="use">
+        <h3>Knowledge graphs with revision histories</h3>
+        <p>A study run on Wikidata must be repeatable on the graph as it stood at a past revision, although editors have since corrected many of its facts.</p>
+        <p class="ask-line">Rerun the analysis on the graph as believed at that revision.</p>
+      </article>
+      <article class="use">
+        <h3>Investigations, entity resolution and lineage</h3>
+        <p>Records get merged or corrected later: two customer records turn out to be one person, a business link ended months earlier than recorded.</p>
+        <p class="ask-line">How did this ring of accounts change over a month, and was that change visible at the time? What changed between two beliefs?</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="band alt" id="performance" aria-labelledby="perf-title">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Performance highlights</p>
+      <h2 id="perf-title">Fast on the questions it was built for</h2>
+      <p>Temporal and as-of reads of graph neighbourhoods, measured against DuckDB under a careful four-timestamp schema and other systems. At 100M edge versions, Gnomon still has the lowest median on 12 to 14 of 14 temporal queries, depending on the graph. The repository holds the comparison kit that reruns every measurement.</p>
+    </div>
+
+    <div class="highlights">
+      <article class="hl">
+        <span class="n">326<small>&times;</small></span>
+        <h3>Most of the speed comes from storage</h3>
+        <p>The same queries, run as Python operators on DuckDB's storage, take a median 326 times Gnomon's time (temporal queries on one of our test graphs, 10M edge versions). Storage, more than query code, is the larger effect in 8 of 9 query families.</p>
+      </article>
+      <article class="hl">
+        <span class="n">18.5<small>&times;</small></span>
+        <h3>Belief checked on blocks, not rows</h3>
+        <p>Switch block-level belief checks off and temporal queries get a median 18.5 times slower (one of our test graphs, 10M edge versions).</p>
+      </article>
+      <article class="hl">
+        <span class="n">0.84&ndash;1.03<small>&times;</small></span>
+        <h3>A past belief costs about the present</h3>
+        <p>Past over current belief on snapshots and reachability, on our two test graphs at 10M edge versions with 10% corrections. A past belief can see fewer rows, so below 1 is not a saving.</p>
+      </article>
+      <article class="hl">
+        <span class="n">91.2<small>%</small></span>
+        <h3>Hubs stay fast</h3>
+        <p>Against the other systems we ran, Gnomon wins 91.2% of the instances seeded at high-degree hubs (10M edge versions), the case that per-chunk adjacency with seed growth is built for.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="example" aria-labelledby="ex-title2">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Quick example</p>
+      <h2 id="ex-title2">Record, correct, ask twice</h2>
+      <p>Gnomon is a Python package over a Rust core. Open a store directory, write versions and corrections, and pass a belief time to any operator.</p>
+    </div>
+    <div class="ex-grid">
+      <div>
+        <div class="codehead"><span>One fact, one correction, two answers</span><button class="copy" type="button" id="copy-py" data-target="code-py">Copy</button></div>
+<pre><code id="code-py">import gnomon
+from gnomon import OPEN_END, EntityRef
+from gnomon.temporal.algebra import call_operator, ensure_all_registered
+
+ensure_all_registered()
+store = gnomon.open("quickstart-store")   <span class="c"># a directory; created if absent</span>
+
+<span class="c"># record: alice lives in Lyon from time 0 on (int64 microseconds)</span>
+t1 = store.assert_node("alice", "Person", {"city": "Lyon"}, vt_s=0)
+
+<span class="c"># correct: we learn that alice moved to Paris at time 300</span>
+store.correct(EntityRef("node", uid="alice"), {"city": "Paris"}, vt_s=300)
+
+def cities(as_of_tt=OPEN_END):
+    env = call_operator(store.adapter, "entity_history",
+                        {"uid": "alice", "as_of_tt": as_of_tt})
+    return [r["props"]["city"] for r in env["rows"]]
+
+print(cities())     <span class="cv"># ['Lyon', 'Paris']   what is true now</span>
+print(cities(t1))   <span class="cb"># ['Lyon']            what was believed at t1</span>
+store.close()</code></pre>
+      </div>
+      <div>
+        <div class="codehead"><span>Build from source</span><button class="copy" type="button" id="copy-install" data-target="code-install">Copy</button></div>
+<pre><code id="code-install">git clone https://github.com/zxf-work/gnomon.git
+cd gnomon
+python3 -m venv .venv &amp;&amp; . .venv/bin/activate
+pip install maturin
+maturin develop --release --extras dev</code></pre>
+        <p class="note">Needs Rust (pinned in the repository), Python 3.11 or newer and maturin. Developed and tested on Linux x86-64. The README covers the command-line tool and every operator.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band alt" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">How it works</p>
+      <h2 id="how-title">Four ideas under the hood</h2>
+    </div>
+    <ul class="how">
+      <li><strong>Corrections are notes</strong><span>Every version is an immutable row; a correction appends a close note saying when a row stopped being believed.</span></li>
+      <li><strong>Belief checked on blocks</strong><span>Rows written together share a belief start, so a whole block of rows is checked at once and returned as row ranges.</span></li>
+      <li><strong>Adjacency in every chunk</strong><span>Sealed, time-ordered chunks each carry their own adjacency index, and walks grow outward from their seed nodes.</span></li>
+      <li><strong>Operators on row ranges</strong><span>Snapshots, paths, diffs and counts run inside the engine and build readable rows only for the page they return.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section class="band" id="scope" aria-labelledby="scope-title">
+  <div class="wrap">
+    <div class="scope">
+      <div>
+        <p class="eyebrow">Honest scope</p>
+        <h2 id="scope-title">What it is for, and what it is not</h2>
+      </div>
+      <div>
+        <ul>
+          <li>Gnomon targets temporal and as-of reads of graph neighbourhoods.</li>
+          <li>On workloads derived from LDBC benchmarks, and on generic joins, a columnar engine such as DuckDB is faster, by several times on generic queries at SF10.</li>
+          <li>Bulk loading and memory are its costs. On the SNB-derived workload it uses 3.3 times DuckDB's memory at SF10, and its bulk load is about 22 times slower.</li>
+          <li>A cost check refuses a call whose estimated time is over its budget. The estimate uses the seeds, hops, time window and the chunks left after pruning; at 100M edge versions it still refuses 2-hop snapshots at a past belief on a skewed graph, which take about a second when run.</li>
+          <li>One writer, one node, and a fixed set of operators rather than a query language.</li>
+        </ul>
+        <p class="more">The repository's <a href="https://github.com/zxf-work/gnomon/blob/main/docs/limitations.md">limitations page</a> lists the current limits in detail.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="end" id="get" aria-labelledby="get-title">
+  <div class="wrap">
+    <div class="col">
+      <p class="eyebrow">Get Gnomon</p>
+      <h2 id="get-title">Code and license</h2>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/zxf-work/gnomon">github.com/zxf-work/gnomon</a>
+      </div>
+    </div>
+    <div class="col">
+      <p>Copyright 2026 Xiaofei Zhang. Released under the Apache License, Version 2.0. See <code>LICENSE</code> and <code>NOTICE</code> in the repository.</p>
+      <p class="fine">Gnomon &middot; Xiaofei Zhang, University of Memphis</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  function selectText(el) {
+    try {
+      var r = document.createRange();
+      r.selectNodeContents(el);
+      var s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+    } catch (e) {}
+  }
+  document.querySelectorAll('button.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-target'));
+      if (!el) return;
+      var text = el.innerText;
+      var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+      var fail = function () { selectText(el); btn.textContent = 'Selected, press Ctrl+C'; setTimeout(function () { btn.textContent = 'Copy'; }, 2400); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, fail);
+        } else { fail(); }
+      } catch (e) { fail(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

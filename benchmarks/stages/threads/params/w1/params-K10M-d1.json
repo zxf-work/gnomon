@@ -1,0 +1,184 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "thr-subset-v1",
+ "log": {
+  "name": "K10M-d1.eventlog.jsonl",
+  "sha256": "e2512e2aaf9278576538b15595df7587838990ef9988b9c92e9af585e675d22e"
+ },
+ "selection": {
+  "notes": [
+   "one instance per registry id: the registry's own arguments (extcmp.queries on this log), the instances v3 timed",
+   "thr: W1's B point, all eight ids, unchanged"
+  ]
+ },
+ "counts": {
+  "b.snap.hop2@T": 1,
+  "b.snap.hop2@now": 1,
+  "b.reach@T": 1,
+  "b.reach@now": 1,
+  "b.diff": 1,
+  "b.diff@ctl": 1,
+  "b.hist": 1,
+  "b.hist@now": 1
+ },
+ "subset_of": {
+  "file": "params-K10M-d1.json",
+  "sha256": "1568d6a5047a93bf6fe70fb40183786c9961f7f0418b6a1339c59581d443808a",
+  "version": "w1-single-v1"
+ },
+ "instances": [
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "43003836",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "as_of_tt": 1791609450223305,
+    "hops": 2,
+    "limit": 10000,
+    "seeds": [
+     "n1",
+     "n2",
+     "n3",
+     "n4",
+     "n5",
+     "n6",
+     "n7",
+     "n8",
+     "n9",
+     "n10",
+     "n11",
+     "n12",
+     "n13",
+     "n14",
+     "n15",
+     "n16",
+     "n17",
+     "n18",
+     "n19",
+     "n20"
+    ],
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "441ff48e",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "hops": 2,
+    "limit": 10000,
+    "seeds": [
+     "n1",
+     "n2",
+     "n3",
+     "n4",
+     "n5",
+     "n6",
+     "n7",
+     "n8",
+     "n9",
+     "n10",
+     "n11",
+     "n12",
+     "n13",
+     "n14",
+     "n15",
+     "n16",
+     "n17",
+     "n18",
+     "n19",
+     "n20"
+    ],
+    "t_valid": 7500000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "a514b036",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "as_of_tt": 1791609450223305,
+    "src": "n1",
+    "window": {
+     "t_a": 7000000,
+     "t_b": 7500000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "1b12ce04",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "src": "n1",
+    "window": {
+     "t_a": 7000000,
+     "t_b": 7500000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "e727ad08",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "limit": 1000,
+    "t1": 1791043401932236,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 7250000,
+     "t_b": 7750000
+    }
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "5839ac46",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "t1": 7250000,
+    "t2": 7750000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "3c9b975f",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "disc": "#7250118",
+    "dst": "n99229",
+    "eid": "796ed7469f3c97b381e39b27",
+    "rel_type": "S",
+    "src": "n99227"
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "f7ca097e",
+   "stratum": "registry instance",
+   "class": "single parameter (v3)",
+   "factors": {},
+   "args": {
+    "disc": "#7250118",
+    "dst": "n99229",
+    "eid": "796ed7469f3c97b381e39b27",
+    "rel_type": "S",
+    "src": "n99227"
+   }
+  }
+ ]
+}

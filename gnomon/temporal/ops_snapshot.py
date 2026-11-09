@@ -11,6 +11,8 @@ import json
 
 from typing import Any
 
+import os
+
 import numpy as np
 
 from gnomon.core.errors import InvalidArgError, LimitError
@@ -29,11 +31,18 @@ from gnomon.temporal.algebra import (
     paginate,
     required,
 )
+from gnomon.temporal import guardrails as _G
 from gnomon.temporal.guardrails import (
+    ROUTES_KEY,
+    c4_scan_ms,
+    c5_constants,
+    c5_ms,
     coeff_scale,
+    expansion_rows,
     point_read_estimate,
-    scan_estimate,
+    pure_cost,
     touching_read_ms,
+    zone_rows,
 )
 
 MAX_HOPS = 3
@@ -255,12 +264,106 @@ def entity_history(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, A
 
 
 # --------------------------------------------------------------------------- #
+# The query-aware estimates of the three scan-priced operators                 #
+# --------------------------------------------------------------------------- #
+
+def _routes(stats: dict[str, Any]) -> dict[str, Any]:
+    return stats.get(ROUTES_KEY) or {}
+
+
+@pure_cost(constants=c5_constants)
+def _snapshot_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Whole-store: every edge and node version (`scan_estimate`). On the
+    engine's seed expansion: the expansion's reads from the seeds over `hops` levels,
+    bounded by the zone rows at `t_valid` (`expansion_rows`), plus the node
+    rows there; the lower of the two."""
+    est, ms = c4_scan_ms("snapshot_subgraph", args, stats)
+    ze = zone_rows(stats, args["t_valid"])
+    if ze is not None and _routes(stats).get("seed_expansion"):
+        rows = expansion_rows(len(set(args["seeds"])), int(args.get("hops", 1)), stats, ze) \
+            + zone_rows(stats, args["t_valid"], "node")
+        ms = min(ms, c5_ms(_G.C5_FIXED_MS, rows, _G.C5_SNAPSHOT_MS_PER_M))
+    return {**est, "time_est_ms": ms}
+
+
+@pure_cost(constants=c5_constants)
+def _diff_snapshots_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Whole-store: every edge and node version. On the engine's diff (no
+    `scope`): the two point states' zone rows; the lower of the two."""
+    est, ms = c4_scan_ms("diff_snapshots", args, stats)
+    if args.get("scope") is None and _routes(stats).get("diff_kernel") \
+            and zone_rows(stats, args["t1"]) is not None:
+        rows = sum(zone_rows(stats, args[t], kind) for t in ("t1", "t2")
+                   for kind in ("edge", "node"))
+        ms = min(ms, c5_ms(_G.C5_FIXED_MS, rows, _G.C5_DIFF_MS_PER_M))
+    return {**est, "time_est_ms": ms}
+
+
+@pure_cost(constants=c5_constants)
+def _resolve_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
+    """Whole-store: every edge and node version. On the engine's paged resolve: it
+    reads the node versions and the identity dictionary, never an edge; the
+    lower of the two."""
+    est, ms = c4_scan_ms("resolve_entities", args, stats)
+    if _routes(stats).get("resolve_kernel") and zone_rows(stats, 0) is not None:
+        rows = int(stats.get("n_node_versions") or 0) + int(stats.get("n_entities") or 0)
+        ms = min(ms, c5_ms(_G.C5_FIXED_MS, rows, _G.C5_RESOLVE_MS_PER_M))
+    return {**est, "time_est_ms": ms}
+
+
+# --------------------------------------------------------------------------- #
 # snapshot_subgraph                                                         #
 # --------------------------------------------------------------------------- #
 
 def _check_hops(args: dict[str, Any]) -> None:
     if args.get("hops", 1) > MAX_HOPS:
         raise LimitError(f"hops capped at {MAX_HOPS}")
+
+
+def _one_call_offset(adapter: StorageAdapter, cursor: str | None) -> int | None:
+    """The page offset when the seed expansion can run as
+    one engine call, else `None` (the Python expansion). The cursor rules
+    are `_snapshot_page_offset`'s. `GNOMON_SNAPSHOT_ONECALL=0` keeps the
+    Python expansion."""
+    if os.environ.get("GNOMON_SNAPSHOT_ONECALL", "1") == "0" or \
+            not hasattr(adapter, "snapshot_scan_page"):
+        return None
+    try:
+        offset = int(cursor) if cursor else 0
+    except ValueError:
+        return None
+    return offset if 0 <= offset < 1 << 62 else None
+
+
+def _page_out(pg: dict[str, Any], offset: int, limit: int) -> dict[str, Any]:
+    """The operator's answer from an engine page: `paginate`'s envelope
+    rebuilt from the exact totals, then the node page."""
+    window = pg["edges"]
+    truncated = offset + len(window) < pg["edges_total"]
+    out = {"rows": window, "rows_total": pg["edges_total"], "truncated": truncated,
+           "cursor": str(offset + len(window)) if truncated else None}
+    out["nodes"] = [{"uid": u, "label": lab, "hop": h} for u, lab, h in pg["nodes"]]
+    out["nodes_total"] = pg["nodes_total"]
+    out["nodes_truncated"] = pg["nodes_total"] > limit
+    out["truncated"] = out["truncated"] or out["nodes_truncated"]
+    return out
+
+
+def _snapshot_page_offset(adapter: StorageAdapter, cursor: str | None) -> int | None:
+    """The page offset when the engine frontier can return
+    the page alone, else `None` (the full rows, then `paginate`). The offset
+    is `paginate`'s own reading of the cursor; a cursor it would reject, or a
+    negative offset (Python slicing from the end), keeps the full path, so
+    the error and the slice are `paginate`'s. `GNOMON_SNAPSHOT_PAGE=0` keeps the
+    full path always."""
+    if os.environ.get("GNOMON_SNAPSHOT_PAGE", "1") == "0" or \
+            not hasattr(adapter, "snapshot_kernel_page"):
+        return None
+    try:
+        offset = int(cursor) if cursor else 0
+    except ValueError:
+        return None
+    return offset if 0 <= offset < 1 << 62 else None
 
 
 @operator(
@@ -277,7 +380,7 @@ def _check_hops(args: dict[str, Any]) -> None:
     "k-hop subgraph (undirected expansion, induced edges) of the snapshot graph "
     "G(t_valid) under belief state as_of_tt. `rows` are the induced edges, "
     "paginated; `nodes` carry hop distance.",
-    cost_fn=scan_estimate,
+    cost_fn=_snapshot_cost,
     validators=[_check_hops],
     output_fields=("rows", "rows_total", "truncated", "cursor",
                    "nodes", "nodes_total", "nodes_truncated"),
@@ -287,8 +390,18 @@ def snapshot_subgraph(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str
     seed_ids = adapter.dense_ids(args["seeds"])
     expanded = None
     if _seed_expansion(adapter):
-        expanded = _expand_from_seeds(adapter, seed_ids, t, as_of, args["hops"],
-                                      args["rel_types"])
+        one = _one_call_offset(adapter, args["cursor"])
+        if one is not None:
+            # The expansion below and its page in one
+            # engine call; past the cap it answers `None` and the engine
+            # frontier takes over exactly as after the Python expansion
+            pg = adapter.snapshot_scan_page(seed_ids, t, as_of, args["hops"], args["rel_types"],
+                                            SEED_EXPANSION_MAX_IDS, one, args["limit"])
+            if pg is not None:
+                return _page_out(pg, one, args["limit"])
+        else:
+            expanded = _expand_from_seeds(adapter, seed_ids, t, as_of, args["hops"],
+                                          args["rel_types"])
     if expanded is None and _seed_expansion(adapter) and \
             hasattr(adapter, "snapshot_kernel") and \
             adapter.designs().get("match_kernel", False):
@@ -297,6 +410,22 @@ def snapshot_subgraph(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str
         # Below the cap the scan expansion stays first, since on a store with
         # retractions its filtered scans are the cheaper per-vertex read.
         # `GNOMON_MATCH_KERNEL=python` keeps the whole-snapshot fallback.
+        paged = _snapshot_page_offset(adapter, args["cursor"])
+        if paged is not None:
+            # The page only, from the engine; `paginate`'s
+            # envelope rebuilt from the exact totals
+            pg = adapter.snapshot_kernel_page(seed_ids, t, as_of, args["hops"], args["rel_types"],
+                                              paged, args["limit"], args["limit"])
+            if pg is not None:
+                window = pg["edges"]
+                truncated = paged + len(window) < pg["edges_total"]
+                out = {"rows": window, "rows_total": pg["edges_total"], "truncated": truncated,
+                       "cursor": str(paged + len(window)) if truncated else None}
+                out["nodes"] = [{"uid": u, "label": lab, "hop": h} for u, lab, h in pg["nodes"]]
+                out["nodes_total"] = pg["nodes_total"]
+                out["nodes_truncated"] = pg["nodes_total"] > args["limit"]
+                out["truncated"] = out["truncated"] or out["nodes_truncated"]
+                return out
         got = adapter.snapshot_kernel(seed_ids, t, as_of, args["hops"], args["rel_types"])
         if got is not None:
             node_rows = sorted(({"uid": u, "label": lab, "hop": h} for u, lab, h in got["nodes"]),
@@ -413,7 +542,7 @@ def _edge_props_by_address(adapter: StorageAdapter, cand_e, e1, emap1, e2, emap2
     "Delta between snapshots G(t1) and G(t2) under one belief state: "
     "nodes/edges added & removed (by logical identity) and props_changed. "
     "Each list is independently capped at `limit` with *_total counts.",
-    cost_fn=scan_estimate,
+    cost_fn=_diff_snapshots_cost,
     output_fields=("nodes_added", "nodes_added_total", "nodes_removed",
                    "nodes_removed_total", "edges_added", "edges_added_total",
                    "edges_removed", "edges_removed_total", "props_changed",
@@ -558,13 +687,37 @@ def _check_t1_t2(args: dict[str, Any]) -> None:
         raise InvalidArgError("neighborhood_evolution requires t1 < t2")
 
 
+def _evolution_one_read() -> bool:
+    """`neighborhood_evolution` reads the incident edges once
+    (default); `GNOMON_NBR_EVOLUTION_ONE_READ=0` keeps the three reads."""
+    return os.environ.get("GNOMON_NBR_EVOLUTION_ONE_READ", "1") != "0"
+
+
+def _evolution_kernel() -> bool:
+    """    the adapter has it (default); `GNOMON_NBR_EVOLUTION_KERNEL=0` keeps NumPy."""
+    return os.environ.get("GNOMON_NBR_EVOLUTION_KERNEL", "1") != "0"
+
+
+def _evolution_cost_constants() -> tuple[float, ...]:
+    from gnomon.temporal import guardrails as G
+
+    return (G.TOUCHING_READ_MS, G.TOUCHING_ROW_MS_PER_M) + G.c5_constants()
+
+
+@pure_cost(constants=_evolution_cost_constants)
 def _evolution_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
     """Three reads of the edge versions touching `uid` (the neighbourhoods at
     t1 and at t2, the degree series), not a scan of the store: priced as
     touching reads (`scan_estimate` was 560 to 4,250 times the time)."""
     rows = 3 * 2 * int(stats.get("max_out_degree") or 0)
-    return {"rows_scanned_est": rows, "expansions_est": 0,
-            "time_est_ms": int(3 * touching_read_ms(stats) * coeff_scale()) + 1}
+    ms = int(3 * touching_read_ms(stats) * coeff_scale()) + 1
+    # on the engine (a zone summary), the three reads at the
+    # engine's measured rate per incident version, at most the zone rows at t2
+    ze = zone_rows(stats, args["t2"])
+    if ze is not None:
+        per = min(2 * int(stats.get("max_out_degree") or 0), ze)
+        ms = min(ms, c5_ms(3 * _G.TOUCHING_READ_MS, 3 * per, _G.C5_TOUCH_EVOLUTION_MS_PER_M))
+    return {"rows_scanned_est": rows, "expansions_est": 0, "time_est_ms": ms}
 
 
 @operator(
@@ -595,27 +748,65 @@ def neighborhood_evolution(adapter: StorageAdapter, args: dict[str, Any]) -> dic
         raise LimitError(f"bucket count {n_buckets} exceeds cap {MAX_BUCKETS}; "
                          "increase stride")
 
-    def neighbors(t: int) -> set[str]:
-        e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t, vt_max=t + 1,
-                                   columns=("src_id", "dst_id"),
+    parts = None
+    if _evolution_one_read() and t1 < t2 and _evolution_kernel():
+        # engine call, which hands back only the answer's values
+        kernel = getattr(adapter, "neighborhood_evolution_parts", None)
+        if kernel is not None:
+            parts = kernel(uid_id, t1, t2, as_of, stride)
+    if parts is not None:
+        gained, lost, series = parts
+    elif _evolution_one_read() and t1 < t2:
+        # (the neighbourhood at t1, at t2, and the window [t1, t2) for the
+        # degree series) are one read over [t1, t2 + 1), which holds exactly
+        # the rows of each: a version valid at t (vt_s <= t < vt_e) overlaps
+        # it, and so does one overlapping [t1, t2). Each part is then the
+        # same predicate over that read, on dense ids, and only the gained
+        # and lost neighbours are turned into uids. A hub's adjacency is
+        # walked once instead of three times. `GNOMON_NBR_EVOLUTION_ONE_READ=0`
+        # keeps the three reads.
+        e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t1, vt_max=t2 + 1,
+                                   columns=("src_id", "dst_id", "vt_s", "vt_e"),
                                    touching_ids=[uid_id])
-        m_out = e["src_id"] == uid_id
-        m_in = e["dst_id"] == uid_id
-        ids = np.unique(np.concatenate([e["dst_id"][m_out], e["src_id"][m_in]]))
-        return set(adapter.uids_for([i for i in ids.tolist() if i != uid_id]))
+        src, dst, vt_s, vt_e = e["src_id"], e["dst_id"], e["vt_s"], e["vt_e"]
+        m_out = src == uid_id
+        # the other endpoint of each incident row (a self-loop gives uid_id,
+        # which is no neighbour, as in the three-read form)
+        other = np.where(m_out, dst, src)
+        keep = (m_out | (dst == uid_id)) & (other != uid_id)
 
-    n_t1, n_t2 = neighbors(t1), neighbors(t2)
-    gained, lost = sorted(n_t2 - n_t1), sorted(n_t1 - n_t2)
+        def neighbor_ids(t: int) -> set[int]:
+            return set(other[keep & (vt_s <= t) & (vt_e > t)].tolist())
 
-    # incident active-edge count at each bucket start, one pushed-down scan
-    e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t1, vt_max=t2,
-                               columns=("vt_s", "vt_e"), touching_ids=[uid_id])
-    starts = np.sort(e["vt_s"])
-    ends = np.sort(e["vt_e"])
-    bucket_starts = np.arange(t1, t2, stride, dtype=np.int64)
-    deg = (np.searchsorted(starts, bucket_starts, side="right")
-           - np.searchsorted(ends, bucket_starts, side="right"))
-    series = [{"t": int(t), "degree": int(d)} for t, d in zip(bucket_starts, deg)]
+        i_t1, i_t2 = neighbor_ids(t1), neighbor_ids(t2)
+        gained = sorted(adapter.uids_for(list(i_t2 - i_t1)))
+        lost = sorted(adapter.uids_for(list(i_t1 - i_t2)))
+        win = (vt_s < t2) & (vt_e > t1)
+        starts = np.sort(vt_s[win])
+        ends = np.sort(vt_e[win])
+    else:
+        def neighbors(t: int) -> set[str]:
+            e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t, vt_max=t + 1,
+                                       columns=("src_id", "dst_id"),
+                                       touching_ids=[uid_id])
+            m_out = e["src_id"] == uid_id
+            m_in = e["dst_id"] == uid_id
+            ids = np.unique(np.concatenate([e["dst_id"][m_out], e["src_id"][m_in]]))
+            return set(adapter.uids_for([i for i in ids.tolist() if i != uid_id]))
+
+        n_t1, n_t2 = neighbors(t1), neighbors(t2)
+        gained, lost = sorted(n_t2 - n_t1), sorted(n_t1 - n_t2)
+
+        # incident active-edge count at each bucket start, one pushed-down scan
+        e = adapter.edges_columnar(as_of_tt=as_of, vt_min=t1, vt_max=t2,
+                                   columns=("vt_s", "vt_e"), touching_ids=[uid_id])
+        starts = np.sort(e["vt_s"])
+        ends = np.sort(e["vt_e"])
+    if parts is None:
+        bucket_starts = np.arange(t1, t2, stride, dtype=np.int64)
+        deg = (np.searchsorted(starts, bucket_starts, side="right")
+               - np.searchsorted(ends, bucket_starts, side="right"))
+        series = [{"t": int(t), "degree": int(d)} for t, d in zip(bucket_starts, deg)]
 
     limit = args["limit"]
     return {
@@ -642,7 +833,7 @@ def neighborhood_evolution(adapter: StorageAdapter, args: dict[str, Any]) -> dic
     "Name/uid lookup returning uids — exact uid match first, then "
     "case-insensitive substring on uid and on the `name` prop of any believed "
     "version. Callers obtain uids from this operator.",
-    cost_fn=scan_estimate,
+    cost_fn=_resolve_cost,
 )
 def resolve_entities(adapter: StorageAdapter, args: dict[str, Any]) -> dict[str, Any]:
     q = args["query"]

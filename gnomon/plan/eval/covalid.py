@@ -1,5 +1,4 @@
-"""The the shared-instant rule nodes: a
-variable-length step, an `optional`/`not` join and the per-version-tuple
+"""variable-length step, an `optional`/`not` join and the per-version-tuple
 collapse, under one shared valid instant. Reference evaluators over the
 window scans, with instant sets held as sorted lists of disjoint half-open
 intervals."""

@@ -1,16 +1,17 @@
-"""The fixed per-call cost of `call_operator` is memoized, and no memo can
-change an answer, an envelope byte, or a validation verdict.
+"""memo can change an answer, an envelope byte, or a validation verdict.
 
-* The native `stats()` serves a per-generation summary. It must equal the
-  statistics a DuckDB adapter computes for the same writes after every
+  the statistics a DuckDB adapter computes for the same writes after every
   commit, which is the cross-backend agreement `estimate_cost` relies on.
-* `validate_args` memoizes filled arguments. The caller must get a copy it
-  can mutate, an invalid call must fail after a valid one that is equal as
-  a value but not as Python types, and `args_echo` keeps the caller's key
-  order.
+  copy it can mutate, an invalid call must fail after a valid one that is
+  equal as a value but not as Python types, and `args_echo` keeps the
+  caller's key order.
+  call's own leaf and payload, byte for byte, on a first and a repeated
+  call, truncated or not.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -19,6 +20,8 @@ from gnomon.storage.duckdb_adapter import DuckDBAdapter
 from gnomon.temporal.algebra import (
     REGISTRY, call_operator, ensure_all_registered, validate_args,
 )
+from gnomon.plan.evaluate import meta_json
+from gnomon.plan.leaf import build_leaf
 
 ensure_all_registered()
 
@@ -100,3 +103,37 @@ def test_args_echo_keeps_the_callers_key_order(tmp_path):
     y = call_operator(a, "resolve_entities", {"limit": 2, "query": "node"})
     assert list(x["args_echo"])[:2] == ["query", "limit"]
     assert list(y["args_echo"])[:2] == ["limit", "query"]
+
+
+@pytest.mark.parametrize("backend", ["native", "duckdb"])
+def test_plan_ir_block_is_meta_json_byte_for_byte(tmp_path, backend):
+    a = _native(tmp_path / "n") if backend == "native" else DuckDBAdapter(":memory:")
+    for i, ops in enumerate(_batches()):
+        a.begin()
+        a.apply_ops(ops, 1000 + i)
+        a.commit()
+    calls = [
+        ("resolve_entities", {"query": "node", "limit": 2}),          # truncated, cursor
+        ("resolve_entities", {"query": "node", "limit": 2, "cursor": "2"}),
+        ("resolve_entities", {"query": "node"}),                      # not truncated
+        ("entity_history", {"uid": "n1"}),
+        ("aggregate_events", {"group_by": [{"dim": "rel_type"}],
+                              "aggregates": [{"agg": "count"}],
+                              "window": {"t_a": 0, "t_b": 100}}),
+        ("diff_snapshots", {"t1": 5, "t2": 40, "limit": 1}),
+    ]
+    for _ in range(2):          # the second round is served from the memos
+        for op, args in calls:
+            env = call_operator(a, op, json.loads(json.dumps(args)))
+            leaf = build_leaf(op, env["args_echo"], REGISTRY[op].output_fields)
+            want = meta_json(leaf, env)
+            assert json.dumps(env["plan_ir"]) == json.dumps(want), (op, args)
+            env["plan_ir"]["provenance"]["op"] = "mutated"   # cannot reach the memo
+    # a write moves the generation; the block is still meta_json's
+    a.begin()
+    a.apply_ops(_batches()[0], 5000)
+    a.commit()
+    for op, args in calls:
+        env = call_operator(a, op, json.loads(json.dumps(args)))
+        leaf = build_leaf(op, env["args_echo"], REGISTRY[op].output_fields)
+        assert json.dumps(env["plan_ir"]) == json.dumps(meta_json(leaf, env))

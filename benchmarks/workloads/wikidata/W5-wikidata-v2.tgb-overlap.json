@@ -1,0 +1,33 @@
+{
+ "existed_items": 726994,
+ "tgb_triples": 1944807,
+ "tgb_quadruples": 9856203,
+ "triples": {
+  "not_in_history": 609066,
+  "head_after_dump": 673097,
+  "in_final": 535770,
+  "tail_after_dump": 126093,
+  "removed_by_2019": 781
+ },
+ "quadruples": {
+  "not_in_history": 4283542,
+  "head_after_dump": 2267464,
+  "in_final": 2783822,
+  "tail_after_dump": 513699,
+  "removed_by_2019": 7676
+ },
+ "triples_pct": {
+  "not_in_history": 31.32,
+  "head_after_dump": 34.61,
+  "in_final": 27.55,
+  "tail_after_dump": 6.48,
+  "removed_by_2019": 0.04
+ },
+ "quadruples_pct": {
+  "not_in_history": 43.46,
+  "head_after_dump": 23.01,
+  "in_final": 28.24,
+  "tail_after_dump": 5.21,
+  "removed_by_2019": 0.08
+ }
+}

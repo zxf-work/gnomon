@@ -361,7 +361,7 @@ FIRST_NAMES = ("Anna", "Ben", "Chen", "Dara", "Eli", "Fatima", "Goran", "Hana",
 LAST_NAMES = ("Abara", "Becker", "Costa", "Dube", "Eriksen", "Fischer",
               "Garcia", "Hoang", "Ito", "Jensen", "Kowalski", "Lopez",
               "Mbeki", "Nguyen", "Okafor", "Petrov", "Rossi", "Silva",
-              "Tanaka", "Urban", "Vargas", "Wong", "Yilmaz", "Zubiri")
+              "Tanaka", "Urban", "Vargas", "Wong", "Yilmaz", "Zhang")
 COMPANY_SUFFIX = ("Holdings", "Trading", "Logistics", "Capital", "Retail",
                   "Energy", "Software")
 ACCOUNT_TYPES = ("debit", "credit", "savings", "brokerage", "escrow",

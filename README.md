@@ -1,7 +1,7 @@
 # Gnomon
 
-Gnomon is a storage engine for **bi-temporal property graphs**. Every node
-and edge version carries two independent time intervals: *valid time* — when
+Gnomon is a storage engine for **bi-temporal property graphs**: graphs that
+are corrected after the fact. Every node and edge version carries two independent time intervals: *valid time* — when
 the fact held in the world — and *belief time* (transaction time) — when the
 store believed it. Corrections never overwrite: they are appended, and the
 superseded belief stays queryable. Any question can therefore be asked
@@ -10,7 +10,11 @@ answers are both exact and reproducible.
 
 The engine is written in Rust (`crates/gnomon-core`) with a thin Python
 layer (`gnomon`) for the write semantics, the operator registry and the
-tooling.
+tooling. This repository also holds the comparison kit of Gnomon's
+evaluation: the workload generators, the drivers and query texts for every
+system compared, and the jobs that run the evaluation (`benchmarks/`).
+
+**Author:** Xiaofei Zhang, University of Memphis.
 
 ## Contents
 
@@ -23,8 +27,10 @@ tooling.
 - [Repository layout](#repository-layout)
 - [Tests](#tests)
 - [Benchmarks](#benchmarks)
+- [Reproducing the evaluation](#reproducing-the-evaluation)
 - [Limitations](#limitations)
 - [License](#license)
+- [How to cite](#how-to-cite)
 
 ## Why
 
@@ -207,7 +213,8 @@ gnomon store restore --dest bak --store restored # replay a backup and verify it
 | [docs/operators.md](docs/operators.md) | every operator, base and engine-level: what it answers, its parameters, which clock it ranges over; `match` patterns and the shared-instant rule |
 | [docs/install.md](docs/install.md) | toolchain, building the engine and the Python package, wheels, build features |
 | [docs/testing.md](docs/testing.md) | the Rust and Python test suites |
-| [docs/benchmarks.md](docs/benchmarks.md) | the synthetic generator, ingest timing with per-phase breakdown, the query-registry runner, small and large runs |
+| [docs/benchmarks.md](docs/benchmarks.md) | the synthetic generator, ingest timing with per-phase breakdown, the query-registry runner; the comparison kit: systems, protocol, layout |
+| [docs/reproduce.md](docs/reproduce.md) | rerunning the evaluation: building the five workloads, one point on one machine, the full stages on a Slurm cluster |
 | [docs/configuration.md](docs/configuration.md) | environment variables that tune the engine, and the design switches that turn one engine design off at a time |
 | [docs/limitations.md](docs/limitations.md) | scope and known open items |
 
@@ -221,7 +228,17 @@ gnomon/               Python package: Store, storage interface, native adapter,
                       reference evaluator (gnomon/plan), shaped workload
                       generators (gnomon/data), CLI
 scripts/              benchmark drivers: synthetic store builder, query-registry
-                      harness, event-log freezer, receipt checker
+                      harness, event-log freezer, receipt checker; the
+                      comparison drivers and system adapters (extcmp*.py,
+                      w3_*/w4_*/wd_*.py, *_queries.py, timed_runner.py)
+benchmarks/compare/   the comparison kit: server control, windows, schedules,
+                      answer checks, image and package pins, Slurm and
+                      Apptainer path, AeonG build, curated parameter files
+benchmarks/stages/    the evaluation's stages: W1-W3 timed stages, thread
+                      control, store builds, the studies (W4, W5, ablations,
+                      costs, 100M, ...)
+benchmarks/workloads/ the SNB-derived and Wikidata workloads: builders, query
+                      texts per system, parameter files
 benchmarks/schema/    JSON Schema for benchmark receipts
 tests/                Python test suite (the Rust tests live with the crates)
 docs/                 documentation
@@ -248,6 +265,42 @@ python scripts/eval_harness.py --store runs/synth-100k --log runs/synth-100k/eve
 
 Sizes, protocol and output fields: [docs/benchmarks.md](docs/benchmarks.md).
 
+## Reproducing the evaluation
+
+The evaluation compares Gnomon with DuckDB, PostgreSQL, ClickHouse, Neo4j,
+Memgraph, XTDB, LadybugDB, AeonG and Raphtory, and with Gnomon's own
+operators on DuckDB storage, over five workloads:
+
+| workload | data | builder |
+|---|---|---|
+| W1 uniform graph | synthetic, frozen event logs, 1M and 10M edge versions, 0 / 1 / 10 % injected corrections | `scripts/freeze_synth_log.py`, `scripts/inject_corrections.py` |
+| W2 power-law graph | synthetic (degree exponent 2.1), the same sizes and corrections | `scripts/freeze_powerlaw_log.py`, `benchmarks/compare/w2/jobs/` |
+| W3 SNB-derived | LDBC SNB Datagen 0.5.1 (raw mode), replayed history, injected corrections, SF1 and SF10 | `benchmarks/workloads/snb/`, `scripts/w3_snb_*.py` |
+| W4 FinBench-derived | LDBC FinBench datagen 0.1.0, corrections at 0 and 10 %, SF10 | `benchmarks/compare/w4/jobs/`, `scripts/w4_*.py` |
+| W5 Wikidata revisions | the revision history of 1.2M entities (2019-01-01 dump), real corrections | `benchmarks/workloads/wikidata/`, `scripts/wd_*.py` |
+
+[docs/reproduce.md](docs/reproduce.md) gives every step: the site settings
+(`benchmarks/site.env.example`), the third-party inputs with their versions,
+URLs and checksums, building each workload, one point on one machine with
+Docker, and the full stages on a Slurm cluster with Apptainer. In short, one
+point on one machine (W1, 1M edge versions, 0 and 10 % corrections; Gnomon,
+Gnomon on DuckDB storage, DuckDB and PostgreSQL):
+
+```bash
+# after the install above, with the kit's extra: maturin develop --release --extras dev,eval
+export EXTCMP_ROOT=$PWD/../extcmp-work EXTCMP_REPO=$PWD
+EXTCMP_SYSTEMS=native,duckdb,postgres \
+  benchmarks/compare/kit/run_beliefq.sh --commit HEAD --sizes 1000000 --densities 0,10 \
+    --rotations 1 --steps freeze,inject,loads,verify
+benchmarks/compare/kit/run_duckdbsql.sh --points "K1M-d0 K1M-d10" --steps loads,verify
+```
+
+The verify step hashes every answer and compares it across systems
+(`$EXTCMP_ROOT/results/<point>/verdicts.txt`). The evaluation's timings were
+measured on whole, exclusive nodes of one cluster (two 64-core AMD EPYC 7742,
+251 GB of RAM, local NVMe); [docs/benchmarks.md](docs/benchmarks.md)
+describes the protocol.
+
 ## Limitations
 
 Single node, single writer, explicit maintenance, no query language. See
@@ -257,3 +310,7 @@ open items.
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## How to cite
+
+If you use Gnomon, please cite it using [CITATION.cff](CITATION.cff).

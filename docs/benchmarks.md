@@ -177,3 +177,61 @@ Run timed measurements on a quiet machine and compare configurations only
 as interleaved pairs on the same host; the receipts record the host, the
 CPU count and the commit so that numbers from different hosts are never
 silently compared.
+
+## The comparison kit
+
+Gnomon's evaluation compares it with nine systems over five
+workloads. Everything it ran is in `benchmarks/` and `scripts/`;
+[reproduce](reproduce.md) gives the steps.
+
+| system | version | how it runs | driver |
+|---|---|---|---|
+| Gnomon | this repository | in process, in a killable worker | `scripts/extcmp.py` (`native`) |
+| Gnomon on DuckDB storage | this repository, DuckDB 1.5.4 | Gnomon's operators over the DuckDB storage backend | `scripts/extcmp.py` (`duckdb`) |
+| DuckDB (SQL) | 1.5.4 | every query as SQL over version tables; the better of 32 and 64 threads | `scripts/extcmp_duckdbsql.py` (`duckdbsql`) |
+| PostgreSQL | 16.15 | server | `scripts/extcmp.py`, `scripts/pg_queries.py` |
+| ClickHouse | 26.8.1 | server | `scripts/extcmp.py`, `scripts/ch_queries.py` |
+| Neo4j | 5.26.31 community | server | `scripts/extcmp.py`, `scripts/neo4j_queries.py` |
+| Memgraph | 3.12.0 | server | `scripts/extcmp.py`, `scripts/memgraph_queries.py` |
+| XTDB | 2.1.0 | server | `scripts/extcmp_xtdb.py` |
+| LadybugDB | 0.21.2 | in process | `scripts/extcmp_ladybug.py`, `scripts/w3_ladybug.py`, `scripts/w4_ladybug.py` |
+| AeonG | source pinned in `build_aeong.sh` | server, built from source | `scripts/extcmp_aeong.py` |
+| Raphtory | 0.17.0 | in process | `scripts/extcmp_raphtory.py` |
+
+Server images are pinned by digest in `benchmarks/compare/kit/images.lock`,
+the in-process packages in `benchmarks/compare/kit/python.lock`. The SNB-,
+FinBench- and Wikidata-derived workloads have their own drivers
+(`scripts/w3_snb_*.py`, `scripts/w4_*.py`, `scripts/wd_*.py`) and query texts
+per system (`benchmarks/workloads/snb/{queries,cypher}`).
+
+**Protocol.** Every system loads the same frozen event log. Before any
+timing, a gate job answers every instance on every system and compares the
+hashed answers with Gnomon's; an instance on which a system differs is
+excluded for that system only. A timed window starts the server, primes it
+with one unmeasured call, then runs 2 warm-ups and 10 timed calls (1 and 3
+above 1 s) under a 10 s ceiling; systems rotate per query block and the order
+flips between the two rotations. An engine-time pass (warm-ups, then 3 timed
+calls) records, for Gnomon, DuckDB (SQL) and PostgreSQL, the time from a
+call's receipt to its result; end-to-end time is the primary figure.
+
+**Layout.**
+
+| directory | contents |
+|---|---|
+| `benchmarks/compare/kit/` | server control (Docker and Apptainer), windows, schedules, answer checks, the census of the host, Slurm jobs, the AeonG build, the ablation configurations (`lib/ablation_configs.json`) |
+| `benchmarks/compare/p1/`, `benchmarks/compare/params/` | the parameter files every system reads: W1's curated and single-parameter instances, W4 and W5's (W2 and W3 keep theirs in their stage directories) |
+| `benchmarks/compare/eventlogs/` | sha256 of the frozen W1 and W2 event logs |
+| `benchmarks/compare/w2/jobs/`, `benchmarks/compare/w4/jobs/` | building the power-law and FinBench-derived workloads |
+| `benchmarks/stages/w1`, `w2`, `w3` | the timed stages of W1-W3: gate job, timed job, stop rule, summary tables |
+| `benchmarks/stages/studies/` | W4, W5, the ablations and components, Raphtory, memory, sizes, commit cost, ingest, 100M, out-of-order logs, whole-answer checks, the general match path |
+| `benchmarks/stages/threads/`, `stores/`, `confirm/` | the thread-matched control, store builds, the Gnomon-only confirmation mode |
+| `benchmarks/workloads/snb/`, `wikidata/` | the SNB-derived and Wikidata workloads |
+
+**Versions of the stage scripts.** The W1-W3 stage scripts here are the
+versions that timed Gnomon (and Gnomon on DuckDB storage) in the evaluation.
+The other systems' timings came from the earlier versions of the
+same scripts. The later changes add a Gnomon-only mode (`C3_CONFIRM=1`:
+Gnomon re-timed against the other systems' recorded answers) and a drift
+sample (DuckDB (SQL) re-timed on a sample of its cells, to check that the
+host had not drifted); with `C3_CONFIRM` unset, every system runs as in the
+earlier versions. The other differences are messages and opt-in settings.

@@ -12,5 +12,5 @@ target/
 *.so
 *.pyd
 # local stores and benchmark output
-stores/
-runs/
+/stores/
+/runs/

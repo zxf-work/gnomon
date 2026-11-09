@@ -1,0 +1,1466 @@
+{
+ "format": "extcmp-p1-params/1",
+ "version": "p1-v1",
+ "log": {
+  "path": "W5-wikidata-v2.eventlog.jsonl",
+  "sha256": "81fce8712a4aa3c9a14f98ab8c0bb711fefa50dfa7ef5d8cd160ce8578eb106d"
+ },
+ "selection": {
+  "percentiles": [
+   10,
+   50,
+   90,
+   99
+  ],
+  "shuffle": "md5(version, 'order', query, instance)",
+  "instance_id": "md5(version, query, canonical args)[:8]",
+  "notes": [
+   "motif: 1547 nodes lie on a directed 3-cycle in the final graph",
+   "0 duplicate instances (identical arguments) dropped",
+   "curation w5-v2: selection reads the frozen log only (no system is queried); instants from each seed's own out-edge starts at anchors p25/p50/p75; strata correction-touched / correction-free; seeds: MD5 samples of the subjects of the top relation types ['P54', 'P166', 'P39', 'P793', 'P1411']"
+  ]
+ },
+ "counts": {
+  "b.reach@T": 12,
+  "b.reach@now": 6,
+  "b.diff": 10,
+  "b.hist@now": 20,
+  "b.snap.hop2@now": 2,
+  "b.diff@ctl": 3,
+  "b.hist": 20,
+  "b.snap.hop2@T": 6
+ },
+ "instances": [
+  {
+   "query": "b.reach@T",
+   "instance": "49f26b92",
+   "stratum": "correction-touched",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "src": "338612",
+    "window": {
+     "t_a": 61963131600000000,
+     "t_b": 65118826800000000
+    },
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "c900cdcd",
+   "stratum": "correction-free",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "6089642",
+    "window": {
+     "t_a": 59863525200000000,
+     "t_b": 63019220400000000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "5919196a",
+   "stratum": "tt q70",
+   "class": "modern",
+   "factors": {
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1517846006000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "1da0429a",
+   "stratum": "tt q50",
+   "class": "decade",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1510416124000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 63019296000000000,
+     "t_b": 63334828800000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "5d9b1b30",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "2a7f831076b51104cd60dded",
+    "src": "12626",
+    "dst": "1060441",
+    "rel_type": "P150",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "19ad5bb3",
+   "stratum": "correction-touched",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "5591062",
+    "window": {
+     "t_a": 0,
+     "t_b": 1577847600000000
+    }
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "91157497",
+   "stratum": "correction-free",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "seeds": [
+     "538238",
+     "1341173",
+     "30172913",
+     "6686056",
+     "17505484",
+     "16732139",
+     "4086849",
+     "7418493",
+     "27763896",
+     "89325",
+     "44660479",
+     "5498061",
+     "15711778",
+     "752138",
+     "240307",
+     "3570803",
+     "67509",
+     "5542135",
+     "5317875",
+     "12718280"
+    ],
+    "hops": 2,
+    "t_valid": 63177062400000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.snap.hop2@now",
+   "instance": "490ab90e",
+   "stratum": "correction-touched",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "seeds": [
+     "5112939",
+     "674957",
+     "1820832",
+     "7609437",
+     "3056841",
+     "15103946",
+     "65989",
+     "679059",
+     "19957580",
+     "17496848",
+     "5261890",
+     "3813697",
+     "5238709",
+     "151833",
+     "7983987",
+     "28865175",
+     "468518",
+     "10327513",
+     "47491099",
+     "16066790"
+    ],
+    "hops": 2,
+    "t_valid": 62703676800000000,
+    "limit": 10000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "e7aa665b",
+   "stratum": "correction-free",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "src": "7810752",
+    "window": {
+     "t_a": 61914747600000000,
+     "t_b": 65070442800000000
+    },
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "f1370b7b",
+   "stratum": "grid",
+   "class": "decade",
+   "factors": {},
+   "args": {
+    "t1": 63019296000000000,
+    "t2": 63334828800000000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "02b7f6b0",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "c13332b673344fbb7952dd31",
+    "src": "2492",
+    "dst": "19358934",
+    "rel_type": "P26",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "57d5f92b",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "b959cf71b43bc08069e8d705",
+    "src": "5242133",
+    "dst": "766469",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "db29ac2c",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "279dd69b3f96960b5794733b",
+    "src": "852063",
+    "dst": "1322118",
+    "rel_type": "P421",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "1c1fe60b",
+   "stratum": "correction-free",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "4255906",
+    "window": {
+     "t_a": 61662286800000000,
+     "t_b": 64817982000000000
+    }
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "9c1d3b29",
+   "stratum": "correction-free",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "src": "674739",
+    "window": {
+     "t_a": 59074606800000000,
+     "t_b": 62230302000000000
+    },
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "505acf20",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "d199f101ce3a31eae43db01a",
+    "src": "3804441",
+    "dst": "1681805",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "1226d2fe",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "b959cf71b43bc08069e8d705",
+    "src": "5242133",
+    "dst": "766469",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "895c4a34",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "78ac9d27ee2cbef1193f0853",
+    "src": "15180",
+    "dst": "194465",
+    "rel_type": "P793",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "bd55c94a",
+   "stratum": "tt q30",
+   "class": "modern",
+   "factors": {
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1492686434000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "5bf359b5",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "2a7f831076b51104cd60dded",
+    "src": "12626",
+    "dst": "1060441",
+    "rel_type": "P150",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "89056db6",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "887f206005ee17e35542b29d",
+    "src": "53564",
+    "dst": "7892299",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "a52e6df4",
+   "stratum": "correction-free",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "1341173",
+     "30172913",
+     "6686056",
+     "17505484",
+     "16732139",
+     "4086849",
+     "5498061",
+     "752138",
+     "240307",
+     "3570803",
+     "67509",
+     "5542135",
+     "12718280",
+     "20900277",
+     "7810752",
+     "17630984",
+     "4255906",
+     "6089642",
+     "3735652",
+     "8060645"
+    ],
+    "hops": 2,
+    "t_valid": 63303292800000000,
+    "limit": 10000,
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "1c08086e",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "c13332b673344fbb7952dd31",
+    "src": "2492",
+    "dst": "19358934",
+    "rel_type": "P26",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "d40ec919",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "affe73a83439576fd7e54e0d",
+    "src": "142794",
+    "dst": "8682",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "afa97803",
+   "stratum": "correction-touched",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "src": "1281818",
+    "window": {
+     "t_a": 61718965200000000,
+     "t_b": 64874660400000000
+    },
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "9665cb61",
+   "stratum": "tt q90",
+   "class": "modern",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1536596886000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "e65c9bcc",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "e3982f70f9999d8e4ca6b06c",
+    "src": "15282326",
+    "dst": "1472235",
+    "rel_type": "P1411",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "ac40e5ac",
+   "stratum": "correction-touched",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "src": "612803",
+    "window": {
+     "t_a": 61765016400000000,
+     "t_b": 64920711600000000
+    },
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "abbdcc0c",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "78ac9d27ee2cbef1193f0853",
+    "src": "15180",
+    "dst": "194465",
+    "rel_type": "P793",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "88340a84",
+   "stratum": "correction-touched",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "seeds": [
+     "674957",
+     "7609437",
+     "3056841",
+     "15103946",
+     "65989",
+     "679059",
+     "19957580",
+     "17496848",
+     "5261890",
+     "3813697",
+     "5238709",
+     "151833",
+     "468518",
+     "10327513",
+     "11235",
+     "338612",
+     "2033868",
+     "4706719",
+     "57070",
+     "317521"
+    ],
+    "hops": 2,
+    "t_valid": 62703676800000000,
+    "limit": 10000,
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "1deb586b",
+   "stratum": "tt q90",
+   "class": "decade",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "t1": 1536596886000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 63019296000000000,
+     "t_b": 63334828800000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "174afa6c",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 5
+   },
+   "args": {
+    "eid": "143039e94d21f364ea84d45e",
+    "src": "170899",
+    "dst": "2474558",
+    "rel_type": "P39",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "847a5576",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "b018a81e9c22b6ae1c5d5bfa",
+    "src": "6145300",
+    "dst": "41582615",
+    "rel_type": "P39",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "714e652c",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 6
+   },
+   "args": {
+    "eid": "c6770cfb169e5bba3d425056",
+    "src": "2821724",
+    "dst": "432",
+    "rel_type": "P140",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "d4729f33",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "affe73a83439576fd7e54e0d",
+    "src": "142794",
+    "dst": "8682",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "79a1d0e8",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "8b14788777cdc17ce53bf3c7",
+    "src": "734036",
+    "dst": "36767",
+    "rel_type": "P1346",
+    "disc": "#1"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "3aa22d8f",
+   "stratum": "correction-touched",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "src": "11235",
+    "window": {
+     "t_a": 60544616400000000,
+     "t_b": 63700311600000000
+    },
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "fcb8ac9c",
+   "stratum": "correction-free",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "752138",
+     "3570803",
+     "5542135",
+     "12718280",
+     "20900277",
+     "2475780",
+     "758738",
+     "3075957",
+     "16988",
+     "21594707",
+     "516318",
+     "1251932",
+     "1324998",
+     "16736480",
+     "15907071",
+     "2638148",
+     "1624947",
+     "4616422",
+     "6113220",
+     "3087188"
+    ],
+    "hops": 2,
+    "t_valid": 61818076800000000,
+    "limit": 10000,
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "942ab673",
+   "stratum": "correction-free",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "538238",
+     "1341173",
+     "30172913",
+     "6686056",
+     "17505484",
+     "16732139",
+     "4086849",
+     "7418493",
+     "27763896",
+     "44660479",
+     "5498061",
+     "15711778",
+     "752138",
+     "240307",
+     "3570803",
+     "67509",
+     "5542135",
+     "5317875",
+     "12718280",
+     "20900277"
+    ],
+    "hops": 2,
+    "t_valid": 63208598400000000,
+    "limit": 10000,
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "336c8766",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 7
+   },
+   "args": {
+    "eid": "1da362ac993141ebdfae7cf6",
+    "src": "18541274",
+    "dst": "852402",
+    "rel_type": "P102",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "d058bf17",
+   "stratum": "tt q30",
+   "class": "decade",
+   "factors": {
+    "T": "q30"
+   },
+   "args": {
+    "t1": 1492686434000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 63019296000000000,
+     "t_b": 63334828800000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "2af36efb",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 7
+   },
+   "args": {
+    "eid": "2a329084d5c7b12faef1efb8",
+    "src": "83338",
+    "dst": "1260789",
+    "rel_type": "P166",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "0c39f699",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 5
+   },
+   "args": {
+    "eid": "143039e94d21f364ea84d45e",
+    "src": "170899",
+    "dst": "2474558",
+    "rel_type": "P39",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "e5ac4025",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "d199f101ce3a31eae43db01a",
+    "src": "3804441",
+    "dst": "1681805",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "c53d0982",
+   "stratum": "correction-touched",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "2033868",
+    "window": {
+     "t_a": 57757006800000000,
+     "t_b": 60912702000000000
+    }
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "6ccadd4d",
+   "stratum": "correction-free",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "17630984",
+    "window": {
+     "t_a": 60841832400000000,
+     "t_b": 63997527600000000
+    }
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "8a65d280",
+   "stratum": "tt q10",
+   "class": "modern",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1457262623000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "9e7b038d",
+   "stratum": "tt q50",
+   "class": "modern",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "t1": 1510416124000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 59958230400000000,
+     "t_b": 63713520000000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "45aaf8fe",
+   "stratum": "grid",
+   "class": "century",
+   "factors": {},
+   "args": {
+    "t1": 61441372800000000,
+    "t2": 64597132800000000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "b17b5b20",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "ae878f3f20c36ca839a3eb4c",
+    "src": "2551",
+    "dst": "18579504",
+    "rel_type": "P166",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "4695070e",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "279dd69b3f96960b5794733b",
+    "src": "852063",
+    "dst": "1322118",
+    "rel_type": "P421",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "b16d50e7",
+   "stratum": "tt q70",
+   "class": "decade",
+   "factors": {
+    "T": "q70"
+   },
+   "args": {
+    "t1": 1517846006000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 63019296000000000,
+     "t_b": 63334828800000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "16b45fc3",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "b018a81e9c22b6ae1c5d5bfa",
+    "src": "6145300",
+    "dst": "41582615",
+    "rel_type": "P39",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.diff@ctl",
+   "instance": "4be817ce",
+   "stratum": "grid",
+   "class": "modern",
+   "factors": {},
+   "args": {
+    "t1": 59958230400000000,
+    "t2": 63713520000000000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "b06a3b42",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "887f206005ee17e35542b29d",
+    "src": "53564",
+    "dst": "7892299",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "29c10880",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 7
+   },
+   "args": {
+    "eid": "1da362ac993141ebdfae7cf6",
+    "src": "18541274",
+    "dst": "852402",
+    "rel_type": "P102",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "2e8ac01a",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "ae878f3f20c36ca839a3eb4c",
+    "src": "2551",
+    "dst": "18579504",
+    "rel_type": "P166",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "f310616f",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 1
+   },
+   "args": {
+    "eid": "e3982f70f9999d8e4ca6b06c",
+    "src": "15282326",
+    "dst": "1472235",
+    "rel_type": "P1411",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "398d14b1",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 6
+   },
+   "args": {
+    "eid": "c6770cfb169e5bba3d425056",
+    "src": "2821724",
+    "dst": "432",
+    "rel_type": "P140",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@now",
+   "instance": "511487ef",
+   "stratum": "correction-touched",
+   "class": "now",
+   "factors": {},
+   "args": {
+    "src": "6791359",
+    "window": {
+     "t_a": 58570635600000000,
+     "t_b": 61726330800000000
+    }
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "0eede004",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "70528e7ff560697b44e17d65",
+    "src": "6791734",
+    "dst": "1785447",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "ba19bcc2",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 5
+   },
+   "args": {
+    "eid": "d4bb8a94dd3839d10caf8971",
+    "src": "42452285",
+    "dst": "669171",
+    "rel_type": "P291",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.diff",
+   "instance": "1b9cf29c",
+   "stratum": "tt q10",
+   "class": "decade",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "t1": 1457262623000000,
+    "t2": 4611686018427387904,
+    "window": {
+     "t_a": 63019296000000000,
+     "t_b": 63334828800000000
+    },
+    "limit": 1000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "4a6b51c5",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "1119961d68068f41131562c7",
+    "src": "551578",
+    "dst": "13218630",
+    "rel_type": "P39",
+    "disc": "#7"
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "a65cd36e",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 13
+   },
+   "args": {
+    "eid": "162a93576d859b6393952042",
+    "src": "171128",
+    "dst": "5588",
+    "rel_type": "P26",
+    "disc": "#1"
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "1285cfb9",
+   "stratum": "correction-free",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "src": "18739104",
+    "window": {
+     "t_a": 62009874000000000,
+     "t_b": 65165569200000000
+    },
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "5969f8ed",
+   "stratum": "correction-free",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "src": "17630984",
+    "window": {
+     "t_a": 60841832400000000,
+     "t_b": 63997527600000000
+    },
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "b86fd9e5",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "70528e7ff560697b44e17d65",
+    "src": "6791734",
+    "dst": "1785447",
+    "rel_type": "P54",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "4d6c8e09",
+   "stratum": "correction-touched",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "src": "6383803",
+    "window": {
+     "t_a": 62020414800000000,
+     "t_b": 65176110000000000
+    },
+    "as_of_tt": 1510416124000000
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "54f0deb0",
+   "stratum": "correction-touched",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "seeds": [
+     "674957",
+     "7609437",
+     "65989",
+     "17496848",
+     "151833",
+     "11235",
+     "338612",
+     "2033868",
+     "57070",
+     "317521",
+     "478214",
+     "334006",
+     "335420",
+     "259512",
+     "7789763",
+     "750421",
+     "1203",
+     "1217502",
+     "130805",
+     "18976"
+    ],
+    "hops": 2,
+    "t_valid": 62591184000000000,
+    "limit": 10000,
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "89f32901",
+   "stratum": "0 corrections",
+   "class": "0 corrections",
+   "factors": {
+    "versions": 2
+   },
+   "args": {
+    "eid": "1119961d68068f41131562c7",
+    "src": "551578",
+    "dst": "13218630",
+    "rel_type": "P39",
+    "disc": "#7"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "5476a3fb",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 13
+   },
+   "args": {
+    "eid": "162a93576d859b6393952042",
+    "src": "171128",
+    "dst": "5588",
+    "rel_type": "P26",
+    "disc": "#1"
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "54f283b3",
+   "stratum": "1 correction",
+   "class": "1 correction",
+   "factors": {
+    "versions": 3
+   },
+   "args": {
+    "eid": "8b14788777cdc17ce53bf3c7",
+    "src": "734036",
+    "dst": "36767",
+    "rel_type": "P1346",
+    "disc": "#1"
+   }
+  },
+  {
+   "query": "b.snap.hop2@T",
+   "instance": "e7517f6e",
+   "stratum": "correction-touched",
+   "class": "as-of q90",
+   "factors": {
+    "T": "q90"
+   },
+   "args": {
+    "seeds": [
+     "5112939",
+     "674957",
+     "1820832",
+     "7609437",
+     "3056841",
+     "15103946",
+     "65989",
+     "679059",
+     "19957580",
+     "17496848",
+     "5261890",
+     "3813697",
+     "5238709",
+     "151833",
+     "7983987",
+     "28865175",
+     "468518",
+     "10327513",
+     "47491099",
+     "16066790"
+    ],
+    "hops": 2,
+    "t_valid": 62703676800000000,
+    "limit": 10000,
+    "as_of_tt": 1536596886000000
+   }
+  },
+  {
+   "query": "b.hist@now",
+   "instance": "10f6e7b2",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 7
+   },
+   "args": {
+    "eid": "2a329084d5c7b12faef1efb8",
+    "src": "83338",
+    "dst": "1260789",
+    "rel_type": "P166",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.hist",
+   "instance": "765ae769",
+   "stratum": "several corrections",
+   "class": "several corrections",
+   "factors": {
+    "versions": 5
+   },
+   "args": {
+    "eid": "d4bb8a94dd3839d10caf8971",
+    "src": "42452285",
+    "dst": "669171",
+    "rel_type": "P291",
+    "disc": ""
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "ff5a0c27",
+   "stratum": "correction-touched",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "src": "311214",
+    "window": {
+     "t_a": 61300789200000000,
+     "t_b": 64456484400000000
+    },
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "eac8de06",
+   "stratum": "correction-free",
+   "class": "as-of q10",
+   "factors": {
+    "T": "q10"
+   },
+   "args": {
+    "src": "18214464",
+    "window": {
+     "t_a": 61883211600000000,
+     "t_b": 65038906800000000
+    },
+    "as_of_tt": 1457262623000000
+   }
+  },
+  {
+   "query": "b.reach@T",
+   "instance": "a0152bff",
+   "stratum": "correction-free",
+   "class": "as-of q50",
+   "factors": {
+    "T": "q50"
+   },
+   "args": {
+    "src": "262274",
+    "window": {
+     "t_a": 61031134800000000,
+     "t_b": 64186830000000000
+    },
+    "as_of_tt": 1510416124000000
+   }
+  }
+ ]
+}

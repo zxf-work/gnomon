@@ -1,5 +1,4 @@
-"""`paths` under a valid-time window (`valid_window`, the shared-instant rule: a path is valid
-when all of its edges and nodes are valid at one shared instant) and with
+"""when all of its edges and nodes are valid at one shared instant) and with
 FinBench's per-vertex truncation (`truncate`).
 
 Every answer is checked against `Oracle.paths`, which for a window evaluates

@@ -120,7 +120,7 @@ def test_the_reply_pattern_answers_as_the_oracle(social, scope):
     got = run(a, validate(args), route="reference", reference_bypass="test store")
     assert got["rows_total"] > 0
     assert canonical_json(got) == canonical_json(oracle.match(validate(args)))
-    if os.environ.get("GNOMON_TEST_BACKEND") == "native":
+    if os.environ.get("GNOMON_TEST_BACKEND", "native") == "native":
         before = OM.ROUTES["native"]
         nat = run(a, validate(args), route="native")
         assert OM.ROUTES["native"] > before, OM.LAST_DECLINE[0]

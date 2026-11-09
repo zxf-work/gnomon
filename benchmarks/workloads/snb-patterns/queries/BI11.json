@@ -1,0 +1,267 @@
+{
+ "row": "BI11",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "a",
+      "labels": [
+       "Person"
+      ],
+      "uids": "$persons"
+     },
+     {
+      "var": "b",
+      "labels": [
+       "Person"
+      ],
+      "uids": "$persons"
+     },
+     {
+      "var": "c",
+      "labels": [
+       "Person"
+      ],
+      "uids": "$persons"
+     }
+    ],
+    "steps": [
+     {
+      "from": "a",
+      "to": "b",
+      "rel_type": "KNOWS",
+      "dir": "both",
+      "var": "k1"
+     },
+     {
+      "from": "b",
+      "to": "c",
+      "rel_type": "KNOWS",
+      "dir": "both",
+      "var": "k2"
+     },
+     {
+      "from": "c",
+      "to": "a",
+      "rel_type": "KNOWS",
+      "dir": "both",
+      "var": "k3"
+     }
+    ],
+    "where": [
+     {
+      "cmp": "<",
+      "l": {
+       "cast": {
+        "col": "a.uid"
+       },
+       "to": "int"
+      },
+      "r": {
+       "cast": {
+        "col": "b.uid"
+       },
+       "to": "int"
+      }
+     },
+     {
+      "cmp": "<",
+      "l": {
+       "cast": {
+        "col": "b.uid"
+       },
+       "to": "int"
+      },
+      "r": {
+       "cast": {
+        "col": "c.uid"
+       },
+       "to": "int"
+      }
+     },
+     {
+      "bool": "and",
+      "l": {
+       "cmp": ">=",
+       "l": {
+        "col": "k1.vt_s"
+       },
+       "r": {
+        "lit": "$start",
+        "tau": "ts"
+       }
+      },
+      "r": {
+       "cmp": "<=",
+       "l": {
+        "col": "k1.vt_s"
+       },
+       "r": {
+        "lit": "$end",
+        "tau": "ts"
+       }
+      }
+     },
+     {
+      "bool": "and",
+      "l": {
+       "cmp": ">=",
+       "l": {
+        "col": "k2.vt_s"
+       },
+       "r": {
+        "lit": "$start",
+        "tau": "ts"
+       }
+      },
+      "r": {
+       "cmp": "<=",
+       "l": {
+        "col": "k2.vt_s"
+       },
+       "r": {
+        "lit": "$end",
+        "tau": "ts"
+       }
+      }
+     },
+     {
+      "bool": "and",
+      "l": {
+       "cmp": ">=",
+       "l": {
+        "col": "k3.vt_s"
+       },
+       "r": {
+        "lit": "$start",
+        "tau": "ts"
+       }
+      },
+      "r": {
+       "cmp": "<=",
+       "l": {
+        "col": "k3.vt_s"
+       },
+       "r": {
+        "lit": "$end",
+        "tau": "ts"
+       }
+      }
+     }
+    ]
+   },
+   "return": {
+    "group": {
+     "by": [],
+     "aggs": [
+      {
+       "as": "count",
+       "fn": "count"
+      }
+     ]
+    }
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "country": {
+     "pick": [
+      "countries",
+      0
+     ]
+    },
+    "start": {
+     "date": "2010-01-01"
+    },
+    "end": {
+     "date": "2012-07-01"
+    },
+    "persons": {
+     "probe": {
+      "pattern": {
+       "nodes": [
+        {
+         "var": "x",
+         "labels": [
+          "Person"
+         ]
+        },
+        {
+         "var": "ci",
+         "labels": [
+          "City"
+         ]
+        },
+        {
+         "var": "cn",
+         "labels": [
+          "Country"
+         ]
+        }
+       ],
+       "steps": [
+        {
+         "from": "x",
+         "to": "ci",
+         "rel_type": "IS_LOCATED_IN",
+         "dir": "out"
+        },
+        {
+         "from": "ci",
+         "to": "cn",
+         "rel_type": "IS_PART_OF",
+         "dir": "out"
+        }
+       ],
+       "where": [
+        {
+         "cmp": "=",
+         "l": {
+          "tprop": [
+           "cn",
+           "name"
+          ],
+          "tau": "str"
+         },
+         "r": {
+          "lit": "$country"
+         }
+        }
+       ]
+      },
+      "return": {
+       "rows": [
+        {
+         "as": "uid",
+         "expr": {
+          "col": "x.uid"
+         }
+        }
+       ]
+      },
+      "scope": {
+       "vt": {
+        "instant": "$now"
+       }
+      },
+      "params": {
+       "country": {
+        "pick": [
+         "countries",
+         0
+        ]
+       }
+      }
+     },
+     "col": "uid",
+     "all": true
+    }
+   }
+  }
+ ]
+}

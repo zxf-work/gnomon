@@ -1,5 +1,4 @@
-"""The belief diff as an operator, and one identity's belief log.
-
+"""
 * `diff_belief` (engine-level, registered beside `match`): every version
   whose belief state changed between two transaction times inside a
   valid-time window. The native engine answers through `beliefdiff.rs`; the
@@ -7,10 +6,10 @@
 * `version_history(ref, include_props)` (engine-level arguments): the belief
   log of one node or edge, every version ever written, with both clocks and
   optionally the props. Versions closed by a bare retraction are in it,
-  which a composition of adapter calls (`full_history_walk`) could miss.
+  could miss.
 
 Both are checked against the oracle on random bi-temporal stores, on the
-native engine and on DuckDB, and both stay outside the base operator set.
+native engine and on DuckDB, and both stay off every base-schema surface.
 """
 
 from __future__ import annotations
@@ -210,15 +209,12 @@ def test_ref_arguments_are_validated():
 
 # ---- engine-level only ----------------------------------------------------- #
 
-def test_diff_belief_is_registered_beside_the_base_operators():
-    assert "diff_belief" in REGISTRY and "diff_belief" not in BASE_OPERATORS
 
-
-def test_ref_and_include_props_are_not_in_the_base_schema():
+def test_ref_and_include_props_are_not_in_the_agent_schema():
     spec = REGISTRY["version_history"]
     for k in ("ref", "include_props"):
         assert k not in spec.args_schema["properties"]
         assert "default" not in spec.engine_schema["properties"][k]
     with pytest.raises(SchemaError):
         validate_args("version_history", {"kind": "node", "ref": {"uid": "u1"},
-                                          "window": {"t_a": 0, "t_b": 10}}, base_schema=True)
+                                          "window": {"t_a": 0, "t_b": 10}}, agent=True)

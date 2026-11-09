@@ -341,13 +341,11 @@ def test_cli_digest_prints_the_same_value_both_ways(tmp_path: Path, capsys):
 
 
 # --------------------------------------------------------------------- #
-# Addendum -- the Python reference's sort is now total
 # --------------------------------------------------------------------- #
 #
 # `content_digest`'s sort key -- (uid|eid, vt_s, vt_e, props text) -- does
 # not separate two versions of the same identity over the same valid
 # interval and the same props that differ only in `label`/`source`/
-# `provenance_ref` (hashed, not keyed on). Before this addendum, a tie there
 # was broken by whatever order `all_*_versions()` happened to return --
 # documented unspecified, so the reference's own value depended on layout:
 # two independently-built stores holding the *same logical content* could
@@ -369,9 +367,6 @@ def test_the_python_reference_is_layout_independent_on_a_tie(tmp_path: Path):
     order -- exactly the "unspecified" layout difference the reference's
     old, non-total key was exposed to.
 
-    Before this addendum this test fails: the two stores' `content_digest()`
-    disagree (verified directly against the pre-addendum four-component key
-    while writing this test -- `fd0d1045…` vs `96729c77…` on this exact
     fixture). With the fifth, canonical-bytes component appended, both
     orders sort the tied rows the same way and the digests agree.
     """
@@ -404,9 +399,7 @@ def test_the_rust_streaming_digest_agrees_with_the_python_reference_on_the_tie(
     """The same two differently-ordered stores as above, checked against the
     engine's streaming digest rather than the posthoc reference:
     `digest.rs` already broke ties on the row's own canonical bytes (it is
-    the reference this addendum matches), so it was already
     layout-independent on this fixture. What this test adds is the
-    three-way equality the addendum is for: both orders' streaming digest
     equal each other *and* equal the now-fixed Python reference, and both
     sides count the same `ambiguous_ties`."""
     store_ab = gnomon.open(tmp_path / "ab", backend="native")
@@ -451,7 +444,6 @@ def test_a_recorded_receipt_reproduces_bit_for_bit_with_the_total_sort(
     particular is unchanged.
 
     ~100k rows, ~15 s on a laptop -- the audit's own 1M/10M cells (the ones
-    with digests actually pinned as `4ca32fd8…`/`ff9a15e2…`) are not
     reproduced here; those need a larger machine.
     """
     recorded_digest = ("019ea38fb24b729237f546a4656e4697e1d81f122d60aa33dec"

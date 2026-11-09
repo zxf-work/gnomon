@@ -1,0 +1,856 @@
+"""Level-0 dependency scopes for the opaque leaves.
+
+makes explicitly legal. This module replaces it **per operator**, following
+value is highest — and the other twelve keep `"*"`.
+
+**Rollback is one line and is never a correctness event.** Delete an entry from
+widening is always sound, so a reverted derivation can cost precision and can
+never cost correctness. Nothing else in the tree needs to change.
+
+Two things a reader should not expect to find here:
+
+- **`kinds` rarely narrows.** `𝒩 ∪ 𝒟` is all five wire kinds, and a kinds set
+  naming all five *is* ⊤, so any node-touching scan's
+  `kinds` canonicalizes to `"*"`. The narrowing for those operators lives in
+  `targets`, `vt` and `props` — writing an enumeration that means ⊤ would only
+  look like precision. `ℰ` and `𝒩` alone are four of five and do narrow.
+- **No interval adjustment.** A derivation copies Σ's window and stops.
+  The right-closure lives on the footprint side, in `vt_closed` /
+  `vt_from`.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from gnomon.core.model import OPEN_END
+from gnomon.plan.depscope import (
+    TOP, TOP_TERM, Incident, K_DENSE_ID, K_EDGE, K_NODE, ScopeTerm, Targets,
+)
+from gnomon.plan.types import Sigma
+
+#: `Pᵥ` — the value-arm property vocabulary. It names
+#: `@identity`, `@extent` and `@event_key` and **not** `@recut`/`@version`,
+#: which is exactly what keeps an event-keyed operator's window against the
+#: carve arm.
+#:
+#: The IR writes `Pᵥ` as "⊤ over real property keys ∪ {…}", which the wire format
+#: cannot encode: `props` is `"*"` (everything, pseudo-keys included) or a
+#: list. Emitting the pseudo-keys alone matches **exactly the same footprints**,
+#: `ingest_events`' edge arm) or carries `@extent` beside its real keys
+#: (`correct`, `retract`, `ingest_events`' node arm) — the sole exception being
+#: the carve arm, which carries `{@recut, @version}` and is the one this
+#: vocabulary is designed to exclude. So dropping the unencodable "real keys"
+#: half changes no verdict.
+P_VALUE: tuple[str, ...] = ("@identity", "@extent", "@event_key")
+
+#: `@recut` promotes a term into the carve arm's reach: the arm carries
+#: `vt = "*"`, so it overlaps any window.
+P_CARVE_REACHED: tuple[str, ...] = P_VALUE + ("@recut",)
+
+
+def _uid_list(args: dict[str, Any], key: str = "uid") -> tuple[str, ...] | None:
+    uid = args.get(key)
+    return (uid,) if isinstance(uid, str) and uid else None
+
+
+# ---------------------------------------------------------------------------
+# shared helpers for the ten-operator rollout
+# ---------------------------------------------------------------------------
+
+def _existence_terms(uids: tuple[str, ...]) -> tuple[ScopeTerm, ScopeTerm]:
+    """The IR's `existence(U)` pair.
+
+    Seven of the ten rolled-out operators call `adapter.dense_ids` on
+    argument-supplied uids and let `NotFoundError` escape. A uid's dense id
+    comes into existence through `assert_node`, or through `ensure_entities`
+    on `assert_edge`/`ingest_events` (`𝒟`), and never disappears — so a write
+    that merely *registers* one of `U` flips such a call's outcome from
+    `E_NOT_FOUND` to a result. `vt` is ⊤ on both
+    terms: a uid can be registered at any valid-time location, and the flip
+    does not depend on where. `props = ("@identity",)` is the whole of the
+    reach — `correct` and `retract` cannot create an entity, so they carry no
+    `@identity`, and the pair stays narrow against them.
+    """
+    return (
+        ScopeTerm(kinds=("assert_node", "ingest_events"), targets=Targets(nodes=uids),
+                  rel_types=TOP, vt=TOP, vt_mode="overlap", props=("@identity",)),
+        ScopeTerm(kinds=K_DENSE_ID,
+                  targets=Targets(incident=Incident("either", uids)),
+                  rel_types=TOP, vt=TOP, vt_mode="overlap", props=("@identity",)),
+    )
+
+
+def _edge_target(uids: tuple[str, ...] | None = None, role: str = "either") -> Targets:
+    """`E = Targets(edges=TOP)` (matches every edge footprint, no node
+    footprint) when `uids` is empty/absent, or an `incident` arm over `uids`
+    under `role` otherwise. Never a `nodes` arm — this is exclusively the edge
+    side of a term."""
+    if not uids:
+        return Targets(edges=TOP)
+    return Targets(incident=Incident(role, uids))
+
+
+def _window_vt(args: dict[str, Any]) -> tuple[tuple[int, int], ...] | None:
+    """`W = ((t_a, t_b),)`, copied from Σ's window and stopped — or
+    `None` when the window is absent, malformed, or empty, which every caller
+    treats as "fall back to `(TOP_TERM,)`"."""
+    w = args.get("window")
+    if not isinstance(w, dict) or "t_a" not in w or "t_b" not in w:
+        return None
+    try:
+        t_a, t_b = int(w["t_a"]), int(w["t_b"])
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= t_a < t_b <= OPEN_END):
+        return None
+    return ((t_a, t_b),)
+
+
+def _instant_vt(t: Any) -> tuple[tuple[int, int], ...] | None:
+    """`[t, t+1)` — a read-region fact for an instant read, not a"""
+    if not isinstance(t, int) or not (0 <= t < OPEN_END):
+        return None
+    return ((t, t + 1),)
+
+
+# ---------------------------------------------------------------------------
+# entity_history, the narrow anchor
+# ---------------------------------------------------------------------------
+
+def entity_history_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """One identity, as a node **and** as an edge endpoint.
+
+    `V = ⊤` because the operator takes no window: it returns the identity's
+    whole believed version list, and the IR rejects narrowing `V` to the extent
+    actually returned — a new version outside that extent is still a new row.
+    `P = ⊤` because rows are `to_json()` of the version, `props` and `vid`
+    included, which also makes the operator carve-reachable.
+
+    **The incident arm is not optional, and not about `include_edges`.**
+    `assert_edge` and `ingest_events` call `ensure_entities` for their
+    endpoints, registering a dense id **without necessarily writing a node
+    version** — so an edge op naming a previously unknown `uid` flips this
+    operator's outcome from `E_NOT_FOUND` to an empty result. An outcome change
+    is a change. A `nodes`-only term would admit `𝒟`
+    in its first conjunct and never satisfy its second, because both `𝒟`
+    members write *edge* footprints.
+
+    **Three terms, not one** — the shape the IR's worked example emits. Merging
+    them into a single term with `kinds: "*"` and `props: "*"` would be sound
+    (it is a superset) and measurably coarser: on the common
+    `include_edges = false` call it would let *every* edge `correct` incident to
+    `uid` invalidate a result that reads no edges, where the `𝒟` term admits
+    only the one effect that can reach it — a dense id coming into existence,
+    which is `@identity`.
+    """
+    uids = _uid_list(args)
+    if uids is None:
+        return (TOP_TERM,)
+    terms = [
+        # the node term: `𝒩`, which is four of the five wire kinds and so a
+        # real narrowing — `assert_edge` is not in it
+        ScopeTerm(kinds=K_NODE, targets=Targets(nodes=uids), rel_types=TOP,
+                  vt=TOP, vt_mode="overlap", props=TOP),
+        # the `𝒟` term: an edge op that merely *mentions* `uid` registers its
+        # dense id, and that is the whole of its reach here
+        ScopeTerm(kinds=K_DENSE_ID, targets=Targets(incident=Incident("either", uids)),
+                  rel_types=TOP, vt=TOP, vt_mode="overlap", props=("@identity",)),
+    ]
+    if args.get("include_edges"):
+        # now the incident edges are in the answer, so every effect on them is
+        terms.append(ScopeTerm(
+            kinds=K_EDGE, targets=Targets(incident=Incident("either", uids)),
+            rel_types=TOP, vt=TOP, vt_mode="overlap", props=TOP))
+    return tuple(terms)
+
+
+# ---------------------------------------------------------------------------
+# neighborhood_evolution, the second narrow anchor
+# ---------------------------------------------------------------------------
+
+def neighborhood_evolution_terms(args: dict[str, Any],
+                                 sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Edges incident to one identity, over `[t1, t2+1)`, plus the `dense_ids`
+    existence pair.
+
+    `K = ℰ` — a genuine four-of-five narrowing: node ops cannot change this
+    answer, because unlike `snapshot_subgraph` the operator does not gate on
+    node validity. Its outputs are neighbour **uids** and a degree count, read
+    from *edge endpoints*, so it binds no node-version column and carries no
+    `nodes` arm.
+
+    interval counts)**: splitting a believed interval into consecutive
+    fragments leaves `#{versions with vt_s <= b < vt_e}` unchanged at every
+    instant `b`, which is exactly what this operator computes. That exclusion
+    is what keeps `V = [t1, t2+1)` worth having — with `P = ⊤` the carve arm's
+    `vt = "*"` would overlap the window and the narrowing would buy nothing.
+
+    on `vt_s` (that is CE-5), so it must not be carried to `aggregate_events`.
+
+    **The existence pair (the IR's finding).** The shipped single `K_EDGE` term
+    carries only an `incident` arm, so it cannot match a *node* footprint —
+    but the operator calls `adapter.dense_ids([uid])`
+    (`gnomon/temporal/ops_snapshot.py:332`) and raises `NotFoundError` when the
+    centred uid has never been registered. An `assert_node`/`ingest_events`
+    that merely registers `uid` therefore flips the outcome from
+    `E_NOT_FOUND` to a result — reachable only for a *failed* call whose scope
+    was nonetheless recorded, which is exactly why the
+    old single-term scope was a soundness gap rather than an intentional
+    narrowing. Additive and widening: it costs precision only on the
+    common case where `uid` already exists, and it never costs correctness.
+    """
+    uids = _uid_list(args)
+    t1, t2 = args.get("t1"), args.get("t2")
+    if uids is None or not isinstance(t1, int) or not isinstance(t2, int):
+        return (TOP_TERM,)
+    return (ScopeTerm(
+        kinds=K_EDGE,
+        targets=Targets(incident=Incident("either", uids)),
+        rel_types=TOP,
+        vt=((t1, t2 + 1),),
+        vt_mode="instant",
+        props=("@identity", "@extent"),
+    ),) + _existence_terms(uids)
+
+
+# ---------------------------------------------------------------------------
+# aggregate_events, the aggregate anchor
+# ---------------------------------------------------------------------------
+
+def aggregate_events_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """One edge term, plus a node term when a `label` dimension is grouped on.
+
+    The edge term is memo the IR's *relation type × temporal interval × predicate
+    scope* made precise: `K = ℰ`, `T = rel_types` or ⊤, `I =
+    endpoint_filter` or ⊤, `V = window`, `P = Pᵥ`.
+
+    **The `label` term (gate finding FF-3) is a soundness requirement, not a
+    precision one.** A `label` dimension resolves each endpoint's label through
+    `_labels_at` → `adapter.nodes_columnar`, so the answer is a function of node
+    version state; a `K = ℰ` domain excludes `assert_node("B","Bot",…)`, which
+    can change the group keys, the row count and the digest, and would fail
+    `intersects`' *first* conjunct. Its `rel_types` **must** be `"*"`:
+    `intersects` consults `rel_types` only for edge footprints, so a
+    rel-type-restricted node term would be meaningless — or unsound if an
+    implementer "fixed" it by consulting `rel_types` anyway.
+
+    **The `duration` exception.** `min`/`max`/`mean` with
+    `of: "duration"` compute `vt_e − vt_s`, a function of *both* endpoints, so a
+    refinement outside the window changes the answer: an edge believed
+    `[0,100)` gives `max_duration = 100` over `window = [0,20)`; a `correct`
+    over `[50,60)` leaves `[0,50)` in-window and the answer becomes `50`, while
+    the value arm's `vt = [50,61)` misses `[0,20)`. Such a call adds `@recut` to
+    `P` and is thereby carve-reachable: it keeps `K`, `I` and `T` and loses `V`.
+    `of: "vt_s"` does not — an event key is bounded by the value arm — and the
+    three sequence aggregates read only the `vt_s` array, so they stay `Pᵥ`.
+    """
+    window = args.get("window")
+    if not isinstance(window, dict) or "t_a" not in window or "t_b" not in window:
+        return (TOP_TERM,)
+    vt = ((int(window["t_a"]), int(window["t_b"])),)
+
+    rel_types = args.get("rel_types")
+    rel = tuple(rel_types) if rel_types else TOP
+
+    terms = [ScopeTerm(
+        kinds=K_EDGE,
+        targets=_endpoint_targets(args),
+        rel_types=rel,
+        vt=vt,
+        vt_mode="event",
+        props=P_CARVE_REACHED if _reads_duration(args) else P_VALUE,
+    )]
+
+    if _groups_on_label(args):
+        terms.append(ScopeTerm(
+            kinds=K_NODE,
+            # The IR writes this arm as `endpoint_filter.uids ∪ "*"`, whose
+            # literal reading is ⊤ — and ⊤ is also the only sound reading: a
+            # `label` dimension may name the *opposite* endpoint from the one
+            # `endpoint_filter` restricts, so the labels read are not confined
+            # to the filtered uid set.
+            targets=Targets(nodes=TOP),
+            rel_types=TOP,        # never rel-type-restricted: see the docstring
+            vt=vt,
+            vt_mode="event",
+            props=("@label", "@identity", "@extent"),
+        ))
+    return tuple(terms)
+
+
+def _endpoint_targets(args: dict[str, Any]) -> Any:
+    """`I` for the edge term: the cohort pre-filter, or ⊤.
+
+    An **empty** `uids` list is a legal argument meaning an empty population
+    (the schema says so), and its answer is constant-empty. Rather than emit a
+    vacuous term for it, this widens to ⊤ — precision is worthless on an answer
+    member matches".
+    """
+    ep = args.get("endpoint_filter")
+    if not isinstance(ep, dict) or not ep.get("uids"):
+        return Targets(edges=TOP)
+    return Targets(incident=Incident(ep["role"], tuple(ep["uids"])))
+
+
+def _groups_on_label(args: dict[str, Any]) -> bool:
+    return any(isinstance(d, dict) and d.get("dim") == "label"
+               for d in (args.get("group_by") or []))
+
+
+def _reads_duration(args: dict[str, Any]) -> bool:
+    return any(isinstance(a, dict) and a.get("of") == "duration"
+               for a in (args.get("aggregates") or []))
+
+
+# ---------------------------------------------------------------------------
+#
+# ---------------------------------------------------------------------------
+
+def _motif_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """One derivation, two `LEAF_SCOPES` entries (`count_temporal_motifs`,
+    `find_temporal_motif_instances`).
+
+    **Reads.** `_events` (`ops_motifs.py:116-140`): with a `node_filter`,
+    `adapter.dense_ids(sorted(set(node_filter)))` (`:121`); then
+    `adapter.edges_columnar(vt_min=t_a, vt_max=t_b, touching_ids=…,
+    touching_both=ids is not None)` (`:127-130`) and the event mask
+    `vt_s ∈ [t_a, t_b)` (`:131`). `_EVENT_COLS` carries no `vid`, no `vt_e`
+    (`:113`).
+
+    **`T = ⊤` always and explicitly** — the matcher ignores `rel_type`
+    (`ops_motifs.py:8`), so no rel-type narrowing is available even though the
+    column is read and emitted.
+
+    **`I`.** `role="both"` on the read term is *narrower than* "an op
+    touching any filtered uid is in scope" and is nonetheless sound, because
+    the scan is asked for `touching_both=True` (`:130`): an edge with exactly
+    one endpoint in the filter never enters the event set. Unfiltered, `I = ⊤`
+    (as `E`) — a motif instance is a combination, not a neighbourhood, and a
+    single added event can complete an instance whose other edges were
+    already present.
+
+    The existence pair, by contrast, uses `role="either"`: `dense_ids` is
+    called on the **whole** filter set and raises if *any* one of its uids is
+    unknown, so registering any single filter uid flips the outcome. That
+    asymmetry — `both` on the read term, `either` on the existence term — is
+    this derivation's one subtlety.
+
+    **`P = Pᵥ`**: rows expose `t = vt_s` and the scan projects no `vid`, no
+    illustration names `find_temporal_motif_instances`).
+
+    An empty `node_filter` (`[]`) is a legal argument (unlike a null one) and
+    means a constant-empty answer, since `dense_ids([])` never raises and no
+    edge can have both endpoints in the empty set; widened to the unfiltered
+    shape rather than risking a vacuous term, same reasoning as
+    `aggregate_events`'s `_endpoint_targets`.
+    """
+    vt = _window_vt(args)
+    delta = args.get("delta")
+    if vt is None or not isinstance(delta, int):
+        return (TOP_TERM,)
+    node_filter = args.get("node_filter")
+    if node_filter is not None and not isinstance(node_filter, list):
+        return (TOP_TERM,)
+    if not node_filter:
+        return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=TOP,
+                          vt=vt, vt_mode="event", props=P_VALUE),)
+    uids = tuple(sorted(set(node_filter)))
+    return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(uids, "both"), rel_types=TOP,
+                      vt=vt, vt_mode="event", props=P_VALUE),) + _existence_terms(uids)
+
+
+count_temporal_motifs_terms = _motif_terms
+find_temporal_motif_instances_terms = _motif_terms
+
+
+# ---------------------------------------------------------------------------
+# temporal_reachability
+# ---------------------------------------------------------------------------
+
+def temporal_reachability_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """One edge term over the whole store, plus the existence pair over `src`.
+
+    **Reads.** `adapter.dense_ids([args["src"]])` (`ops_paths.py:111`);
+    `adapter.edges_columnar(vt_min=t_a, vt_max=t_b, columns=("src_id",
+    "dst_id","vt_s","vt_e"))` (`:113-114`); `adapter.num_entities()` (`:122`,
+    sizing the label array only — an added entity gets `INF` and is excluded,
+    so it is not in `R`); `adapter.uids_for(reached)` (`:141`).
+
+    **`I = ⊤` (as `E`), `T = ⊤`**, both unavoidable: CE-1 (a chain of new
+    edges can connect `src` to nodes the fixpoint never labelled) and, under
+    `delta_max_wait`, non-monotonicity (adding an edge can *remove* a node
+    from the reachable set).
+
+    **`V = window` holds under plain overlap**, and the argument is worth
+    writing because the scan's bounds alone do not establish it: arrivals
+    start at `t_a` and are non-decreasing, so `τ = max(a, vt_s) ≥ t_a`;
+    traversability requires `τ < vt_e`, hence `vt_e > t_a`; and `τ < t_b`
+    forces `vt_s < t_b`. So only edges whose interval overlaps `[t_a, t_b)`
+    can participate, in either the `delta`-free fixpoint or the multi-label
+    search.
+
+    **`P = Pᵥ`**: carving is *not* traversal-neutral — with `delta_max_wait`
+    set, a refinement adds arrival labels and a row can appear — but the
+    narrowing survives by the value arm rather than by neutrality, because
+    every new arrival label is `cs` or `ce`, both inside `vt_closed(cs, ce)`,
+    and every carve-capable op's value arm emits `@extent`, which `Pᵥ` meets.
+    """
+    uids = _uid_list(args, "src")
+    vt = _window_vt(args)
+    if uids is None or vt is None:
+        return (TOP_TERM,)
+    return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=TOP,
+                      vt=vt, vt_mode="overlap", props=P_VALUE),) + _existence_terms(uids)
+
+
+# ---------------------------------------------------------------------------
+# temporal_paths
+# ---------------------------------------------------------------------------
+
+def temporal_paths_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Same shape as `temporal_reachability`, with `P = ⊤` — the one
+    difference, and it lands the contrast test for free.
+
+    **Reads.** `adapter.dense_ids([src, dst])` (`ops_paths.py:220`); `_csr_for`
+    (`:222`, `:288-299`) — either the cached whole-store current-belief TCSR
+    when `as_of_tt` is current, or a windowed `edges_columnar` scan
+    otherwise; `csr.neighbors` per DFS step; `adapter.edge_idents_at` /
+    `adapter.uids_for` for the rows on found paths.
+
+    **`I = ⊤`, `T = ⊤`**. The unwindowed TCSR branch
+    is `ops_paths.py:290-291`'s own "domain follows the answer" argument:
+    the traversal constraints (`τ < vt_e`, `τ < t_b`, `τ ≥ t_a`) make the
+    unwindowed index return identical results, so `V = window` under overlap
+    is sound by exactly `temporal_reachability`'s argument.
+
+    **`P = ⊤` is mandatory and is *not* about the traversal**: paths are
+    ranked by `(arrival, hops, edge sequence)` where the sequence is
+    `(vt_s, eid)` per edge, so a carve changes which fragment's `vt_s`
+    appears in the key and can reorder paths whose arrivals are identical —
+    displaces the `k`-th while every retained path is untouched. So the
+    carve arm reaches this operator and `V` is worth nothing against Class
+    B/C/D ops on edge identities; the entity-kind exclusion in `E` survives
+    and is the whole of the narrowing.
+    """
+    src, dst = args.get("src"), args.get("dst")
+    vt = _window_vt(args)
+    if not isinstance(src, str) or not src or not isinstance(dst, str) or not dst or vt is None:
+        return (TOP_TERM,)
+    uids = tuple(dict.fromkeys((src, dst)))
+    return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=TOP,
+                      vt=vt, vt_mode="overlap", props=TOP),) + _existence_terms(uids)
+
+
+# ---------------------------------------------------------------------------
+# burst_detection
+# ---------------------------------------------------------------------------
+
+def burst_detection_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Two branches, both small.
+
+    **`edge_event_rate`.** `_event_bucket_counts(..., rel_types)`
+    (`ops_series.py:258,262`, `:66-106`) — no entity filter at all, so
+    `I = ⊤` (as `E`).
+
+    **`node_activity`.** `adapter.edges_columnar(vt_min=t_a, vt_max=t_b,
+    rel_types, columns=("src_id","dst_id","vt_s"))` (`:268-270`) masked to
+    `(src_id == uid_id) | (dst_id == uid_id)` and `vt_s ∈ [t_a, t_b)`
+    (`:272-273`), plus `adapter.dense_ids([target.uid])` (`:271`) — hence the
+    existence pair. `K = ℰ`, realised as an `incident("either", uid)` arm,
+    which matches the kernel's own mask exactly.
+
+    **`T = ⊤` when `target.rel_type` is null.**
+
+    **`V = window` with `vt_mode = "event"`**: the series counts events by
+    `vt_s ∈ [t_a, t_b)`, and an edge whose value-arm interval misses the
+    window contributes no such event; `vt_closed` already right-closes the
+    footprint side, so the boundary case is covered there and not here.
+    **`P = Pᵥ`** by gate Appendix A.3: the operator is event-keyed on
+    `vt_s` alone and exposes no version metadata.
+    """
+    target = args.get("target")
+    vt = _window_vt(args)
+    if not isinstance(target, dict) or vt is None:
+        return (TOP_TERM,)
+    rel_type = target.get("rel_type")
+    rel = (rel_type,) if rel_type else TOP
+    kind = target.get("kind")
+    if kind == "edge_event_rate":
+        return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=rel,
+                          vt=vt, vt_mode="event", props=P_VALUE),)
+    if kind == "node_activity":
+        uid = target.get("uid")
+        if not isinstance(uid, str) or not uid:
+            return (TOP_TERM,)
+        uids = (uid,)
+        return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(uids, "either"),
+                          rel_types=rel, vt=vt, vt_mode="event",
+                          props=P_VALUE),) + _existence_terms(uids)
+    return (TOP_TERM,)
+
+
+# ---------------------------------------------------------------------------
+# graph_metric_timeseries
+# ---------------------------------------------------------------------------
+
+#: The IR's per-metric read table (`ops_series.py:109-169`). None of the six
+#: takes an entity filter or a rel-type argument, so `I = ⊤` and `T = ⊤`
+#: always — the split below is only about which entity **kind**(s) the
+#: metric reads, and under which reading (the IR's instant/event distinction;
+#: `vt_mode` is carried, never consulted, so this is documentation only).
+_METRIC_ARMS: dict[str, tuple[str, ...]] = {
+    "edge_event_count": ("edge",),
+    "active_edge_count": ("edge",),
+    "reciprocity": ("edge",),
+    "mean_out_degree": ("edge", "node"),
+    "node_count": ("node",),
+    "new_node_rate": ("node",),
+}
+_METRIC_VT_MODE: dict[str, str] = {
+    "edge_event_count": "event",
+    "active_edge_count": "instant",
+    "reciprocity": "event",
+    "mean_out_degree": "instant",
+    "node_count": "instant",
+    "new_node_rate": "event",
+}
+
+
+def graph_metric_timeseries_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """A six-row metric table plus `new_node_rate`'s `[0, t_b)` widening.
+
+    `mean_out_degree` emits **both** an edge term and a node term — it is the
+    one metric that reads both scans (`ops_series.py:121-133,141-144`).
+
+    **The `new_node_rate` widening is load-bearing**: the answer is a minimum
+    over an identity's whole believed history (`:145-154`), so a node version
+    created entirely before `t_a` can move a birth out of the window (CE-4);
+    a uniform "`V` = the window" rule is unsound for this one metric.
+    Conversely `mean_out_degree`'s edge scan reads `vt_max=t_b` with no
+    `vt_min`, yet its answer depends only on activity at bucket starts
+    inside the window (`_active_at`, `:50-54`): an interval ending at or
+    before `t_a` is active at no bucket start `≥ t_a` — the IR's "domain
+    follows the answer" precedent, its first of three invocations in this
+    design.
+
+    `reciprocity` reads `adapter.num_entities()` (`:159`) as the radix for
+    pair encoding; since every dense id is `< nv` the encoding is injective
+    regardless of `nv`, so the metric value does not depend on the entity
+    count — a hidden read that does not enter `R`, and the reason
+    `reciprocity` keeps `K = ℰ` alone.
+
+    `P = Pᵥ` for all six: rows are `{t_a, t_b, value}`, exposing no property,
+    no `vid` and no version interval — the instant metrics are carve-neutral
+    the argument that a carve's left fragment keeps its `vt_s` while a right
+    fragment's new start is bounded by the value arm.
+    """
+    metric = args.get("metric")
+    vt = _window_vt(args)
+    stride = args.get("stride")
+    if metric not in _METRIC_ARMS or vt is None or not isinstance(stride, int) or stride < 1:
+        return (TOP_TERM,)
+    mode = _METRIC_VT_MODE[metric]
+    t_b = vt[0][1]
+    arms = _METRIC_ARMS[metric]
+    terms = []
+    if "edge" in arms:
+        terms.append(ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=TOP,
+                               vt=vt, vt_mode=mode, props=P_VALUE))
+    if "node" in arms:
+        node_vt = ((0, t_b),) if metric == "new_node_rate" else vt
+        terms.append(ScopeTerm(kinds=K_NODE, targets=Targets(nodes=TOP), rel_types=TOP,
+                               vt=node_vt, vt_mode=mode, props=P_VALUE))
+    return tuple(terms)
+
+
+# ---------------------------------------------------------------------------
+# co_active
+# ---------------------------------------------------------------------------
+
+def _co_active_spec_term(spec: dict[str, Any]) -> ScopeTerm:
+    """One selection's term: `Incident("both"/"src"/"dst", …)` when the spec
+    names one or two endpoints, `E` otherwise — the exact role mapping
+    `_select`'s mask realises. `role="both"` is a **widening** in two
+    directions that must be stated: it admits the reversed edge `dst→src`,
+    and against an `ingest_events` edge arm (whose `identity.src`/`.dst` are
+    whole-batch sets) it fires whenever *some* event has our `src` as source
+    and *some* event has our `dst` as destination, not necessarily the same
+    event. Both admit more than the operator reads, the safe direction."""
+    rel_type = spec.get("rel_type")
+    rel = (rel_type,) if rel_type else TOP
+    src, dst = spec.get("src"), spec.get("dst")
+    if src and dst:
+        tgt = _edge_target((src, dst), "both")
+    elif src:
+        tgt = _edge_target((src,), "src")
+    elif dst:
+        tgt = _edge_target((dst,), "dst")
+    else:
+        tgt = _edge_target()
+    return ScopeTerm(kinds=K_EDGE, targets=tgt, rel_types=rel, vt=TOP,
+                     vt_mode="overlap", props=TOP)
+
+
+def co_active_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Two terms, one per spec, plus one existence pair over the union of the
+    uids both specs name.
+
+    **`V = ⊤`, unconditionally** — `co_active` takes no window argument at
+    unbounded for structural rather than semantic reasons. The reserved
+    measurement campaign).
+
+    **Two terms rather than one**, because the scope's `terms` list is a
+    disjunction and the two selections have independent endpoint and
+    rel-type restrictions; merging them would have to take the union of
+    both, a strictly coarser answer.
+
+    relations, so splitting one believed version into three changes which
+    relations hold — this costs nothing while `V` is already ⊤. The join's
+    own sensitivity (a new interval on either side pairs with untouched
+    intervals on the other) is why the domain covers both selectors' whole
+    populations rather than the returned pairs, and `E`/`incident` per spec
+    is exactly that; `PAIR_CAP`'s `CostError` is an outcome the scope must
+    also cover and depends on the same two populations.
+    """
+    a_spec, b_spec, allen = args.get("a_spec"), args.get("b_spec"), args.get("allen_relation")
+    if not isinstance(a_spec, dict) or not isinstance(b_spec, dict) or not isinstance(allen, dict):
+        return (TOP_TERM,)
+    terms = (_co_active_spec_term(a_spec), _co_active_spec_term(b_spec))
+    uids = tuple(dict.fromkeys(
+        u for spec in (a_spec, b_spec) for u in (spec.get("src"), spec.get("dst")) if u))
+    if uids:
+        terms += _existence_terms(uids)
+    return terms
+
+
+# ---------------------------------------------------------------------------
+# diff_snapshots
+# ---------------------------------------------------------------------------
+
+def diff_snapshots_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Two instants in one `vt` tuple, `P = Pᵥ` — the one place in the
+    snapshot family where the carve arm is excluded, and the derivation's
+    whole value.
+
+    **Reads.** `_point_state` twice, each `nodes_at(t)` + `edges_at(t,
+    columns=_DIFF_EDGE_COLS)` (`ops_snapshot.py:199-205` — `eid`, `vid`,
+    `src_id`, `dst_id`, `rel_type`; deliberately not `vt_s`/`vt_e`); when
+    `scope` is non-null, `adapter.dense_ids(scope["seeds"])` (`:233`), two
+    BFS calls (`:235-236`) and `adapter.uids_for` (`:237,245`);
+    `adapter.props_for_vids` over the identities present at both instants
+    with differing `vid` (`:259-260,270-271`); node `label` comparison
+    (`:262-263`).
+
+    **`I = ⊤` on both terms** (the IR's BFS argument, inherited verbatim, plus
+    The IR's induced-edge strengthening). `T = ⊤` always — the operator has no
+    `rel_types` argument.
+
+    **`P = Pᵥ`**: `vid` here is only a change-*candidate* filter; the emitted
+    rows compare `props` and `label`, which a carve preserves (`_remainder`
+    re-inserts fragments with the old props), a carve can only split and
+    never merge so it cannot collapse two differing versions into one
+    candidate, and a split whose fragments carry equal props yields a `vid`
+    difference the content test discards. Every output list is a set
+    **difference**, so the domain must cover both instants in full — which
+    `I = ⊤` does.
+    """
+    t1, t2 = args.get("t1"), args.get("t2")
+    v2 = _two_instant_vt(t1, t2)
+    if v2 is None:
+        return (TOP_TERM,)
+    terms = [
+        ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=TOP,
+                 vt=v2, vt_mode="instant", props=P_VALUE),
+        ScopeTerm(kinds=K_NODE, targets=Targets(nodes=TOP), rel_types=TOP,
+                 vt=v2, vt_mode="instant", props=P_VALUE),
+    ]
+    scope_arg = args.get("scope")
+    if scope_arg is not None:
+        if not isinstance(scope_arg, dict) or not scope_arg.get("seeds"):
+            return (TOP_TERM,)
+        uids = tuple(dict.fromkeys(scope_arg["seeds"]))
+        terms.extend(_existence_terms(uids))
+    return tuple(terms)
+
+
+def _two_instant_vt(t1: Any, t2: Any) -> tuple[tuple[int, int], ...] | None:
+    iv1, iv2 = _instant_vt(t1), _instant_vt(t2)
+    if iv1 is None or iv2 is None:
+        return None
+    return iv1 + iv2
+
+
+# ---------------------------------------------------------------------------
+# version_history
+# ---------------------------------------------------------------------------
+
+def version_history_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Small, but its value is the entity-kind split, not the window.
+
+    **Reads.** One call, `adapter.versions_page(kind, as_of=…, t_a, t_b,
+    belief, rel_types, offset, limit)` (`ops_versions.py:158-160`), which
+    returns the page columns **and the exact population size** `rows_total`.
+    Validator `ops_versions.py:82-87` forbids `rel_types` when
+    `kind == "node"`. No `dense_ids` call — no existence pair.
+
+    **`I = ⊤` always** (a whole-store belief-log scan). `T = ⊤` for
+    `kind == "node"` by the validator, and for `kind == "edge"` whenever
+    `rel_types` is null.
+
+    **`P = ⊤` unconditionally**: `V = window` is sound only *because* `P = ⊤`
+    makes the carve arm reachable — a `correct` outside the window can
+    re-cut an in-window version's `vid`/`vt_e` and move `rows_total`, and
+    only the carve arm's `vt = "*"` catches it. `P = ⊤` is mandatory here by
+    counts version rows over an **overlap** predicate; exposes `tt_s`/`tt_e`
+    and the current/superseded classification).
+    """
+    kind = args.get("kind")
+    vt = _window_vt(args)
+    if kind not in ("node", "edge") or vt is None:
+        return (TOP_TERM,)
+    if kind == "node":
+        return (ScopeTerm(kinds=K_NODE, targets=Targets(nodes=TOP), rel_types=TOP,
+                          vt=vt, vt_mode="overlap", props=TOP),)
+    rel_types = args.get("rel_types")
+    rel = tuple(rel_types) if rel_types else TOP
+    return (ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=rel,
+                      vt=vt, vt_mode="overlap", props=TOP),)
+
+
+# ---------------------------------------------------------------------------
+# least yield, and the induced-edge argument below is the easiest thing in
+# this document to get wrong)
+# ---------------------------------------------------------------------------
+
+def snapshot_subgraph_terms(args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """Two terms (the split `entity_kind` canonicalisation forces) plus the
+    existence pair over `seeds`.
+
+    **Reads.** `adapter.dense_ids(args["seeds"])` (`ops_snapshot.py:155`);
+    `edges_at` → `edges_columnar(vt_min=t, vt_max=t+1, rel_types=…)`
+    (`:156`, `:39-44`); `nodes_at` → `nodes_columnar(vt_min=t, vt_max=t+1)`
+    (`:157`, `:47-48`); `bfs_node_set` (`:51-68`, pure over the two arrays
+    already read); the induced-edge mask (`:159-160`); node rows carrying
+    `uid` and `label` (`:161-165`); `_edge_rows` → `uids_for` (`:166`,
+    `:71-80`) emitting `eid`, `vid`, `src`, `dst`, `rel_type`, `vt_s`,
+    `vt_e`.
+
+    **`I = ⊤` on *both* read terms at every `hops ≥ 1`.** The argument is
+    stronger than `temporal_reachability`'s: `bfs_node_set`'s chain-of-new-
+    edges argument applies (a node enters the ball via a path that may
+    consist entirely of new edges), but the operator returns the
+    **induced** subgraph (`ops_snapshot.py:159`), so even at `hops = 1` a new
+    edge between two existing *neighbours of seeds* — incident to no seed —
+    becomes an output row. An `incident("either", seeds)` edge arm would
+    miss it; this is precisely the narrowing a less careful implementation
+    would reach for, and it is unsound here.
+
+    **`T = ⊤` on the node term always** (`rel_types` is consulted only for
+    edge footprints) **and on the edge term when `rel_types` is null.**
+
+    **`V = [t_valid, t_valid+1)`** is a read-region fact (`edges_at`/
+
+    in `_edge_rows`), so the instant `V` buys nothing against a Class B/C/D
+    op on a matching-kind identity.
+    """
+    seeds = args.get("seeds")
+    t = args.get("t_valid")
+    vt = _instant_vt(t)
+    if not isinstance(seeds, list) or not seeds or vt is None:
+        return (TOP_TERM,)
+    rel_types = args.get("rel_types")
+    rel = tuple(rel_types) if rel_types else TOP
+    uids = tuple(dict.fromkeys(seeds))
+    return (
+        ScopeTerm(kinds=K_EDGE, targets=_edge_target(), rel_types=rel,
+                 vt=vt, vt_mode="instant", props=TOP),
+        ScopeTerm(kinds=K_NODE, targets=Targets(nodes=TOP), rel_types=TOP,
+                 vt=vt, vt_mode="instant", props=TOP),
+    ) + _existence_terms(uids)
+
+
+# ---------------------------------------------------------------------------
+# the rollout table — one line per operator, and the rollback
+# ---------------------------------------------------------------------------
+
+Derivation = Callable[[dict[str, Any], Sigma], "tuple[ScopeTerm, ...]"]
+
+#: **Delete a line to roll that operator back to `"*"`.** Every absent operator
+#: takes the coarse default, which stays a valid v1 answer
+#: and is a widening, never a correctness event.
+LEAF_SCOPES: dict[str, Derivation] = {
+    "entity_history": entity_history_terms,
+    "neighborhood_evolution": neighborhood_evolution_terms,
+    "aggregate_events": aggregate_events_terms,
+    "count_temporal_motifs": count_temporal_motifs_terms,
+    "find_temporal_motif_instances": find_temporal_motif_instances_terms,
+    "temporal_reachability": temporal_reachability_terms,
+    "temporal_paths": temporal_paths_terms,
+    "burst_detection": burst_detection_terms,
+    "graph_metric_timeseries": graph_metric_timeseries_terms,
+    "co_active": co_active_terms,
+    "diff_snapshots": diff_snapshots_terms,
+    "version_history": version_history_terms,
+    "snapshot_subgraph": snapshot_subgraph_terms,
+}
+
+#: Does this operator's output bind **node-version** columns — a label, a
+#: node's props, a node `vid` — as opposed to bare uids read off edge
+#: endpoints? The IR's first `targets`-shape obligation applies only to the
+#:
+#: Declared only for the operators with a derived scope: the rest carry ⊤
+#: targets, which discharges the obligation trivially. `aggregate_events`
+#: depends on its arguments — the `label` dimension is exactly what makes it
+#: read node versions.
+BINDS_NODE_VERSIONS: dict[str, Callable[[dict[str, Any]], bool]] = {
+    # rows are `to_json()` of node versions: label, props and vid
+    "entity_history": lambda args: True,
+    # neighbours are uids read off edge endpoints; the series is a count
+    "neighborhood_evolution": lambda args: False,
+    "aggregate_events": _groups_on_label,
+    # motif rows are edge-event tuples (src/dst/t/eid/rel_type) — no node
+    # column is ever bound
+    "count_temporal_motifs": lambda args: False,
+    "find_temporal_motif_instances": lambda args: False,
+    # rows are {uid, earliest_arrival}: a uid read off an edge endpoint
+    "temporal_reachability": lambda args: False,
+    # rows carry src/dst/rel_type/eid/t off edge endpoints, never a node column
+    "temporal_paths": lambda args: False,
+    # rows are {t_a, t_b, value, score}: a bucket statistic, no node column
+    "burst_detection": lambda args: False,
+    "graph_metric_timeseries": lambda args: args.get("metric") in
+        {"node_count", "mean_out_degree", "new_node_rate"},
+    # rows are {a: edge_desc, b: edge_desc}: uids read off edge endpoints
+    "co_active": lambda args: False,
+    # nodes_added/removed carry label; props_changed carries node props too
+    "diff_snapshots": lambda args: True,
+    # node kind's rows carry label, vid; edge kind's carry no node column
+    "version_history": lambda args: args.get("kind") == "node",
+    # node rows carry uid and label (ops_snapshot.py:163)
+    "snapshot_subgraph": lambda args: True,
+}
+
+
+def terms_for(op: str, args: dict[str, Any], sigma: Sigma) -> tuple[ScopeTerm, ...]:
+    """The Level-0 terms for one bound call, or the coarse `"*"` term.
+
+    A derivation that cannot read what it needs — an unvalidated or partial
+    argument set, as when a *failed* step still has to contribute its scope
+ — falls back to ⊤ rather than guessing.
+    """
+    derive = LEAF_SCOPES.get(op)
+    if derive is None:
+        return (TOP_TERM,)
+    return derive(args, sigma)
+
+
+__all__ = [
+    "BINDS_NODE_VERSIONS", "Derivation", "LEAF_SCOPES", "P_CARVE_REACHED",
+    "P_VALUE", "aggregate_events_terms", "burst_detection_terms",
+    "co_active_terms", "count_temporal_motifs_terms", "diff_snapshots_terms",
+    "entity_history_terms", "find_temporal_motif_instances_terms",
+    "graph_metric_timeseries_terms", "neighborhood_evolution_terms",
+    "snapshot_subgraph_terms", "temporal_paths_terms",
+    "temporal_reachability_terms", "terms_for", "version_history_terms",
+]

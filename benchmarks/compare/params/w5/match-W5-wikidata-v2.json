@@ -1,0 +1,1071 @@
+{
+ "patterns": [
+  {
+   "id": "holders.P39.now@y50",
+   "class": "holders P39 -> Q3044918",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "3044918"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P39",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P39.Tq50@y50",
+   "class": "holders P39 -> Q3044918",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "3044918"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P39",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P39.Tq90@y75",
+   "class": "holders P39 -> Q3044918",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "3044918"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P39",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63397916568000000
+     },
+     "as_of_tt": 1536596886000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P54.now@y50",
+   "class": "holders P54 -> Q2074",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "2074"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P54",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P54.Tq50@y50",
+   "class": "holders P54 -> Q2074",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "2074"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P54",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P54.Tq90@y75",
+   "class": "holders P54 -> Q2074",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "2074"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P54",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63397916568000000
+     },
+     "as_of_tt": 1536596886000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P166.now@y50",
+   "class": "holders P166 -> Q185493",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "185493"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P166",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P166.Tq50@y50",
+   "class": "holders P166 -> Q185493",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "185493"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P166",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "holders.P166.Tq90@y75",
+   "class": "holders P166 -> Q185493",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "p"
+      },
+      {
+       "var": "x",
+       "uids": [
+        "185493"
+       ]
+      }
+     ],
+     "steps": [
+      {
+       "from": "p",
+       "to": "x",
+       "rel_type": "P166",
+       "dir": "out",
+       "var": "e"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "holder",
+       "expr": {
+        "col": "p.uid"
+       }
+      },
+      {
+       "as": "start",
+       "expr": {
+        "col": "e.vt_s"
+       }
+      },
+      {
+       "as": "end",
+       "expr": {
+        "col": "e.vt_e"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "holder"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "start"
+       },
+       "dir": "asc"
+      }
+     ]
+    },
+    "scope": {
+     "vt": {
+      "instant": 63397916568000000
+     },
+     "as_of_tt": 1536596886000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "path2.P131.P150.now@y50",
+   "class": "path P131/P150 from Q203738",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "x",
+       "uids": [
+        "203738"
+       ]
+      },
+      {
+       "var": "y"
+      },
+      {
+       "var": "z"
+      }
+     ],
+     "steps": [
+      {
+       "from": "x",
+       "to": "y",
+       "rel_type": "P131",
+       "dir": "out"
+      },
+      {
+       "from": "y",
+       "to": "z",
+       "rel_type": "P150",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "y",
+       "expr": {
+        "col": "y.uid"
+       }
+      },
+      {
+       "as": "z",
+       "expr": {
+        "col": "z.uid"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "y"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "z"
+       },
+       "dir": "asc"
+      }
+     ],
+     "limit": 1000
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "path3.P131.P150.P131.now@y50",
+   "class": "path P131/P150/P131 counted",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "x"
+      },
+      {
+       "var": "y"
+      },
+      {
+       "var": "z"
+      },
+      {
+       "var": "w"
+      }
+     ],
+     "steps": [
+      {
+       "from": "x",
+       "to": "y",
+       "rel_type": "P131",
+       "dir": "out"
+      },
+      {
+       "from": "y",
+       "to": "z",
+       "rel_type": "P150",
+       "dir": "out"
+      },
+      {
+       "from": "z",
+       "to": "w",
+       "rel_type": "P131",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "group": {
+      "by": [],
+      "aggs": [
+       {
+        "as": "n",
+        "fn": "count"
+       }
+      ]
+     }
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "star.P127.P793.now@y50",
+   "class": "star P127+P793",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "c"
+      },
+      {
+       "var": "a"
+      },
+      {
+       "var": "b"
+      }
+     ],
+     "steps": [
+      {
+       "from": "c",
+       "to": "a",
+       "rel_type": "P127",
+       "dir": "out"
+      },
+      {
+       "from": "c",
+       "to": "b",
+       "rel_type": "P793",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "group": {
+      "by": [
+       {
+        "as": "a",
+        "expr": {
+         "col": "a.uid"
+        }
+       }
+      ],
+      "aggs": [
+       {
+        "as": "n",
+        "fn": "count"
+       }
+      ]
+     },
+     "order_by": [
+      {
+       "expr": {
+        "col": "n"
+       },
+       "dir": "desc"
+      },
+      {
+       "expr": {
+        "col": "a"
+       },
+       "dir": "asc"
+      }
+     ],
+     "limit": 100
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     }
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "path2.P131.P150.Tq50@y50",
+   "class": "path P131/P150 from Q203738",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "x",
+       "uids": [
+        "203738"
+       ]
+      },
+      {
+       "var": "y"
+      },
+      {
+       "var": "z"
+      }
+     ],
+     "steps": [
+      {
+       "from": "x",
+       "to": "y",
+       "rel_type": "P131",
+       "dir": "out"
+      },
+      {
+       "from": "y",
+       "to": "z",
+       "rel_type": "P150",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "rows": [
+      {
+       "as": "y",
+       "expr": {
+        "col": "y.uid"
+       }
+      },
+      {
+       "as": "z",
+       "expr": {
+        "col": "z.uid"
+       }
+      }
+     ],
+     "order_by": [
+      {
+       "expr": {
+        "col": "y"
+       },
+       "dir": "asc"
+      },
+      {
+       "expr": {
+        "col": "z"
+       },
+       "dir": "asc"
+      }
+     ],
+     "limit": 1000
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "path3.P131.P150.P131.Tq50@y50",
+   "class": "path P131/P150/P131 counted",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "x"
+      },
+      {
+       "var": "y"
+      },
+      {
+       "var": "z"
+      },
+      {
+       "var": "w"
+      }
+     ],
+     "steps": [
+      {
+       "from": "x",
+       "to": "y",
+       "rel_type": "P131",
+       "dir": "out"
+      },
+      {
+       "from": "y",
+       "to": "z",
+       "rel_type": "P150",
+       "dir": "out"
+      },
+      {
+       "from": "z",
+       "to": "w",
+       "rel_type": "P131",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "group": {
+      "by": [],
+      "aggs": [
+       {
+        "as": "n",
+        "fn": "count"
+       }
+      ]
+     }
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  },
+  {
+   "id": "star.P127.P793.Tq50@y50",
+   "class": "star P127+P793",
+   "args": {
+    "pattern": {
+     "nodes": [
+      {
+       "var": "c"
+      },
+      {
+       "var": "a"
+      },
+      {
+       "var": "b"
+      }
+     ],
+     "steps": [
+      {
+       "from": "c",
+       "to": "a",
+       "rel_type": "P127",
+       "dir": "out"
+      },
+      {
+       "from": "c",
+       "to": "b",
+       "rel_type": "P793",
+       "dir": "out"
+      }
+     ]
+    },
+    "return": {
+     "group": {
+      "by": [
+       {
+        "as": "a",
+        "expr": {
+         "col": "a.uid"
+        }
+       }
+      ],
+      "aggs": [
+       {
+        "as": "n",
+        "fn": "count"
+       }
+      ]
+     },
+     "order_by": [
+      {
+       "expr": {
+        "col": "n"
+       },
+       "dir": "desc"
+      },
+      {
+       "expr": {
+        "col": "a"
+       },
+       "dir": "asc"
+      }
+     ],
+     "limit": 100
+    },
+    "scope": {
+     "vt": {
+      "instant": 63019233144000000
+     },
+     "as_of_tt": 1510416124000000
+    },
+    "params": {}
+   }
+  }
+ ],
+ "choice": {
+  "hold_rels": [
+   "P39",
+   "P54",
+   "P166"
+  ],
+  "pair": [
+   "P131",
+   "P150"
+  ],
+  "triple": [
+   "P131",
+   "P150",
+   "P131"
+  ],
+  "star": [
+   "P127",
+   "P793"
+  ]
+ }
+}

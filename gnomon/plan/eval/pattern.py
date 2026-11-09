@@ -398,7 +398,6 @@ def _versions(node: PatternMatch, var: str, adapter: Any, uids: np.ndarray,
               uid_sink: dict[str, tuple[str, ...]] | None = None,
               belief_sink: list[str] | None = None) -> dict[str, dict[str, Any]]:
     """`distinct` — the deduplicated uid list this variable binds across
-    *every* surviving row — is `M5_LEVEL1_SOUNDNESS.md` the IR's `node_uids[var]`
     verbatim; recorded into `uid_sink` **before** the empty-`distinct` early
     return, so a variable that bound nothing is still an honest empty entry
     rather than a missing one (FM-7: an empty binding relation legitimately

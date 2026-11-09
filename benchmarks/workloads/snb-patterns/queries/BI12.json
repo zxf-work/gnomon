@@ -1,0 +1,202 @@
+{
+ "row": "BI12",
+ "store": "snb_shaped",
+ "calls": [
+  {
+   "pattern": {
+    "nodes": [
+     {
+      "var": "p",
+      "labels": [
+       "Person"
+      ]
+     }
+    ],
+    "steps": [],
+    "optional": [
+     {
+      "nodes": [
+       {
+        "var": "m",
+        "labels": [
+         "Post",
+         "Comment"
+        ]
+       },
+       {
+        "var": "po",
+        "labels": [
+         "Post"
+        ]
+       }
+      ],
+      "steps": [
+       {
+        "from": "m",
+        "to": "p",
+        "rel_type": "HAS_CREATOR",
+        "dir": "out"
+       },
+       {
+        "from": "m",
+        "to": "po",
+        "rel_type": "REPLY_OF",
+        "dir": "out",
+        "hops": {
+         "min": 0,
+         "max": null
+        }
+       }
+      ],
+      "where": [
+       {
+        "not": {
+         "is_null": {
+          "tprop": [
+           "m",
+           "content"
+          ],
+          "tau": "str"
+         }
+        }
+       },
+       {
+        "cmp": "<",
+        "l": {
+         "tprop": [
+          "m",
+          "length"
+         ],
+         "tau": "int"
+        },
+        "r": {
+         "lit": "$lengthThreshold"
+        }
+       },
+       {
+        "cmp": ">",
+        "l": {
+         "col": "m.vt_s"
+        },
+        "r": {
+         "lit": "$startDate",
+         "tau": "ts"
+        }
+       },
+       {
+        "bool": "or",
+        "l": {
+         "bool": "or",
+         "l": {
+          "cmp": "=",
+          "l": {
+           "tprop": [
+            "po",
+            "language"
+           ],
+           "tau": "str"
+          },
+          "r": {
+           "lit": "$lang1"
+          }
+         },
+         "r": {
+          "cmp": "=",
+          "l": {
+           "tprop": [
+            "po",
+            "language"
+           ],
+           "tau": "str"
+          },
+          "r": {
+           "lit": "$lang2"
+          }
+         }
+        },
+        "r": {
+         "cmp": "=",
+         "l": {
+          "tprop": [
+           "po",
+           "language"
+          ],
+          "tau": "str"
+         },
+         "r": {
+          "lit": "$lang3"
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "return": {
+    "group": {
+     "by": [
+      {
+       "as": "personId",
+       "expr": {
+        "col": "p.uid"
+       }
+      }
+     ],
+     "aggs": [
+      {
+       "as": "messageCount",
+       "fn": "count",
+       "of": {
+        "col": "m.uid"
+       }
+      }
+     ],
+     "then": {
+      "by": [
+       {
+        "as": "messageCount",
+        "expr": {
+         "col": "messageCount"
+        }
+       }
+      ],
+      "aggs": [
+       {
+        "as": "personCount",
+        "fn": "count"
+       }
+      ]
+     }
+    },
+    "order_by": [
+     {
+      "expr": {
+       "col": "personCount"
+      },
+      "dir": "desc"
+     },
+     {
+      "expr": {
+       "col": "messageCount"
+      },
+      "dir": "desc"
+     }
+    ]
+   },
+   "scope": {
+    "vt": {
+     "instant": "$now"
+    }
+   },
+   "params": {
+    "lengthThreshold": 60,
+    "startDate": {
+     "date": "2011-01-01"
+    },
+    "lang1": "en",
+    "lang2": "de",
+    "lang3": "de"
+   }
+  }
+ ]
+}
