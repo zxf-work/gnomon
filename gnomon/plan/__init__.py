@@ -1,33 +1,41 @@
 """PLAN_IR — the Temporal Graph Intermediate Representation.
 
-nested inside neither, for a reason that is checkable rather than aesthetic:
-`gnomon/temporal/algebra.py` already imports `gnomon.storage.base` and is imported
-by `gnomon.tools.server` and `gnomon.agent.*`, while PLAN_IR must be importable by all
-three *and* must import the registry. So it sits above `temporal` and below
-`tools`/`agent`; putting it inside `temporal/` would create the import cycle
+A top-level package beside `gnomon/temporal/`, not inside it: it imports the
+registry in `gnomon/temporal/algebra.py`, which in turn calls into it for every
+operator call, so putting it inside `temporal/` would create the import cycle
 `algebra → plan_ir → algebra`.
 
-every operator call and evaluates it here, so `leaf`, `evaluate`, `guard`,
-`rollout` and `ttq` are on the live path; `node`, `types`, `expr`, `metadata`,
-`depscope`, `anchor`, `scope_of` and `plan` support them. **No operator kernel
-is touched** — the leaf delegates to `REGISTRY[op].fn` with the
-same arguments, which is why every `result_digest` in the tree is unchanged.
+`call_operator` builds a single-leaf plan for every operator call and
+evaluates it here, so `leaf`, `evaluate`, `guard`, `rollout` and `ttq` are on
+the live path. The leaf delegates to `REGISTRY[op].fn` with the same
+arguments, so the plan path changes no `result_digest`;
+`GNOMON_PLAN_PATH=off` restores the direct call.
 
 What is here:
 
-- `expr` — the IR's row-local expression language (the formal content of R2).
-  that carries the fifteen existing operators, with the IR's schema
-  propagation and the static plan errors.
-- `metadata` — the IR's completeness lattice with its meet, `Exactness`,
-  The IR's provenance, and the `R` tuple minus value.
-  `⊎`.
-- `guard` — the `∅`-kernel `NullAdapter`, which turns the IR's classification into
-  a checkable property.
-  kernel delegation, the `R` tuple, and the single-node plan every call becomes.
-  four envelope keys `tt_q` / `pinned` / `clamped` / `dependency`.
-
-Still to come: `leaves.py` and
-`compiled/`.
+- `types` — the type lattice, `Column`/`Schema`, and `Sigma = (T_v, T_b)`.
+- `expr` — the IR's row-local expression language.
+- `node` — the compositional core operators and the `OpaqueLeaf` that
+  carries the fifteen base operators, with schema propagation and the
+  static plan errors; `propagate` — the metadata propagation rules.
+- `metadata` — the completeness lattice with its meet, `Exactness`,
+  provenance, and the `R` tuple minus value.
+- `ttq`, `depscope`, `anchor`, `scope_of`, `leaves` — the read basis (the
+  frontier capture, the clamp table and the envelope keys `tt_q` / `pinned`
+  / `clamped` / `dependency`), the dependency scope and its canonical JSON,
+  bind-time anchors, and the per-operator scopes; `check` and `footprint`
+  answer whether a later write can change a result.
+- `guard` — the `∅`-kernel `NullAdapter`, which turns the IR's
+  classification into a checkable property.
+- `leaf` / `evaluate` / `plan` — the opaque-leaf path: the kernel
+  delegation, the `R` tuple, and the single-node plan every call becomes.
+- `rollout` — the `GNOMON_PLAN_PATH` switch and `COMPILE_MODE`.
+- the compiled plans of `match`: regular path expressions (`regex`), the
+  runtime relation (`relation`), column pruning (`prune`), scan regions
+  (`scan_region`), plan-level admission (`admission`, `cost`), and the
+  evaluator in `eval/`.
+- `loader`, `explain`, `domain`, `level1` — plan artifacts as JSON, readable
+  verdicts, the declared domain of a result, and Level-1 witness narrowing.
 """
 
 from gnomon.plan.anchor import Anchor, anchor_of, anchor_of_var, anchors_of

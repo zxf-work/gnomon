@@ -19,7 +19,8 @@ difference.
 The operator is registered in `algebra.REGISTRY` for the engine: it runs
 through `call_operator` as an opaque leaf like the other operators, and is
 also callable as `match(adapter, args)`. It is **not** in the base operator
-set (`algebra.BASE_OPERATORS`), so a base-schema caller does not see it.
+set (`algebra.BASE_OPERATORS`); it is an engine-level operator
+(docs/operators.md).
 
 Semantics the compiler fixes, beyond the plan IR's own rules:
 

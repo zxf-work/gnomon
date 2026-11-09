@@ -1,7 +1,8 @@
 """Cost guardrails.
 
 Operators declare a `cost_fn(args, stats) -> {rows_scanned_est, expansions_est}`;
-the router rejects with E_COST *before* execution when estimates exceed
+`call_operator` rejects a call with E_COST *before* execution when
+estimates exceed
 ceilings. The error payload carries the estimate and actionable narrowing
 suggestions, so a caller can retry with a narrower request.
 """

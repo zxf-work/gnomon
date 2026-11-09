@@ -43,8 +43,10 @@ use crate::scan::ScanRequest;
 use crate::store::NativeStore;
 use crate::OPEN_END;
 
-/// Which way edges are walked: `Out` follows `src -> dst`, `In` answers "who
-/// could reach the source" by walking `dst -> src`, `Both` does either.
+/// Which way edges are walked: `Out` follows `src -> dst`, `In` walks
+/// `dst -> src` with the same non-decreasing times away from the source (so
+/// it finds paths to the source whose times do not increase towards it, not
+/// every time-respecting path to it), `Both` does either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReachDir {
     Out,

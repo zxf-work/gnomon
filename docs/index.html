@@ -286,6 +286,7 @@ pre code { font-size: inherit; }
       <a href="#example">Example</a>
       <a href="#scope">Scope</a>
       <a href="#get">Code</a>
+      <a href="https://github.com/zxf-work/gnomon/tree/main/docs/guide">Docs</a>
     </nav>
   </div>
 </header>
@@ -302,6 +303,7 @@ pre code { font-size: inherit; }
       <div class="actions">
         <a class="btn primary" href="https://github.com/zxf-work/gnomon">Get the code</a>
         <a class="btn" href="#example">See an example</a>
+        <a class="btn" href="https://github.com/zxf-work/gnomon/tree/main/docs/guide">Read the tutorial</a>
       </div>
     </div>
     <div class="hero-mark" role="img" aria-label="The Gnomon icon: a sundial blade rising from a dial whose face carries a graph of nodes and edges">
@@ -415,8 +417,8 @@ pre code { font-size: inherit; }
       </article>
       <article class="hl">
         <span class="n">18.5<small>&times;</small></span>
-        <h3>Belief checked on blocks, not rows</h3>
-        <p>Switch block-level belief checks off and temporal queries get a median 18.5 times slower (one of our test graphs, 10M edge versions).</p>
+        <h3>Belief decided for many rows at once</h3>
+        <p>Switch off the checks that accept or reject whole groups of rows by their belief time, and temporal queries get a median 18.5 times slower (one of our test graphs, 10M edge versions).</p>
       </article>
       <article class="hl">
         <span class="n">0.84&ndash;1.03<small>&times;</small></span>
@@ -424,9 +426,9 @@ pre code { font-size: inherit; }
         <p>Past over current belief on snapshots and reachability, on our two test graphs at 10M edge versions with 10% corrections. A past belief can see fewer rows, so below 1 is not a saving.</p>
       </article>
       <article class="hl">
-        <span class="n">91.2<small>%</small></span>
+        <span class="n">92.6<small>%</small></span>
         <h3>Hubs stay fast</h3>
-        <p>Against the other systems we ran, Gnomon wins 91.2% of the instances seeded at high-degree hubs (10M edge versions), the case that per-chunk adjacency with seed growth is built for.</p>
+        <p>Against the other systems we ran, Gnomon wins 92.6% of the instances seeded at high-degree hubs (10M edge versions), the case that per-chunk adjacency with seed growth is built for.</p>
       </article>
     </div>
   </div>
@@ -471,7 +473,7 @@ cd gnomon
 python3 -m venv .venv &amp;&amp; . .venv/bin/activate
 pip install maturin
 maturin develop --release --extras dev</code></pre>
-        <p class="note">Needs Rust (pinned in the repository), Python 3.11 or newer and maturin. Developed and tested on Linux x86-64. The README covers the command-line tool and every operator.</p>
+        <p class="note">Needs Rust (pinned in the repository), Python 3.11 or newer and maturin. Developed and tested on Linux x86-64. The <a href="https://github.com/zxf-work/gnomon/tree/main/docs/guide">tutorial and guides</a> cover loading, every operator, the command-line tool and three worked scenarios, each with an example that runs.</p>
       </div>
     </div>
   </div>
@@ -485,7 +487,7 @@ maturin develop --release --extras dev</code></pre>
     </div>
     <ul class="how">
       <li><strong>Corrections are notes</strong><span>Every version is an immutable row; a correction appends a close note saying when a row stopped being believed.</span></li>
-      <li><strong>Belief checked on blocks</strong><span>Rows written together share a belief start, so a whole block of rows is checked at once and returned as row ranges.</span></li>
+      <li><strong>Belief decided in bulk</strong><span>Rows written together share a belief start, so whole chunks and runs of rows are accepted or rejected at once and returned as row ranges; a correction only splits a range.</span></li>
       <li><strong>Adjacency in every chunk</strong><span>Sealed, time-ordered chunks each carry their own adjacency index, and walks grow outward from their seed nodes.</span></li>
       <li><strong>Operators on row ranges</strong><span>Snapshots, paths, diffs and counts run inside the engine and build readable rows only for the page they return.</span></li>
     </ul>
@@ -502,7 +504,7 @@ maturin develop --release --extras dev</code></pre>
       <div>
         <ul>
           <li>Gnomon targets temporal and as-of reads of graph neighbourhoods.</li>
-          <li>On workloads derived from LDBC benchmarks, and on generic joins, a columnar engine such as DuckDB is faster, by several times on generic queries at SF10.</li>
+          <li>On workloads derived from LDBC benchmarks, and on generic joins, a columnar engine such as DuckDB is faster: on generic queries at SF10, Gnomon's median time is 6.5 times DuckDB's.</li>
           <li>Bulk loading and memory are its costs. On the SNB-derived workload it uses 3.3 times DuckDB's memory at SF10, and its bulk load is about 22 times slower.</li>
           <li>A cost check refuses a call whose estimated time is over its budget. The estimate uses the seeds, hops, time window and the chunks left after pruning; at 100M edge versions it still refuses 2-hop snapshots at a past belief on a skewed graph, which take about a second when run.</li>
           <li>One writer, one node, and a fixed set of operators rather than a query language.</li>

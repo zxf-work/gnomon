@@ -133,8 +133,11 @@ def _paths_cost(args: dict[str, Any], stats: dict[str, Any]) -> dict[str, int]:
         "cursor": CURSOR,
     },
     "Earliest-arrival time per node reachable from `src` via time-respecting "
-    "paths inside `window` (source excluded). direction='in' answers "
-    "\"who could reach src\".",
+    "paths inside `window` (source excluded). direction='in' runs the same "
+    "search over reversed edges, times still non-decreasing away from `src`: "
+    "it finds the nodes with a path to `src` whose edge times do not increase "
+    "towards it, not every node with a time-respecting path to `src`. "
+    "direction='both' ignores edge direction.",
     cost_fn=_reach_cost,
     validators=[check_window],
 )

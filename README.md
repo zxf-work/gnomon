@@ -196,6 +196,8 @@ gnomon call --store quickstart-store entity_history '{"uid": "alice"}'
 [docs/data-model.md](docs/data-model.md) walks through the same ideas with
 a correction and a retraction on an edge.
 
+For a guided tour with runnable examples, start with the [tutorial](docs/guide/README.md).
+
 ## Command line
 
 The `gnomon` command covers loading and store maintenance:
@@ -220,6 +222,7 @@ gnomon store restore --dest bak --store restored # replay a backup and verify it
 
 | document | contents |
 |---|---|
+| [docs/guide/](docs/guide/README.md) | the tutorial: getting started, concepts, loading data, querying every operator, the command-line tool, operations, the Python API reference, an FAQ, and three worked scenarios, each with an example under examples/ that runs |
 | [docs/data-model.md](docs/data-model.md) | valid time and belief time, versions, assert / retract / correct, current vs as-of reads, a worked example |
 | [docs/architecture.md](docs/architecture.md) | store layout, commit protocol and bulk ingest, segments, window cuts and time encoding, close runs, range-native operators and path kernels, pattern matching and the plan IR, the small-commit path, manifest generations, compaction / settle / gc, per-segment indexes, identity filter, the worker pool, digests |
 | [docs/operators.md](docs/operators.md) | every operator, base and engine-level: what it answers, its parameters, which clock it ranges over; `match` patterns and the shared-instant rule |
@@ -252,6 +255,8 @@ benchmarks/stages/    the evaluation's stages: W1-W3 timed stages, thread
 benchmarks/workloads/ the SNB-derived and Wikidata workloads: builders, query
                       texts per system, parameter files
 benchmarks/schema/    JSON Schema for benchmark receipts
+examples/             runnable examples used by the tutorial; tests/test_examples.py
+                      checks their output
 tests/                Python test suite (the Rust tests live with the crates)
 docs/                 documentation
 ```

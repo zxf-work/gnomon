@@ -9,8 +9,8 @@ Design rules enforced here for every operator:
 5. Self-desc. — every result carries {op, args_echo, dataset_extent,
                 result_digest, truncated}.
 
-The tool schemas are generated from this registry — single source of
-truth.
+Every operator's argument schemas are defined in this registry, the single
+source of truth.
 """
 
 from __future__ import annotations
@@ -51,27 +51,18 @@ UID_LIST = {"type": "array", "items": UID, "minItems": 1, "maxItems": 10_000}
 
 PAGINATED_FIELDS = ("rows", "rows_total", "truncated", "cursor")
 
-#: Envelope keys that are call metadata or provenance rather than the answer:
-#: every consumer that projects an *answer* out of an envelope strips exactly
-#: these (`Executor._resolve_answer`), and the human-owned comparators strip the
-#: same set plus `result_digest` (`tests/conftest.py::ENVELOPE_META_KEYS`). The
-#: digest-excluded because they live here, on the envelope, and never inside a
-#: kernel's payload.
+#: Envelope keys that are call metadata or provenance rather than the answer.
+#: The test suite's comparators strip the same set plus `result_digest`
+#: (`tests/conftest.py::ENVELOPE_META_KEYS`) before comparing an answer with
+#: the oracle's. They are digest-excluded because they live here, on the
+#: envelope, and never inside a kernel's payload.
 ENVELOPE_META_FIELDS = ("op", "args_echo", "dataset_extent",
                         "tt_q", "pinned", "clamped", "dependency", "plan_ir")
 
-#: Whether the envelope publishes the rest of the `R` tuple — the `plan_ir`
-#: sub-object holding `completeness`, `exactness`, `provenance`, `schema` and
-#: `(T_v, T_b)`.
-#:
-#: **Off until `"plan_ir"` joins `tests/conftest.py::ENVELOPE_META_KEYS`.** The
-#: oracle-family comparator is `{k: v for k, v in envelope.items() if k not in
-#: ENVELOPE_META_KEYS} == oracle_payload` at thirteen sites, so *any* envelope
-#: key that tuple does not name fails every one of them — and `tests/` is
-#: `dependency`, `pinned`, `clamped`); `plan_ir` was the IR's fifth recommendation
-#: and is not among them. The metadata is computed and carried regardless — the
-#: executor records it per step — so flipping this constant to True alongside
-#: that one-word `[tests]` change is the whole of the remaining work.
+#: Whether the envelope publishes the `plan_ir` sub-object: the `completeness`,
+#: `exactness`, `provenance`, `schema` and `(T_v, T_b)` of the plan that ran
+#: the call. On; `tests/conftest.py::ENVELOPE_META_KEYS` lists it with the
+#: other metadata keys, so the oracle comparators strip it.
 EMIT_PLAN_IR_META = True
 
 
@@ -98,11 +89,10 @@ class OperatorSpec:
     _filled_memo: dict[Any, dict[str, Any]] = field(
         default_factory=dict, compare=False, repr=False)
     #: The schema engine-level callers validate against, when it is wider
-    #: than the base-schema one (`args_schema`). base-schema surfaces --
-    #: the tool schemas, the router, the MCP server, the web app, the plan
-    #: verifier and the fault injector -- read `args_schema` and nothing
-    #: else, so an engine-only argument or aggregate is invisible to them and
-    #: refused by them exactly as before it existed. `None`: one schema.
+    #: than the base one (`args_schema`). A caller that passes `agent=True`
+    #: validates against `args_schema` only, so an engine-only argument or
+    #: aggregate is refused for it exactly as before it existed. `None`: one
+    #: schema.
     #: Engine-only properties carry no `default`, so a call that does not
     #: use them fills, echoes and digests exactly as before.
     engine_schema: dict[str, Any] | None = None
@@ -119,11 +109,9 @@ class OperatorSpec:
 
 REGISTRY: dict[str, OperatorSpec] = {}
 
-#: The operators an base-schema surface lists and dispatches: the tool
-#: schemas, the in-process router, the MCP server, the web app, the match plan's
-#: manual and the plan verifier. `REGISTRY` may hold more (`match` is
-#: registered for the engine and for direct `call_operator` callers only);
-#: this set, because it changes every base-schema prompt.
+#: The base operator set (docs/operators.md). `REGISTRY` also holds the
+#: engine-level operators (`match`, `paths`, `state_series`, `diff_belief`),
+#: which are outside it; `unknown_operator` lists only this set as known.
 BASE_OPERATORS: frozenset[str] = frozenset({
     "aggregate_events", "burst_detection", "co_active", "compute",
     "count_temporal_motifs", "diff_snapshots", "entity_history",
@@ -134,9 +122,8 @@ BASE_OPERATORS: frozenset[str] = frozenset({
 
 
 def unknown_operator(name: str) -> InvalidArgError:
-    """The error for a name no base-schema surface knows: an unregistered
-    name, and on those surfaces a registered operator outside
-    `BASE_OPERATORS`, which they answer exactly as an unregistered one."""
+    """The error for an operator name the registry does not hold; it lists
+    the base operators (`BASE_OPERATORS`) as the known ones."""
     return InvalidArgError(f"unknown operator: {name}",
                            known=sorted(n for n in REGISTRY if n in BASE_OPERATORS))
 
@@ -402,9 +389,11 @@ def call_operator(adapter: StorageAdapter, name: str, args: dict[str, Any],
                   tt_source: Any = None,
                   agent: bool = False) -> dict[str, Any]:
     """Validate, execute, and wrap an operator call in the self-describing
-    envelope. All base-schema surfaces (ToolRouter, MCP) go through here,
-    and pass `agent=True`: their calls validate against the base-schema
-    schema (`OperatorSpec.args_schema`), never the engine one.
+    envelope. Callers that want only the base operators' schemas pass
+    `agent=True`: the arguments then validate against
+    `OperatorSpec.args_schema`, never the engine one, so an engine-level
+    argument of a base operator is refused as unknown (the engine-level
+    operators themselves still run, with their one schema).
 
     `tt_source` is the authoritative frontier for `tt_q` when the caller has a
     `Store` (which knows what its backend has *applied*); with none, the

@@ -78,7 +78,9 @@ over the empty interval `[t, t)`; it is dropped instead of stored.
 
 ## Asking questions: current vs as-of
 
-Every read operator takes `as_of_tt`, the belief state to evaluate under.
+Every read operator except `diff_belief`, which compares two belief times
+itself, takes `as_of_tt`, the belief state to evaluate under (`match` takes
+it inside `scope`).
 The default, `OPEN_END`, means the current beliefs. Valid-time arguments
 (`window`, `t_valid`, `t1`/`t2`) independently select which facts hold in
 the world. The two compose freely: "who did Alice work with in March, as we
@@ -116,9 +118,13 @@ property correction on a node — end to end.
 
 Operators return a self-describing envelope: the operator name, the
 arguments with defaults filled in (`args_echo`), the store's current
-valid-time extent, the payload, `truncated`/`cursor` for pagination, and a
+valid-time extent, the payload, `truncated`/`cursor` for pagination, the
+belief time the read was served at (`tt_q`, with `pinned` and `clamped`),
+the later writes that could change the answer (`dependency`), the plan that
+ran the call (`plan_ir`), and a
 `result_digest` — the SHA-256 of the canonical JSON of the payload. Floats
 are rounded to nine decimals before hashing, so the same store state and the
 same arguments produce byte-identical results on every platform. Because the
 digest covers the payload only, a result pinned to a past `as_of_tt` keeps
-its digest under any later write.
+its digest under any later write. [docs/operators.md](operators.md#the-result-envelope)
+shows a full envelope from a real call.

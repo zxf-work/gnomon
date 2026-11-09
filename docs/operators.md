@@ -22,7 +22,8 @@ bypasses it).
 * **`window`** is a half-open valid-time interval `{"t_a": ..., "t_b": ...}`.
 * **`as_of_tt`** selects the belief state (transaction time); the default
   `OPEN_END` (`2**62`) means current beliefs. It is accepted by every
-  operator except `compute`.
+  operator except `compute` and `diff_belief` (which compares two belief
+  times, `t1` and `t2`); `match` takes it inside `scope`.
 * **Pagination:** list results carry `rows`, `rows_total`, `truncated` and an
   opaque `cursor`; pass the cursor back to get the next page. `limit`
   defaults to 100 and is capped at 10,000 (`match` pages hold up to
@@ -44,7 +45,7 @@ range over: **VT** = valid time (what was true in the world, via `window`,
 | `diff_snapshots` | nodes and edges added or removed, and properties changed, between the snapshots at `t1` and `t2` under one belief state | `t1`*, `t2`*, `scope`, `as_of_tt` | VT pair, TT |
 | `neighborhood_evolution` | neighbours of a node gained and lost between `t1` and `t2`, plus a degree series | `uid`*, `t1`*, `t2`*, `stride`, `as_of_tt` | VT pair, TT |
 | `temporal_paths` | up to `k` node-simple time-respecting paths between two nodes inside a window, ordered by arrival, hops, edge sequence | `src`*, `dst`*, `window`*, `k`, `max_hops`, `as_of_tt` | VT window, TT |
-| `temporal_reachability` | earliest arrival time at every node reachable from (or, with `direction: "in"`, able to reach) a source via time-respecting paths | `src`*, `window`*, `delta_max_wait`, `direction`, `as_of_tt` | VT window, TT |
+| `temporal_reachability` | earliest arrival time at every node reachable from a source via time-respecting paths; `direction: "in"` runs the same search over reversed edges, with times still non-decreasing away from the source, so it finds the nodes with a path to the source whose edge times do not increase towards it (not, in general, every node with a time-respecting path to the source); `"both"` ignores direction | `src`*, `window`*, `delta_max_wait`, `direction`, `as_of_tt` | VT window, TT |
 | `graph_metric_timeseries` | a per-bucket metric series over a window (instant metrics sampled at bucket starts, event metrics aggregated within buckets) | `metric`*, `window`*, `stride`*, `as_of_tt` | VT window, TT |
 | `aggregate_events` | grouped aggregation over edge events in a window: group by time bucket, calendar unit, relation type, endpoint or label; count, count-distinct, min, max, mean, and the gap and session statistics (`sum` is an engine-level aggregate, below) | `group_by`*, `aggregates`*, `window`*, `stride`, `rel_types`, `prop_filter`, `endpoint_filter`, `pair_mode`, `as_of_tt` | VT window, TT |
 | `burst_detection` | buckets of an event-rate series flagged as bursts (z-score against a trailing mean, or ratio against a trailing median) | `target`*, `window`*, `stride`*, `method`, `params`, `as_of_tt` | VT window, TT |
@@ -65,9 +66,11 @@ The fifteen operators above are the **base operator set**
 **base schema**. The registry also holds four engine-level operators, and
 some base operators accept engine-level arguments; both are validated
 against a wider **engine schema** (`REGISTRY[name].engine_schema`).
-`call_operator` uses the engine schema by default; a caller that should see
-only the base set passes `base_schema=True`, and then an engine-level
-operator or argument is refused exactly as an unknown one. An engine-level
+`call_operator` uses the engine schema by default; a caller that passes
+`agent=True` validates against the base schema instead, and then an
+engine-level argument of a base operator is refused exactly as an unknown
+one (the engine-level operators themselves still run, with their one
+schema). An engine-level
 argument has no default, so a call that does not use it is filled, echoed
 and digested exactly as before it existed.
 
@@ -127,16 +130,43 @@ harness calls directly as well (`_diff_belief_dispatch`).
 
 ## The result envelope
 
+The quickstart's `gnomon call --store quickstart-store entity_history
+'{"uid": "alice"}'` returns (nested objects shortened):
+
 ```json
 {
   "op": "entity_history",
-  "args_echo": {"uid": "alice", "as_of_tt": 4611686018427387904, "...": "..."},
-  "dataset_extent": {"vt_min": 0, "vt_max": 500},
-  "rows": ["..."], "rows_total": 2, "truncated": false, "cursor": null,
-  "result_digest": "3f1c..."
+  "args_echo": {"uid": "alice", "as_of_tt": 4611686018427387904,
+                "include_edges": false, "limit": 100, "cursor": null},
+  "dataset_extent": {"vt_min": 100, "vt_max": 900},
+  "truncated": false,
+  "rows": ["..."], "rows_total": 2, "cursor": null,
+  "tt_q": 1794233958314866, "pinned": false, "clamped": false,
+  "dependency": {"schema": "gnomon-depscope", "version": 1, "store": "unanchored",
+                 "tt_q": 1794233958314866, "pinned": false, "clamped": false,
+                 "checkpoints": ["..."], "terms": ["..."]},
+  "plan_ir": {"t_v": [[0, 4611686018427387904]], "t_b": 4611686018427387904,
+              "completeness": "unknown", "exactness": "exact",
+              "provenance": {"...": "..."}, "schema": ["..."],
+              "node_digest": "ba0d...", "plan_digest": "ba0d..."},
+  "result_digest": "133f..."
 }
 ```
 
-`result_digest` covers the payload only (not `op`, `args_echo` or
-`dataset_extent`), so a result pinned to a past `as_of_tt` keeps its digest
-under later writes.
+* `tt_q` is the belief time the read was served at. `pinned` is `true`
+  when `as_of_tt` names a belief time the store has already reached, so the
+  answer can no longer change; `clamped` is `true` when `as_of_tt` lies
+  beyond the store's frontier and the read was served at the frontier
+  instead. With the default `as_of_tt` both are `false`.
+* `dependency` describes which later writes could change the answer (by
+  kind, target, relation type and valid time), stamped with the store's
+  identity (`"unanchored"` when the read has none) and the event-log
+  checkpoint it was served at; `Store.check_result` checks it.
+* `plan_ir` describes the plan that ran the call: its valid-time and
+  belief-time scope (`t_v`, `t_b`), completeness and exactness, provenance,
+  output schema and digests.
+
+`result_digest` covers the payload only (not `op`, `args_echo`,
+`dataset_extent`, `tt_q`, `pinned`, `clamped`, `dependency` or `plan_ir`),
+so a result pinned to a past `as_of_tt` keeps its digest under later
+writes.
