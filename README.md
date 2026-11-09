@@ -1,5 +1,7 @@
 # Gnomon
 
+**Project page:** <https://zxf-work.github.io/gnomon/>
+
 Gnomon is a storage engine for **bi-temporal property graphs**: graphs that
 are corrected after the fact. Every node and edge version carries two independent time intervals: *valid time* — when
 the fact held in the world — and *belief time* (transaction time) — when the
@@ -74,6 +76,16 @@ when it was true and when it was believed, so:
   (`paths`: hop and weight distances, optimal, k-best and time-respecting
   paths), aggregates over the state at each instant (`state_series`), the
   belief diff (`diff_belief`), a per-identity belief log and an exact `sum`.
+* **A query-aware cost check.** Before a call runs, its operator estimates
+  the cost from the store's statistics and refuses a call over the ceiling
+  (every operator except `match` and `compute`; `skip_cost_check=True`
+  bypasses it). On the native engine, for seeded snapshots, snapshot diffs,
+  name search, neighbourhood evolution and co-activity, the estimate is the
+  lower of the whole-store price and a count of what the call can touch (the
+  rows left after zone-map pruning; the seeds, hops and largest out-degree;
+  for name search, the node versions and the identity dictionary), so a
+  narrow call on a large store is not priced as a scan of the whole store
+  ([configuration](docs/configuration.md#query-admission)).
 * **Two digests:** a store digest for exact identity and a content digest
   that two independent loads of the same data agree on (computable in
   bounded memory).
