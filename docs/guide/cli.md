@@ -238,7 +238,7 @@ $ gnomon store backup --store mystore --dest bak
  "log_sha256": "f599f55452fd9dd315afe6b26692eb0b121012cec0183a8e257f7d1fba3a676c",
  "log_records": 1,
  "logical_digest": "642a9db84ea18878c73deae5f21b0cbf6c3305625115633041a650efe558501a",
- "gnomon_version": "0.1.0",
+ "gnomon_version": "0.1.1",
  "commit": null
 }
 $ gnomon store restore --dest bak --store restored

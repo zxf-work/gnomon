@@ -33,6 +33,16 @@
 //! does not write — returns `None`, meaning "rebuild silently". A failure to
 //! *write* one never fails a query.
 //!
+//! **Every byte is checked at load.** The CRC32C in the footer covers every
+//! byte before it — preamble, header JSON, padding and extent — and the
+//! footer's own bytes are checked by value, so a change to any single byte
+//! of a file is refused. A CRC detects every error confined to 32
+//! consecutive bits, which includes every change within one byte. The header
+//! is where this matters most: it carries fields no other check pins (the
+//! `seed` above all), and a filter that loads with a different seed answers
+//! "no" for keys its segment holds, which is the one answer it must never
+//! give wrongly.
+//!
 //! ### Sizing, and why the LSM convention does not transfer
 //!
 //! A false positive here costs a **whole-segment fold** (an sha256 and two
@@ -51,11 +61,13 @@
 //!    header: { seg_id, body_sha, kind, key_algo_version, keys, seed,
 //!              variant, bits_per_key, fingerprint_bits, … }
 //! extent: the filter array (u16 LE fingerprints, or Bloom bit bytes)
-//! footer: crc32c u32 | footer_len u32 | magic "TGVE"
+//! footer: crc32c u32 (over every byte before it) | footer_len u32 | magic "TGVE"
 //! ```
 //!
 //! The extent length is derivable from the header, so the footer carries
-//! only the checksum. The stamp is the segment's own `body_sha`: a segment
+//! only the checksum. Format 1 had the same layout with the CRC over the
+//! extent alone, which left the header unchecked; a format-1 file is refused
+//! like a damaged one and rebuilt. The stamp is the segment's own `body_sha`: a segment
 //! file's content determines its filter completely, which is what makes an
 //! orphan harmless (`gc.rs:273-286`) and what makes the filter independent of
 //! any column-codec change — a codec that rewrites a segment produces a new
@@ -100,13 +112,18 @@ const ALIGN: usize = 8;
 /// this is a rebuildable cache, so a bump here orphans filter files and
 /// rebuilds them rather than migrating anything (`tcsr.rs:56-59`).
 ///
-/// **Format 2 is pre-planned and deliberately not built**: a
+/// Format 2 moved the footer CRC from the extent alone to every byte before
+/// it (the module docs say why); the layout is otherwise format 1's, and a
+/// format-1 file is refused at load and rebuilt.
+///
+/// **An exact format is pre-planned and deliberately not built** (it was
+/// once numbered format 2; it now takes the next number): a
 /// sorted `(key, row)` extent — the on-disk form of `SegmentPostings` — is
 /// *exact*, needs no filter, and turns a probe into a binary search over a
 /// mapped array, but costs 12.1 GB of sidecars at 1B against this format's
 /// 2.30 GB. It is a disk-for-wall trade that deserves its own measurement,
 /// and a format bump costs nothing because it orphans and rebuilds.
-pub const VIDFILTER_FORMAT: u32 = 1;
+pub const VIDFILTER_FORMAT: u32 = 2;
 
 /// Which construction a filter file holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -609,7 +626,8 @@ impl VidFilter {
             buf.push(0);
         }
         buf.extend_from_slice(extent);
-        let crc = crc32c::crc32c(extent);
+        // over every byte written so far: preamble, header, padding, extent
+        let crc = crc32c::crc32c(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
         buf.extend_from_slice(&4u32.to_le_bytes());
         buf.extend_from_slice(FOOTER_MAGIC);
@@ -632,6 +650,18 @@ impl VidFilter {
             return None;
         }
         if u32::from_le_bytes(bytes[4..8].try_into().ok()?) != VIDFILTER_FORMAT {
+            return None;
+        }
+        // the footer: its length field by value, then the CRC32C over every
+        // byte before it -- checked before anything in the header is read,
+        // so no header field (the seed above all) is ever trusted unchecked
+        let footer_end = bytes.len() - 8;
+        if u32::from_le_bytes(bytes[footer_end..footer_end + 4].try_into().ok()?) != 4 {
+            return None;
+        }
+        let crc_at = footer_end.checked_sub(4)?;
+        let crc = u32::from_le_bytes(bytes[crc_at..footer_end].try_into().ok()?);
+        if crc32c::crc32c(bytes.get(..crc_at)?) != crc {
             return None;
         }
         let header_len = u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
@@ -657,16 +687,10 @@ impl VidFilter {
             return None;
         }
 
-        let footer_end = bytes.len() - 8;
-        if u32::from_le_bytes(bytes[footer_end..footer_end + 4].try_into().ok()?) != 4 {
-            return None;
-        }
-        let crc_at = footer_end.checked_sub(4)?;
-        let crc = u32::from_le_bytes(bytes[crc_at..footer_end].try_into().ok()?);
-
         let start = header_end.next_multiple_of(ALIGN);
-        // the alignment padding is outside both the header JSON and the
-        // extent CRC, so it is the one region damage could hide in
+        // the CRC already covers the padding; this pins it to the zeros the
+        // writer puts there, so a file is accepted only in the one form
+        // `to_bytes` produces
         if bytes.get(header_end..start)?.iter().any(|&b| b != 0) {
             return None;
         }
@@ -677,9 +701,6 @@ impl VidFilter {
         };
         let end = start.checked_add(want)?;
         if end != crc_at {
-            return None;
-        }
-        if crc32c::crc32c(bytes.get(start..end)?) != crc {
             return None;
         }
 
@@ -748,7 +769,7 @@ impl VidFilter {
     /// **Not fsynced**. The filter is a rebuildable sidecar that no
     /// manifest names, so durability buys nothing: after a crash the file
     /// may be missing, empty or torn, and every one of those fails `parse`
-    /// (magic, format, header, the CRC32C over the extent, the geometry
+    /// (magic, format, the CRC32C over every byte before the footer, the geometry
     /// check) and reads as "no filter", which is the unfiltered behaviour and
     /// correct; the next fold of that segment writes it again. An fsync per
     /// filter was one per sealed segment and one per compaction output —
@@ -1175,6 +1196,11 @@ mod tests {
     /// means the bytes moved and [`VIDFILTER_FORMAT`] must be bumped
     /// deliberately — the idiom `nameidx::tests::casefold_vectors_are_pinned`
     /// established.
+    ///
+    /// Moved once, deliberately, by format 2, whose CRC covers every byte
+    /// before the footer: the format number and the CRC are the only bytes
+    /// that differ. The format-1 value was
+    /// `30ea6c2f94fd58458c10b3a6b02722cba700d81cbf371fcb173e0ff926da2a9f`.
     #[test]
     fn a_golden_vector_pins_the_bytes_of_a_small_fixed_segment() {
         let keys: Vec<u64> = vec![
@@ -1189,7 +1215,7 @@ mod tests {
         let bytes = f.to_bytes();
         let sha = crate::derive::sha256_hex_bytes(&bytes);
         assert_eq!(
-            sha, "30ea6c2f94fd58458c10b3a6b02722cba700d81cbf371fcb173e0ff926da2a9f",
+            sha, "819ea723d436249e3cc851be547de5e5ba184c38588e8ad480b34cb5118cefae",
             "the filter's bytes moved: {} bytes, sha {sha}",
             bytes.len()
         );
@@ -1243,19 +1269,82 @@ mod tests {
         // bad magic
         assert!(VidFilter::from_bytes(b"not a filter at all", 7, RowKind::Edge, "abc").is_none());
         assert!(VidFilter::from_bytes(b"", 7, RowKind::Edge, "abc").is_none());
-        // every single-byte flip is caught by the CRC, the magic, the
-        // format, the header parse or the geometry check
-        for i in 0..good.len() {
-            let mut bad = good.clone();
-            bad[i] ^= 0xff;
-            assert!(
-                VidFilter::from_bytes(&bad, 7, RowKind::Edge, "abc123").is_none(),
-                "a flipped byte at {i} was accepted"
-            );
+        // every change to a single byte is refused: at every position, each
+        // of the eight single-bit changes and the whole-byte one. The footer
+        // CRC covers every byte before it and the footer is checked by value,
+        // so this holds by construction; the loop is what shows it. The
+        // header is the region that matters: a digit of `seed` changed into
+        // another digit still parses, and was accepted before the CRC
+        // covered the header.
+        let empty = VidFilter::build(7, RowKind::Edge, "abc123", 0, Vec::new());
+        assert_eq!(empty.variant(), Variant::Empty);
+        let seed_at = {
+            let pos = good.windows(7).position(|w| w == b"\"seed\":").expect("a seed field");
+            pos + 7 + 3
+        };
+        assert!(good[seed_at].is_ascii_digit(), "an interior digit of the seed");
+        for bytes in [good.clone(), empty.to_bytes()] {
+            assert!(VidFilter::from_bytes(&bytes, 7, RowKind::Edge, "abc123").is_some());
+            let mut tried = 0usize;
+            for i in 0..bytes.len() {
+                for mask in (0..8).map(|b| 1u8 << b).chain([0xffu8]) {
+                    let mut bad = bytes.clone();
+                    bad[i] ^= mask;
+                    tried += 1;
+                    assert!(
+                        VidFilter::from_bytes(&bad, 7, RowKind::Edge, "abc123").is_none(),
+                        "byte {i} changed by {mask:#04x} was accepted"
+                    );
+                }
+            }
+            assert_eq!(tried, bytes.len() * 9);
         }
+        let mut seed_digit = good.clone();
+        seed_digit[seed_at] ^= 0x01;
+        assert!(seed_digit[seed_at].is_ascii_digit());
+        assert!(VidFilter::from_bytes(&seed_digit, 7, RowKind::Edge, "abc123").is_none());
         // and so is truncation at every length
         for cut in 0..good.len() {
             assert!(VidFilter::from_bytes(&good[..cut], 7, RowKind::Edge, "abc123").is_none());
+        }
+    }
+
+    /// The bytes format 1 wrote for `f`: this layout with the format number
+    /// 1 and the CRC over the extent alone.
+    fn format_1_bytes(f: &VidFilter) -> Vec<u8> {
+        let mut buf = f.to_bytes();
+        buf[4..8].copy_from_slice(&1u32.to_le_bytes());
+        let crc_at = buf.len() - 12;
+        let start = (PREAMBLE + serde_json::to_vec(&f.header).unwrap().len()).next_multiple_of(ALIGN);
+        let crc = crc32c::crc32c(&buf[start..crc_at]);
+        buf[crc_at..crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn a_format_1_file_is_not_trusted() {
+        assert_eq!(VIDFILTER_FORMAT, 2);
+        for f in [
+            built(keys_of(500, 9)),
+            VidFilter::build(7, RowKind::Edge, "abc123", 0, Vec::new()),
+        ] {
+            let old = format_1_bytes(&f);
+            // a well-formed format-1 file: its own CRC holds over its extent
+            let crc_at = old.len() - 12;
+            let start = crc_at - f.extent_bytes() as usize;
+            assert_eq!(
+                crc32c::crc32c(&old[start..crc_at]).to_le_bytes(),
+                old[crc_at..crc_at + 4]
+            );
+            assert_ne!(old, f.to_bytes());
+            assert!(
+                VidFilter::from_bytes(&old, 7, RowKind::Edge, "abc123").is_none(),
+                "a format-1 file was accepted"
+            );
+            // nor does its CRC pass for the new format with only the number changed
+            let mut renumbered = old.clone();
+            renumbered[4..8].copy_from_slice(&VIDFILTER_FORMAT.to_le_bytes());
+            assert!(VidFilter::from_bytes(&renumbered, 7, RowKind::Edge, "abc123").is_none());
         }
     }
 

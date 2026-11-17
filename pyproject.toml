@@ -1,6 +1,6 @@
 [project]
 name = "gnomon"
-version = "0.1.0"
+version = "0.1.1"
 description = "A bi-temporal property-graph storage engine: valid time and belief time, append-only corrections, as-of queries"
 requires-python = ">=3.11"
 readme = "README.md"

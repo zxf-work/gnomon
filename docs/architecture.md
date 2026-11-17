@@ -442,3 +442,14 @@ references, the bi-temporal row invariants, the event log's framing and hash
 chain against the applied offset, and the persisted adjacency index. It is
 read-only; a damaged store is rebuilt from its event log with
 `gnomon replay`.
+
+**Known limit in 0.1.x: the entity dictionary file has no checksum.**
+`native/dict.log`, which maps entity ids to the store's dense ids, is not
+covered by a checksum in 0.1.x. Damage to it can go undetected: opening the
+store and `gnomon store verify`, in either mode, do not reliably find it. A
+later release adds a checksum for this file. A store whose dictionary file
+may be damaged can be rebuilt with `gnomon replay` from the event log it was
+written from: for a store written through the Python API or the command
+line, that is its own `eventlog.jsonl`; a store loaded by the comparison
+kit's load step keeps only the log header there, so replay the kit's log
+file it was loaded from.

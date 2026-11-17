@@ -37,7 +37,13 @@ const GOLDEN_SEGMENTS: &str = "db9780171038c4505467436840f5fa399a110e8f974f51f28
 /// footer `body_sha` (it was `""` for every segment before). The earlier
 /// value was `db8bec06b5355b1afe2e7ff25874ccb66798b4f0a07a6e4a9582f2a119b40e1c`.
 /// `GOLDEN_SEGMENTS` did not move: this change writes no segment byte.
-const GOLDEN_FILTERS: &str = "c36b577b93fe84b1a742e01231a117f06ae268b60e62e1ea609e4881eec1b155";
+///
+/// Moved a second time, deliberately, by filter format 2, whose footer CRC
+/// covers every byte before it: in each file the format number and the CRC
+/// changed and nothing else. The format-1 value was
+/// `c36b577b93fe84b1a742e01231a117f06ae268b60e62e1ea609e4881eec1b155`.
+/// `GOLDEN_SEGMENTS` did not move.
+const GOLDEN_FILTERS: &str = "ed3a30ad649b6d3d37952f780791130719aec80fb391790547960ea6eebfa97e";
 
 fn tmp_root(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();

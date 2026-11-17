@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "gnomon-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32c",
  "memmap2",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "gnomon-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gnomon-core",
  "numpy",
